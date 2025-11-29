@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Hero } from '@/components/Hero'
 import { ToolCard } from '@/components/ToolCard'
 import { SearchBar } from '@/components/SearchBar'
@@ -27,11 +27,7 @@ export default function HomePage() {
   const [sort, setSort] = useState<SortOption>('alphabetical')
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc')
 
-  useEffect(() => {
-    fetchTools()
-  }, [selectedCategory, selectedTraffic, selectedRevenue, search, sort, sortOrder])
-
-  const fetchTools = async () => {
+  const fetchTools = useCallback(async () => {
     setLoading(true)
     try {
       const params = new URLSearchParams()
@@ -50,7 +46,11 @@ export default function HomePage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [selectedCategory, selectedTraffic, selectedRevenue, search, sort, sortOrder])
+
+  useEffect(() => {
+    fetchTools()
+  }, [fetchTools])
 
   return (
     <div className="flex min-h-screen flex-col">

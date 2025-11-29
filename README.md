@@ -12,6 +12,7 @@ A modern, enterprise-grade web application for discovering and organizing AI too
 - 📱 **Responsive Design** - Mobile-first design that works on all devices
 - ⚡ **Fast Performance** - Optimized with Next.js App Router and server components
 - 🛠️ **Admin Dashboard** - Easy-to-use interface for managing tools
+- 📈 **Analytics** - Vercel Analytics and Speed Insights integrated
 
 ## Tech Stack
 
@@ -23,6 +24,7 @@ A modern, enterprise-grade web application for discovering and organizing AI too
 - **ORM**: Prisma
 - **Validation**: Zod
 - **Icons**: Lucide React
+- **Analytics**: Vercel Analytics & Speed Insights
 
 ## Getting Started
 
@@ -174,8 +176,16 @@ npx prisma migrate dev
 
 1. Push your code to GitHub
 2. Import your repository in Vercel
-3. Add environment variables
-4. Deploy!
+3. Add environment variables:
+   - `DATABASE_URL` - Your database connection string
+   - For SQLite: `file:./dev.db` (not recommended for production)
+   - For PostgreSQL: `postgresql://user:password@host:5432/database`
+4. The build process will automatically:
+   - Run `prisma generate` to create the Prisma Client
+   - Build the Next.js application
+5. Deploy!
+
+**Note**: The project includes Vercel Analytics and Speed Insights, which will automatically start tracking once deployed.
 
 ## Development
 
