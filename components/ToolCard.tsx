@@ -1,0 +1,138 @@
+'use client'
+
+import { motion } from 'framer-motion'
+import Image from 'next/image'
+import Link from 'next/link'
+import { ExternalLink, Star, TrendingUp } from 'lucide-react'
+import { Card, CardContent, CardFooter } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import type { Tool } from '@prisma/client'
+
+interface ToolCardProps {
+  tool: Tool
+  index?: number
+}
+
+const categoryColors: Record<string, string> = {
+  'Video Editing': 'bg-blue-500/10 text-blue-700 dark:text-blue-400',
+  'AI Automation': 'bg-purple-500/10 text-purple-700 dark:text-purple-400',
+  'SaaS': 'bg-green-500/10 text-green-700 dark:text-green-400',
+  'Image Generation': 'bg-pink-500/10 text-pink-700 dark:text-pink-400',
+  'Code Assistants': 'bg-orange-500/10 text-orange-700 dark:text-orange-400',
+  'Writing': 'bg-indigo-500/10 text-indigo-700 dark:text-indigo-400',
+  'Productivity': 'bg-cyan-500/10 text-cyan-700 dark:text-cyan-400',
+  'Design': 'bg-rose-500/10 text-rose-700 dark:text-rose-400',
+  'Marketing': 'bg-yellow-500/10 text-yellow-700 dark:text-yellow-400',
+  'Analytics': 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
+  'Other': 'bg-gray-500/10 text-gray-700 dark:text-gray-400',
+}
+
+const trafficLabels: Record<string, string> = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  unknown: 'Unknown',
+}
+
+export function ToolCard({ tool, index = 0 }: ToolCardProps) {
+  const formatVisits = (visits?: number | null) => {
+    if (!visits) return null
+    if (visits >= 1000000) return `${(visits / 1000000).toFixed(1)}M`
+    if (visits >= 1000) return `${(visits / 1000).toFixed(1)}K`
+    return visits.toString()
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, delay: index * 0.05 }}
+    >
+      <Card className="group relative h-full overflow-hidden border-border/50 bg-card transition-all duration-300 hover:border-primary/50 hover:shadow-lg hover:shadow-primary/10 dark:hover:shadow-primary/20">
+        <CardContent className="p-6">
+          <div className="mb-4 flex items-start justify-between">
+            <div className="flex items-center gap-3">
+              {tool.logoUrl ? (
+                <div className="relative h-12 w-12 overflow-hidden rounded-lg border border-border bg-background">
+                  <Image
+                    src={tool.logoUrl}
+                    alt={tool.name}
+                    fill
+                    className="object-cover"
+                    sizes="48px"
+                  />
+                </div>
+              ) : (
+                <div className="flex h-12 w-12 items-center justify-center rounded-lg border border-border bg-gradient-to-br from-primary/20 to-secondary/20">
+                  <span className="text-xl font-bold text-primary">
+                    {tool.name.charAt(0).toUpperCase()}
+                  </span>
+                </div>
+              )}
+              <div className="flex-1">
+                <h3 className="font-semibold text-lg leading-tight text-foreground">
+                  {tool.name}
+                </h3>
+                <Badge
+                  variant="outline"
+                  className={`mt-1 text-xs ${categoryColors[tool.category] || categoryColors.Other}`}
+                >
+                  {tool.category}
+                </Badge>
+              </div>
+            </div>
+          </div>
+
+          <p className="mb-4 line-clamp-2 text-sm text-muted-foreground">
+            {tool.description}
+          </p>
+
+          <div className="flex flex-wrap items-center gap-2 mb-4">
+            {tool.rating && (
+              <div className="flex items-center gap-1 text-sm text-muted-foreground">
+                <Star className="h-3.5 w-3.5 fill-yellow-400 text-yellow-400" />
+                <span>{tool.rating.toFixed(1)}</span>
+              </div>
+            )}
+            {tool.traffic && tool.traffic !== 'unknown' && (
+              <div className="flex items-center gap-1 text-sm text-muted-foreground">
+                <TrendingUp className="h-3.5 w-3.5" />
+                <span>{trafficLabels[tool.traffic]}</span>
+              </div>
+            )}
+            {tool.estimatedVisits && (
+              <div className="text-sm text-muted-foreground">
+                ~{formatVisits(tool.estimatedVisits)} visits/mo
+              </div>
+            )}
+            {tool.revenue && (
+              <Badge variant="outline" className="text-xs capitalize">
+                {tool.revenue}
+              </Badge>
+            )}
+          </div>
+        </CardContent>
+
+        <CardFooter className="border-t border-border/50 p-4 pt-0">
+          <Button
+            asChild
+            variant="ghost"
+            className="w-full group-hover:bg-primary/10"
+          >
+            <Link
+              href={tool.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-center gap-2"
+            >
+              View Tool
+              <ExternalLink className="h-4 w-4" />
+            </Link>
+          </Button>
+        </CardFooter>
+      </Card>
+    </motion.div>
+  )
+}
+

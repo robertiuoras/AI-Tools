@@ -1,0 +1,134 @@
+'use client'
+
+import { useState, useEffect, useMemo } from 'react'
+import { Hero } from '@/components/Hero'
+import { ToolCard } from '@/components/ToolCard'
+import { SearchBar } from '@/components/SearchBar'
+import { FilterSidebar } from '@/components/FilterSidebar'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import type { Tool } from '@prisma/client'
+
+type SortOption = 'alphabetical' | 'newest' | 'popular' | 'traffic'
+type SortOrder = 'asc' | 'desc'
+
+export default function HomePage() {
+  const [tools, setTools] = useState<Tool[]>([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
+  const [selectedTraffic, setSelectedTraffic] = useState<string[]>([])
+  const [selectedRevenue, setSelectedRevenue] = useState<string[]>([])
+  const [sort, setSort] = useState<SortOption>('alphabetical')
+  const [sortOrder, setSortOrder] = useState<SortOrder>('asc')
+
+  useEffect(() => {
+    fetchTools()
+  }, [selectedCategory, selectedTraffic, selectedRevenue, search, sort, sortOrder])
+
+  const fetchTools = async () => {
+    setLoading(true)
+    try {
+      const params = new URLSearchParams()
+      if (selectedCategory) params.append('category', selectedCategory)
+      selectedTraffic.forEach((t) => params.append('traffic', t))
+      selectedRevenue.forEach((r) => params.append('revenue', r))
+      if (search) params.append('search', search)
+      params.append('sort', sort)
+      params.append('order', sortOrder)
+
+      const response = await fetch(`/api/tools?${params.toString()}`)
+      const data = await response.json()
+      setTools(data)
+    } catch (error) {
+      console.error('Error fetching tools:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="flex min-h-screen flex-col">
+      <Hero />
+      <div className="container mx-auto px-4 py-8">
+        <div className="flex flex-col gap-6 lg:flex-row">
+          <div className="lg:w-80">
+            <FilterSidebar
+              selectedCategory={selectedCategory}
+              onCategoryChange={setSelectedCategory}
+              selectedTraffic={selectedTraffic}
+              onTrafficChange={setSelectedTraffic}
+              selectedRevenue={selectedRevenue}
+              onRevenueChange={setSelectedRevenue}
+            />
+          </div>
+
+          <div className="flex-1 space-y-6">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <SearchBar value={search} onChange={setSearch} />
+              <div className="flex items-center gap-2">
+                <Select value={sort} onValueChange={(v) => setSort(v as SortOption)}>
+                  <SelectTrigger className="w-[180px]">
+                    <SelectValue placeholder="Sort by" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="alphabetical">Alphabetical</SelectItem>
+                    <SelectItem value="newest">Newest</SelectItem>
+                    <SelectItem value="popular">Most Popular</SelectItem>
+                    <SelectItem value="traffic">Highest Traffic</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={sortOrder}
+                  onValueChange={(v) => setSortOrder(v as SortOrder)}
+                >
+                  <SelectTrigger className="w-[100px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="asc">A-Z</SelectItem>
+                    <SelectItem value="desc">Z-A</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {loading ? (
+              <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {[...Array(8)].map((_, i) => (
+                  <div
+                    key={i}
+                    className="h-64 animate-pulse rounded-lg border bg-muted"
+                  />
+                ))}
+              </div>
+            ) : tools.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-center">
+                <p className="text-lg text-muted-foreground">
+                  No tools found. Try adjusting your filters or search.
+                </p>
+              </div>
+            ) : (
+              <>
+                <p className="text-sm text-muted-foreground">
+                  Showing {tools.length} tool{tools.length !== 1 ? 's' : ''}
+                </p>
+                <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                  {tools.map((tool, index) => (
+                    <ToolCard key={tool.id} tool={tool} index={index} />
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
