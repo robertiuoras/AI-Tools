@@ -47,10 +47,18 @@ export const prisma =
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
 
 // Log connection attempt in production for debugging
-if (process.env.NODE_ENV === 'production') {
-  console.log('🔍 Attempting database connection...')
-  console.log('🔍 Hostname:', new URL(cleanDatabaseUrl).hostname)
-  console.log('🔍 Port:', new URL(cleanDatabaseUrl).port || '5432')
-  console.log('🔍 Has SSL:', cleanDatabaseUrl.includes('sslmode=require'))
+if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
+  try {
+    const urlObj = new URL(cleanDatabaseUrl)
+    console.log('🔍 Database Connection Diagnostics:')
+    console.log('🔍 Hostname:', urlObj.hostname)
+    console.log('🔍 Port:', urlObj.port || '5432')
+    console.log('🔍 Database:', urlObj.pathname)
+    console.log('🔍 Has SSL mode:', urlObj.search.includes('sslmode'))
+    console.log('🔍 SSL mode value:', urlObj.searchParams.get('sslmode'))
+    console.log('🔍 Full URL (no password):', `${urlObj.protocol}//${urlObj.username}@${urlObj.hostname}:${urlObj.port || '5432'}${urlObj.pathname}${urlObj.search}`)
+  } catch (e) {
+    console.error('❌ Error parsing DATABASE_URL for logging:', e)
+  }
 }
 

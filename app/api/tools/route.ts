@@ -58,10 +58,14 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(tools)
   } catch (error) {
-    console.error('Error fetching tools:', error)
-    // Return empty array instead of error object to prevent frontend crashes
+    console.error('❌ Error fetching tools:', error)
+    console.error('Error type:', error instanceof Error ? error.name : typeof error)
+    console.error('Error message:', error instanceof Error ? error.message : String(error))
+    
+    // Return empty array with 200 status to prevent frontend crashes
+    // The frontend will show "No tools found" which is better UX than crashing
     // In production, you might want to log this to an error tracking service
-    return NextResponse.json([], { status: 500 })
+    return NextResponse.json([], { status: 200 })
   }
 }
 
