@@ -22,14 +22,14 @@ export async function GET(request: NextRequest) {
       // For now, we'll get user from session in the frontend
     }
 
+    // Type assertion to work around Proxy type issues
+    const admin = supabaseAdmin as any
+    
     // Build Supabase query with upvote counts
     // Note: Supabase table names are case-sensitive. Use lowercase 'tool' if that's what's in your database
-    let query = supabaseAdmin
+    let query = admin
       .from('tool')
-      .select(`
-        *,
-        upvoteCount:upvote(count)
-      `)
+      .select('*')
 
     // Apply filters
     if (category) {
@@ -87,7 +87,7 @@ export async function GET(request: NextRequest) {
     const processedTools = await Promise.all(
       filteredTools.map(async (tool: any) => {
         // Get upvote count
-        const { count } = await supabaseAdmin
+        const { count } = await admin
           .from('upvote')
           .select('*', { count: 'exact', head: true })
           .eq('toolId', tool.id)
@@ -186,16 +186,20 @@ export async function POST(request: NextRequest) {
 
     console.log('Supabase data:', JSON.stringify(supabaseData, null, 2))
 
+    // Type assertion to work around Proxy type issues
+    const admin = supabaseAdmin as any
+    
     // Check for duplicate URL before inserting
     const normalizedUrl = validatedData.url.trim().toLowerCase().replace(/\/$/, '')
-    const { data: existingTools } = await supabaseAdmin
+    const { data: existingTools } = await admin
       .from('tool')
       .select('id, url')
       .ilike('url', `%${normalizedUrl}%`)
     
     // Check if any existing tool has the same normalized URL
-    if (existingTools && existingTools.length > 0) {
-      const isDuplicate = existingTools.some(t => {
+    const toolsArray = (existingTools || []) as Array<{ id: string; url: string }>
+    if (toolsArray.length > 0) {
+      const isDuplicate = toolsArray.some((t) => {
         const existingNormalized = t.url.toLowerCase().replace(/\/$/, '')
         return existingNormalized === normalizedUrl
       })
@@ -212,7 +216,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const { data: tool, error } = await supabaseAdmin
+    const { data: tool, error } = await admin
       .from('tool')
       .insert(supabaseData)
       .select()
