@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { randomUUID } from 'crypto'
 import { supabaseAdmin } from '@/lib/supabase'
 import { toolSchema } from '@/lib/schemas'
 
@@ -88,8 +89,12 @@ export async function POST(request: NextRequest) {
     const validatedData = toolSchema.parse(body)
     console.log('Validated data:', validatedData)
 
-    // Prepare data for Prisma - ensure types match schema exactly
-    const prismaData: any = {
+    // Generate ID for Supabase (Supabase doesn't auto-generate like Prisma)
+    const id = randomUUID()
+
+    // Prepare data for Supabase - ensure types match schema exactly
+    const supabaseData: any = {
+      id,
       name: validatedData.name,
       description: validatedData.description,
       url: validatedData.url,
@@ -98,46 +103,51 @@ export async function POST(request: NextRequest) {
 
     // Handle optional fields - convert empty strings to null
     if (validatedData.logoUrl && validatedData.logoUrl.trim()) {
-      prismaData.logoUrl = validatedData.logoUrl.trim()
+      supabaseData.logoUrl = validatedData.logoUrl.trim()
     } else {
-      prismaData.logoUrl = null
+      supabaseData.logoUrl = null
     }
 
     if (validatedData.tags && validatedData.tags.trim()) {
-      prismaData.tags = validatedData.tags.trim()
+      supabaseData.tags = validatedData.tags.trim()
     } else {
-      prismaData.tags = null
+      supabaseData.tags = null
     }
 
     if (validatedData.traffic) {
-      prismaData.traffic = validatedData.traffic
+      supabaseData.traffic = validatedData.traffic
     } else {
-      prismaData.traffic = null
+      supabaseData.traffic = null
     }
 
     if (validatedData.revenue) {
-      prismaData.revenue = validatedData.revenue
+      supabaseData.revenue = validatedData.revenue
     } else {
-      prismaData.revenue = null
+      supabaseData.revenue = null
     }
 
     if (validatedData.rating !== undefined && validatedData.rating !== null) {
-      prismaData.rating = validatedData.rating
+      supabaseData.rating = validatedData.rating
     } else {
-      prismaData.rating = null
+      supabaseData.rating = null
     }
 
     if (validatedData.estimatedVisits !== undefined && validatedData.estimatedVisits !== null) {
-      prismaData.estimatedVisits = validatedData.estimatedVisits
+      supabaseData.estimatedVisits = validatedData.estimatedVisits
     } else {
-      prismaData.estimatedVisits = null
+      supabaseData.estimatedVisits = null
     }
 
-    console.log('Supabase data:', JSON.stringify(prismaData, null, 2))
+    // Add timestamps
+    const now = new Date().toISOString()
+    supabaseData.createdAt = now
+    supabaseData.updatedAt = now
+
+    console.log('Supabase data:', JSON.stringify(supabaseData, null, 2))
 
     const { data: tool, error } = await supabaseAdmin
       .from('tool')
-      .insert(prismaData)
+      .insert(supabaseData)
       .select()
       .single()
 

@@ -47,6 +47,7 @@ export async function PUT(
       revenue: validatedData.revenue || null,
       rating: validatedData.rating ?? null,
       estimatedVisits: validatedData.estimatedVisits ?? null,
+      updatedAt: new Date().toISOString(), // Update timestamp
     }
 
     const { data: tool, error } = await supabaseAdmin

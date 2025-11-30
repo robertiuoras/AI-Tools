@@ -21,8 +21,8 @@ A modern, enterprise-grade web application for discovering and organizing AI too
 - **Language**: TypeScript
 - **Styling**: Tailwind CSS + shadcn/ui
 - **Animations**: Framer Motion
-- **Database**: SQLite (development) / PostgreSQL (production)
-- **ORM**: Prisma
+- **Database**: Supabase (PostgreSQL via REST API)
+- **Database Client**: Supabase JS
 - **Validation**: Zod
 - **Icons**: Lucide React
 - **Analytics**: Vercel Analytics & Speed Insights
@@ -48,21 +48,22 @@ cd "AI Tools"
 npm install
 ```
 
-3. Set up the database:
+3. Set up environment variables:
 
 Create a `.env` file in the root directory:
 
 ```env
-DATABASE_URL="file:./dev.db"
-NEXT_PUBLIC_APP_URL="http://localhost:3000"
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+OPENAI_API_KEY=your-openai-key
 ```
 
-4. Initialize the database:
+See `SUPABASE_SETUP.md` for detailed instructions on getting these keys.
 
-```bash
-npx prisma generate
-npx prisma db push
-```
+4. Set up the database:
+
+Create the `tool` table in Supabase. See `SUPABASE_SETUP.md` for SQL script.
 
 5. Start the development server:
 
@@ -122,6 +123,7 @@ npm run dev
 
 1. Navigate to `/admin` in your browser
 2. Fill in the tool information:
+
    - **Name** (required): Tool name
    - **Description** (required): Brief description
    - **URL** (required): Tool website URL
@@ -168,43 +170,21 @@ The `Tool` model includes:
 
 ## Production Deployment
 
-### Using PostgreSQL
-
-1. Update `prisma/schema.prisma`:
-
-```prisma
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
-```
-
-2. Update your `.env`:
-
-```env
-DATABASE_URL="postgresql://user:password@localhost:5432/ai_tools"
-```
-
-3. Run migrations:
-
-```bash
-npx prisma migrate dev
-```
-
 ### Deploy to Vercel
 
 1. Push your code to GitHub
 2. Import your repository in Vercel
-3. Add environment variables:
-   - `DATABASE_URL` - Your database connection string
-   - For SQLite: `file:./dev.db` (not recommended for production)
-   - For PostgreSQL: `postgresql://user:password@host:5432/database`
-4. The build process will automatically:
-   - Run `prisma generate` to create the Prisma Client
-   - Build the Next.js application
+3. Add environment variables in Vercel:
+   - `NEXT_PUBLIC_SUPABASE_URL` - Your Supabase project URL
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY` - Your Supabase anon key
+   - `SUPABASE_SERVICE_ROLE_KEY` - Your Supabase service role key
+   - `OPENAI_API_KEY` - (Optional) For AI-powered features
+4. The build process will automatically build the Next.js application
 5. Deploy!
 
 **Note**: The project includes Vercel Analytics and Speed Insights, which will automatically start tracking once deployed.
+
+See `SUPABASE_SETUP.md` for detailed instructions on getting your Supabase API keys.
 
 ## Development
 
@@ -214,9 +194,9 @@ npx prisma migrate dev
 - `npm run build` - Build for production
 - `npm run start` - Start production server
 - `npm run lint` - Run ESLint
-- `npm run db:generate` - Generate Prisma client
-- `npm run db:push` - Push schema changes to database
-- `npm run db:studio` - Open Prisma Studio
+- `npm run db:generate` - Generate Prisma client (if using Prisma)
+- `npm run db:push` - Push schema changes to database (if using Prisma)
+- `npm run db:studio` - Open Prisma Studio (if using Prisma)
 
 ## Future Enhancements
 
@@ -235,4 +215,3 @@ MIT
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
-

@@ -1,82 +1,29 @@
 # Supabase Setup Guide
 
-Follow these steps to connect your Supabase database to your Next.js application.
+Follow these steps to connect your Supabase database to your Next.js application using Supabase's REST API.
 
-## Step 1: Get Your Supabase Connection String
-
-### Method 1: From Database Settings (Recommended)
+## Step 1: Get Your Supabase API Keys
 
 1. Go to your [Supabase Dashboard](https://app.supabase.com)
 2. Select your project
 3. In the left sidebar, click **Settings** (⚙️ gear icon)
-4. Click **Database** (under "Project Settings")
-5. Scroll down to find **"Connection string"** or **"Connection info"** section
-6. Look for tabs like "URI", "JDBC", "Golang", etc.
-7. Click the **"URI"** tab
-8. Copy the connection string - it will look like:
-   ```
-   postgresql://postgres:[YOUR-PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres
-   ```
+4. Click **API** (under "Project Settings")
+5. You'll see:
+   - **Project URL** - Copy this (e.g., `https://xxxxx.supabase.co`)
+   - **anon public** key - Copy this (starts with `eyJ...`)
+   - **service_role** key - Copy this (starts with `eyJ...`) - **Keep this secret!**
 
-### Method 2: Build It Manually (If you can't find it)
-
-If you don't see the connection string, you can build it manually:
-
-1. **Get your Project Reference:**
-
-   - Go to **Settings** → **General**
-   - Look for **"Reference ID"** or **"Project ID"**
-   - It looks like: `abcdefghijklmnop` (random letters/numbers)
-
-2. **Get your Database Password:**
-
-   - Go to **Settings** → **Database**
-   - Look for **"Database password"** section
-   - If you don't know it, click **"Reset database password"**
-   - Copy the password (you'll only see it once!)
-
-3. **Build the connection string:**
-
-   ```
-   postgresql://postgres:YOUR-PASSWORD@db.YOUR-PROJECT-REF.supabase.co:5432/postgres?sslmode=require
-   ```
-
-   Replace:
-
-   - `YOUR-PASSWORD` with your actual database password
-   - `YOUR-PROJECT-REF` with your project reference ID
-
-### Method 3: From Project Settings → API
-
-1. Go to **Settings** → **API**
-2. Look for **"Database"** section
-3. You might see connection details there
-4. Or look for **"Connection pooling"** section which has connection strings
-
-## Step 2: Format the Connection String
-
-Replace `[YOUR-PASSWORD]` with your actual database password. If you don't know it:
-
-- Go to **Settings** → **Database** → **Database password**
-- Reset it if needed
-
-The final connection string should look like:
-
-```
-postgresql://postgres:your-actual-password@db.abcdefghijklmnop.supabase.co:5432/postgres?sslmode=require
-```
-
-**Important:** Add `?sslmode=require` at the end for secure connections.
-
-## Step 3: Set Up Environment Variables
+## Step 2: Set Up Environment Variables
 
 ### For Local Development:
 
 1. Create or update your `.env` file in the project root:
 
    ```env
-   DATABASE_URL="postgresql://postgres:your-password@db.your-project.supabase.co:5432/postgres?sslmode=require"
-   NEXT_PUBLIC_APP_URL="http://localhost:3000"
+   NEXT_PUBLIC_SUPABASE_URL=https://your-project-ref.supabase.co
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key-here
+   SUPABASE_SERVICE_ROLE_KEY=your-service-role-key-here
+   OPENAI_API_KEY=your-openai-key-here
    ```
 
 2. **Never commit this file!** It should already be in `.gitignore`
@@ -86,28 +33,55 @@ postgresql://postgres:your-actual-password@db.abcdefghijklmnop.supabase.co:5432/
 1. Go to your [Vercel Dashboard](https://vercel.com/dashboard)
 2. Select your project
 3. Go to **Settings** → **Environment Variables**
-4. Click **Add New**
-5. Add:
-   - **Name:** `DATABASE_URL`
-   - **Value:** Your Supabase connection string (from Step 2)
-   - **Environment:** Select all (Production, Preview, Development)
-6. Click **Save**
+4. Click **Add New** and add each variable:
 
-## Step 4: Set Up the Database Schema
+   - **Name:** `NEXT_PUBLIC_SUPABASE_URL`
+   - **Value:** Your Supabase project URL
+   - **Environment:** All (Production, Preview, Development)
 
-Run these commands in your terminal:
+   - **Name:** `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - **Value:** Your anon public key
+   - **Environment:** All
 
-```bash
-# 1. Generate Prisma Client
-npm run db:generate
+   - **Name:** `SUPABASE_SERVICE_ROLE_KEY`
+   - **Value:** Your service role key (keep this secret!)
+   - **Environment:** All
 
-# 2. Push the schema to your Supabase database
-npm run db:push
+   - **Name:** `OPENAI_API_KEY` (optional, for AI features)
+   - **Value:** Your OpenAI API key
+   - **Environment:** All
+
+5. Click **Save** after each variable
+
+## Step 3: Set Up the Database Schema
+
+Create the `tool` table in your Supabase database. Go to **SQL Editor** in Supabase and run:
+
+```sql
+CREATE TABLE tool (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL,
+  url TEXT NOT NULL,
+  "logoUrl" TEXT,
+  category TEXT NOT NULL,
+  tags TEXT,
+  traffic TEXT,
+  revenue TEXT,
+  rating REAL,
+  "estimatedVisits" INTEGER,
+  "createdAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  "updatedAt" TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX idx_tool_category ON tool(category);
+CREATE INDEX idx_tool_traffic ON tool(traffic);
+CREATE INDEX idx_tool_revenue ON tool(revenue);
 ```
 
-This will create the `Tool` table in your Supabase database.
+**Note:** Table name must be lowercase `tool` (not `Tool`).
 
-## Step 5: Verify the Connection
+## Step 4: Verify the Connection
 
 1. Start your development server:
 
@@ -118,7 +92,7 @@ This will create the `Tool` table in your Supabase database.
 2. Go to `http://localhost:3000/admin`
 3. Try adding a tool - if it works, your connection is successful!
 
-## Step 6: Test in Production
+## Step 5: Test in Production
 
 After deploying to Vercel:
 
@@ -153,23 +127,16 @@ After deploying to Vercel:
 
 ## Viewing Your Data
 
-You can view your data in two ways:
+You can view your data in the Supabase Dashboard:
 
-1. **Supabase Dashboard:**
-
-   - Go to **Table Editor** in your Supabase dashboard
-   - You'll see the `Tool` table with all your data
-
-2. **Prisma Studio:**
-   ```bash
-   npm run db:studio
-   ```
-   - Opens a local GUI at `http://localhost:5555`
-   - Great for viewing and editing data locally
+- Go to **Table Editor** in your Supabase dashboard
+- You'll see the `tool` table with all your data
+- You can edit, add, or delete records directly from the dashboard
 
 ## Security Notes
 
-- Never commit your `.env` file
-- Use different passwords for development and production if possible
-- Supabase connection strings include your password - keep them secret
-- Consider using Supabase's connection pooling for better performance in production
+- **Never commit your `.env` file** - it's already in `.gitignore`
+- **Never commit API keys** to GitHub
+- The `service_role` key has full database access - keep it secret!
+- The `anon` key is safe to expose in client-side code (it respects Row Level Security)
+- Use environment variables for all secrets

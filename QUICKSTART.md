@@ -3,24 +3,30 @@
 ## Initial Setup
 
 1. **Install dependencies:**
+
    ```bash
    npm install
    ```
 
 2. **Create environment file:**
    Create a `.env` file in the root directory with:
+
    ```env
-   DATABASE_URL="file:./dev.db"
-   NEXT_PUBLIC_APP_URL="http://localhost:3000"
+   NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+   SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+   OPENAI_API_KEY=your-openai-key
    ```
 
-3. **Initialize the database:**
-   ```bash
-   npm run db:generate
-   npm run db:push
-   ```
+   See `SUPABASE_SETUP.md` for instructions on getting these keys.
+
+3. **Set up the database:**
+
+   - Go to Supabase Dashboard → SQL Editor
+   - Run the SQL script from `SUPABASE_SETUP.md` to create the `tool` table
 
 4. **Start the development server:**
+
    ```bash
    npm run dev
    ```
@@ -31,11 +37,13 @@
 ## First Steps
 
 1. **Add your first tool:**
+
    - Go to `/admin` in your browser
    - Fill in the form with tool details
    - Click "Add Tool"
 
 2. **Explore the directory:**
+
    - Use the search bar to find tools
    - Apply filters using the sidebar
    - Try different sorting options
@@ -58,29 +66,30 @@ Here's an example tool you can add to test:
 ## Troubleshooting
 
 ### Database Issues
+
 If you encounter database errors:
-```bash
-# Reset the database
-rm prisma/dev.db
-npm run db:push
-```
+
+- Check that your Supabase environment variables are set correctly
+- Verify the `tool` table exists in Supabase (Table Editor)
+- Check Supabase project is active (not paused)
 
 ### Port Already in Use
+
 If port 3000 is taken:
+
 ```bash
 # Use a different port
 PORT=3001 npm run dev
 ```
 
-### Prisma Client Not Generated
-```bash
-npm run db:generate
-```
+### Environment Variables Not Set
+
+- Verify all Supabase keys are in your `.env` file
+- Restart your dev server after adding environment variables
 
 ## Next Steps
 
 - Add more tools to populate your directory
 - Customize categories in `lib/schemas.ts`
 - Deploy to Vercel for production
-- Switch to PostgreSQL for better performance
-
+- See `SUPABASE_SETUP.md` for production deployment details
