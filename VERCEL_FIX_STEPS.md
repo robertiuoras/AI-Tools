@@ -114,4 +114,3 @@ vercel env add DATABASE_URL development
 - [ ] No quotes in value
 - [ ] Redeployed after setting
 - [ ] Checked Vercel logs for connection info
-

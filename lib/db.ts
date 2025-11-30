@@ -21,10 +21,17 @@ if (!cleanDatabaseUrl.startsWith('postgresql://') && !cleanDatabaseUrl.startsWit
   )
 }
 
-// Log connection info (without password)
-const urlObj = new URL(cleanDatabaseUrl)
-const safeUrl = `${urlObj.protocol}//${urlObj.username}@${urlObj.hostname}:${urlObj.port}${urlObj.pathname}${urlObj.search}`
-console.log('🔌 Database connection:', safeUrl)
+// Log connection info (without password) - helps debug Vercel issues
+try {
+  const urlObj = new URL(cleanDatabaseUrl)
+  const safeUrl = `${urlObj.protocol}//${urlObj.username}@${urlObj.hostname}:${urlObj.port}${urlObj.pathname}${urlObj.search}`
+  console.log('🔌 Database connection:', safeUrl)
+  console.log('🔌 Hostname:', urlObj.hostname)
+  console.log('🔌 Port:', urlObj.port)
+  console.log('🔌 Has SSL mode:', urlObj.search.includes('sslmode'))
+} catch (e) {
+  console.error('❌ Error parsing DATABASE_URL:', e)
+}
 
 export const prisma =
   globalForPrisma.prisma ??
