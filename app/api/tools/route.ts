@@ -73,8 +73,55 @@ export async function POST(request: NextRequest) {
     const validatedData = toolSchema.parse(body)
     console.log('Validated data:', validatedData)
 
+    // Prepare data for Prisma - ensure types match schema exactly
+    const prismaData: any = {
+      name: validatedData.name,
+      description: validatedData.description,
+      url: validatedData.url,
+      category: validatedData.category,
+    }
+
+    // Handle optional fields - convert empty strings to null
+    if (validatedData.logoUrl && validatedData.logoUrl.trim()) {
+      prismaData.logoUrl = validatedData.logoUrl.trim()
+    } else {
+      prismaData.logoUrl = null
+    }
+
+    if (validatedData.tags && validatedData.tags.trim()) {
+      prismaData.tags = validatedData.tags.trim()
+    } else {
+      prismaData.tags = null
+    }
+
+    if (validatedData.traffic) {
+      prismaData.traffic = validatedData.traffic
+    } else {
+      prismaData.traffic = null
+    }
+
+    if (validatedData.revenue) {
+      prismaData.revenue = validatedData.revenue
+    } else {
+      prismaData.revenue = null
+    }
+
+    if (validatedData.rating !== undefined && validatedData.rating !== null) {
+      prismaData.rating = validatedData.rating
+    } else {
+      prismaData.rating = null
+    }
+
+    if (validatedData.estimatedVisits !== undefined && validatedData.estimatedVisits !== null) {
+      prismaData.estimatedVisits = validatedData.estimatedVisits
+    } else {
+      prismaData.estimatedVisits = null
+    }
+
+    console.log('Prisma data:', prismaData)
+
     const tool = await prisma.tool.create({
-      data: validatedData,
+      data: prismaData,
     })
 
     console.log('Tool created successfully:', tool.id)
