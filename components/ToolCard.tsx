@@ -1,97 +1,106 @@
-'use client'
+"use client";
 
-import { useState, useEffect } from 'react'
-import { motion } from 'framer-motion'
-import Image from 'next/image'
-import Link from 'next/link'
-import { ExternalLink, Star, TrendingUp, ThumbsUp } from 'lucide-react'
-import { Card, CardContent, CardFooter } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { supabase } from '@/lib/supabase'
-import type { Tool } from '@/lib/supabase'
-import type { User as SupabaseUser } from '@supabase/supabase-js'
+import { useState, useEffect } from "react";
+import { motion } from "framer-motion";
+import Image from "next/image";
+import Link from "next/link";
+import { ExternalLink, Star, TrendingUp, ThumbsUp } from "lucide-react";
+import { Card, CardContent, CardFooter } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { supabase } from "@/lib/supabase";
+import type { Tool } from "@/lib/supabase";
+import type { User as SupabaseUser } from "@supabase/supabase-js";
 
 interface ToolCardProps {
-  tool: Tool
-  index?: number
+  tool: Tool;
+  index?: number;
 }
 
 const categoryColors: Record<string, string> = {
-  'Video Editing': 'bg-blue-500/10 text-blue-700 dark:text-blue-400',
-  'AI Automation': 'bg-purple-500/10 text-purple-700 dark:text-purple-400',
-  'SaaS': 'bg-green-500/10 text-green-700 dark:text-green-400',
-  'Image Generation': 'bg-pink-500/10 text-pink-700 dark:text-pink-400',
-  'Code Assistants': 'bg-orange-500/10 text-orange-700 dark:text-orange-400',
-  'Writing': 'bg-indigo-500/10 text-indigo-700 dark:text-indigo-400',
-  'Productivity': 'bg-cyan-500/10 text-cyan-700 dark:text-cyan-400',
-  'Design': 'bg-rose-500/10 text-rose-700 dark:text-rose-400',
-  'Marketing': 'bg-yellow-500/10 text-yellow-700 dark:text-yellow-400',
-  'Analytics': 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
-  'Other': 'bg-gray-500/10 text-gray-700 dark:text-gray-400',
-}
+  "Video Editing": "bg-blue-500/10 text-blue-700 dark:text-blue-400",
+  "AI Automation": "bg-purple-500/10 text-purple-700 dark:text-purple-400",
+  SaaS: "bg-green-500/10 text-green-700 dark:text-green-400",
+  "Image Generation": "bg-pink-500/10 text-pink-700 dark:text-pink-400",
+  "Code Assistants": "bg-orange-500/10 text-orange-700 dark:text-orange-400",
+  Writing: "bg-indigo-500/10 text-indigo-700 dark:text-indigo-400",
+  Productivity: "bg-cyan-500/10 text-cyan-700 dark:text-cyan-400",
+  Design: "bg-rose-500/10 text-rose-700 dark:text-rose-400",
+  Marketing: "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400",
+  Analytics: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+  Other: "bg-gray-500/10 text-gray-700 dark:text-gray-400",
+};
 
 const trafficLabels: Record<string, string> = {
-  low: 'Low',
-  medium: 'Medium',
-  high: 'High',
-  unknown: 'Unknown',
-}
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  unknown: "Unknown",
+};
 
 export function ToolCard({ tool, index = 0 }: ToolCardProps) {
-  const [user, setUser] = useState<SupabaseUser | null>(null)
-  const [upvoteCount, setUpvoteCount] = useState(tool.upvoteCount || 0)
-  const [userUpvoted, setUserUpvoted] = useState(tool.userUpvoted || false)
-  const [upvoting, setUpvoting] = useState(false)
+  const [user, setUser] = useState<SupabaseUser | null>(null);
+  const [upvoteCount, setUpvoteCount] = useState(tool.upvoteCount || 0);
+  const [userUpvoted, setUserUpvoted] = useState(tool.userUpvoted || false);
+  const [upvoting, setUpvoting] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null)
-    })
+      setUser(session?.user ?? null);
+    });
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null)
-    })
+      setUser(session?.user ?? null);
+    });
 
-    return () => subscription.unsubscribe()
-  }, [])
+    return () => subscription.unsubscribe();
+  }, []);
 
   const handleUpvote = async () => {
     if (!user) {
-      alert('Please log in to upvote tools')
-      return
+      alert("Please log in to upvote tools");
+      return;
     }
 
-    setUpvoting(true)
+    setUpvoting(true);
     try {
+      const session = await supabase.auth.getSession();
+      const token = (await session).data.session?.access_token;
+
       const response = await fetch(`/api/tools/${tool.id}/upvote`, {
-        method: userUpvoted ? 'DELETE' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      })
+        method: userUpvoted ? "DELETE" : "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
 
       if (!response.ok) {
-        throw new Error('Failed to upvote')
+        const errorData = await response.json();
+        throw new Error(
+          errorData.message || errorData.error || "Failed to upvote"
+        );
       }
 
-      const data = await response.json()
-      setUpvoteCount(data.upvoteCount)
-      setUserUpvoted(data.userUpvoted)
-    } catch (error) {
-      console.error('Error upvoting:', error)
-      alert('Failed to upvote. Please try again.')
+      const data = await response.json();
+      setUpvoteCount(data.upvoteCount);
+      setUserUpvoted(data.userUpvoted);
+    } catch (error: any) {
+      console.error("Error upvoting:", error);
+      alert(error.message || "Failed to upvote. Please try again.");
     } finally {
-      setUpvoting(false)
+      setUpvoting(false);
     }
-  }
+  };
 
   const formatVisits = (visits?: number | null) => {
-    if (!visits) return null
-    if (visits >= 1000000) return `${(visits / 1000000).toFixed(1)}M`
-    if (visits >= 1000) return `${(visits / 1000).toFixed(1)}K`
-    return visits.toString()
-  }
+    if (!visits) return null;
+    if (visits >= 1000000) return `${(visits / 1000000).toFixed(1)}M`;
+    if (visits >= 1000) return `${(visits / 1000).toFixed(1)}K`;
+    return visits.toString();
+  };
 
   return (
     <motion.div
@@ -126,7 +135,9 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
                 </h3>
                 <Badge
                   variant="outline"
-                  className={`mt-1 text-xs ${categoryColors[tool.category] || categoryColors.Other}`}
+                  className={`mt-1 text-xs ${
+                    categoryColors[tool.category] || categoryColors.Other
+                  }`}
                 >
                   {tool.category}
                 </Badge>
@@ -144,9 +155,11 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
               size="sm"
               onClick={handleUpvote}
               disabled={upvoting || !user}
-              className={`h-8 gap-1.5 ${userUpvoted ? 'text-primary' : ''}`}
+              className={`h-8 gap-1.5 ${userUpvoted ? "text-primary" : ""}`}
             >
-              <ThumbsUp className={`h-4 w-4 ${userUpvoted ? 'fill-current' : ''}`} />
+              <ThumbsUp
+                className={`h-4 w-4 ${userUpvoted ? "fill-current" : ""}`}
+              />
               <span className="text-sm font-medium">{upvoteCount}</span>
             </Button>
             {tool.rating && (
@@ -154,17 +167,17 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
                 <div className="flex items-center gap-0.5">
                   {[1, 2, 3, 4, 5].map((star) => {
                     // Show filled star if rating is >= star value
-                    const filled = tool.rating! >= star
+                    const filled = tool.rating! >= star;
                     return (
                       <Star
                         key={star}
                         className={`h-3.5 w-3.5 transition-colors ${
                           filled
-                            ? 'fill-yellow-400 text-yellow-400'
-                            : 'fill-transparent text-yellow-200 dark:text-yellow-900'
+                            ? "fill-yellow-400 text-yellow-400"
+                            : "fill-transparent text-yellow-200 dark:text-yellow-900"
                         }`}
                       />
-                    )
+                    );
                   })}
                 </div>
                 <span className="text-sm font-medium text-foreground">
@@ -172,7 +185,7 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
                 </span>
               </div>
             )}
-            {tool.traffic && tool.traffic !== 'unknown' && (
+            {tool.traffic && tool.traffic !== "unknown" && (
               <div className="flex items-center gap-1 text-sm text-muted-foreground">
                 <TrendingUp className="h-3.5 w-3.5" />
                 <span>{trafficLabels[tool.traffic]}</span>
@@ -210,6 +223,5 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
         </CardFooter>
       </Card>
     </motion.div>
-  )
+  );
 }
-

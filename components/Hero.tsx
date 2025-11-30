@@ -3,6 +3,8 @@
 import { motion } from 'framer-motion'
 import { Sparkles } from 'lucide-react'
 
+import Image from "next/image";
+
 export function Hero() {
   return (
     <div className="relative overflow-hidden bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 dark:from-indigo-900 dark:via-purple-900 dark:to-pink-900">
@@ -37,6 +39,29 @@ export function Hero() {
             Curated collection of cutting-edge AI tools. Find the perfect solution
             for your workflow, from video editing to code assistance.
           </p>
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.5, delay: 0.3 }}
+            className="mt-8 flex items-center justify-center gap-2 text-sm text-white/80"
+          >
+            <span>Built by</span>
+            <a
+              href="https://taskdriver.ai"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 transition-opacity hover:opacity-80"
+            >
+              <Image
+                src="/whiteicon.png"
+                alt="TaskDriver"
+                width={20}
+                height={20}
+                className="h-5 w-5"
+              />
+              <span className="font-medium text-white">taskdriver.ai</span>
+            </a>
+          </motion.div>
         </motion.div>
       </div>
     </div>
