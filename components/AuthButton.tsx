@@ -122,6 +122,7 @@ export function AuthButton() {
         provider: 'google',
         options: {
           redirectTo: `${window.location.origin}/auth/callback`,
+          skipBrowserRedirect: false, // Let Supabase handle the redirect
         },
       })
 
