@@ -90,18 +90,28 @@ async function scrapeWebsiteInfo(url: string): Promise<{
 
     const response = await fetch(validUrl.toString(), {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
       },
-      signal: AbortSignal.timeout(10000), // 10 second timeout
+      signal: AbortSignal.timeout(15000), // 15 second timeout
     })
     
     if (!response.ok) {
       console.error('❌ [Scrape] HTTP error:', response.status, response.statusText)
-      return { title: '', description: '', logoUrl: null, pricingContent: '', pageContent: '' }
+      console.error('❌ [Scrape] Response headers:', Object.fromEntries(response.headers.entries()))
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
     }
     
     const html = await response.text()
     console.log('✅ [Scrape] Successfully fetched HTML, length:', html.length)
+    
+    if (html.length < 100) {
+      console.warn('⚠️ [Scrape] HTML content is very short, may be blocked or invalid')
+    }
 
     // Extract title
     const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i)
@@ -211,7 +221,8 @@ async function scrapeWebsiteInfo(url: string): Promise<{
     if (error instanceof Error && 'cause' in error) {
       console.error('❌ [Scrape] Error cause:', error.cause)
     }
-    return { title: '', description: '', logoUrl: null, pricingContent: '', pageContent: '' }
+    // Re-throw error instead of returning empty data
+    throw error
   }
 }
 
@@ -454,19 +465,32 @@ export async function POST(request: NextRequest) {
       console.log('✅ [Analyze] URL hostname:', validUrl.hostname)
     } catch (error) {
       console.error('❌ [Analyze] Invalid URL format:', url, error)
-      return NextResponse.json({ error: `Invalid URL: ${url}` }, { status: 400 })
+      return NextResponse.json({ 
+        error: `Invalid URL: ${url}`,
+        details: error instanceof Error ? error.message : String(error)
+      }, { status: 400 })
     }
 
     // Scrape basic info (including pricing page)
     console.log('🔍 [Analyze] Scraping website info...')
-    const scraped = await scrapeWebsiteInfo(validUrl.toString())
-    console.log('✅ [Analyze] Scraped info:', {
-      title: scraped.title,
-      description: scraped.description?.substring(0, 100),
-      logoUrl: scraped.logoUrl,
-      pricingContentLength: scraped.pricingContent.length,
-      pageContentLength: scraped.pageContent.length,
-    })
+    let scraped
+    try {
+      scraped = await scrapeWebsiteInfo(validUrl.toString())
+      console.log('✅ [Analyze] Scraped info:', {
+        title: scraped.title,
+        description: scraped.description?.substring(0, 100),
+        logoUrl: scraped.logoUrl,
+        pricingContentLength: scraped.pricingContent.length,
+        pageContentLength: scraped.pageContent.length,
+      })
+    } catch (error) {
+      console.error('❌ [Analyze] Error scraping website:', error)
+      return NextResponse.json({
+        error: 'Failed to scrape website',
+        details: error instanceof Error ? error.message : String(error),
+        suggestion: 'The website may be blocking requests or unreachable. Try again or fill the form manually.'
+      }, { status: 500 })
+    }
 
     // Analyze with OpenAI (required - no fallback)
     console.log('🤖 [Analyze] Starting OpenAI analysis...')
@@ -477,14 +501,27 @@ export async function POST(request: NextRequest) {
       hasPageContent: scraped.pageContent.length > 0,
     })
     
-    const analysis = await analyzeWithAI(
-      validUrl.toString(),
-      scraped.title,
-      scraped.description,
-      scraped.pricingContent,
-      scraped.pageContent
-    )
-    console.log('✅ [Analyze] OpenAI analysis complete:', JSON.stringify(analysis, null, 2))
+    let analysis
+    try {
+      analysis = await analyzeWithAI(
+        validUrl.toString(),
+        scraped.title,
+        scraped.description,
+        scraped.pricingContent,
+        scraped.pageContent
+      )
+      console.log('✅ [Analyze] OpenAI analysis complete:', JSON.stringify(analysis, null, 2))
+    } catch (error) {
+      console.error('❌ [Analyze] OpenAI analysis failed:', error)
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      return NextResponse.json({
+        error: 'Failed to analyze with OpenAI',
+        details: errorMessage,
+        suggestion: errorMessage.includes('API key') 
+          ? 'Please check your OPENAI_API_KEY environment variable'
+          : 'OpenAI API error. Please try again or fill the form manually.'
+      }, { status: 500 })
+    }
 
     const result: AnalysisResult = {
       name: analysis.name || scraped.title || validUrl.hostname.replace('www.', ''),
@@ -507,9 +544,15 @@ export async function POST(request: NextRequest) {
     
     return NextResponse.json({ ...result, url: validUrl.toString() })
   } catch (error) {
-    console.error('Error analyzing URL:', error)
+    console.error('❌ [Analyze] Unexpected error:', error)
+    console.error('❌ [Analyze] Error type:', error instanceof Error ? error.constructor.name : typeof error)
+    console.error('❌ [Analyze] Error message:', error instanceof Error ? error.message : String(error))
     return NextResponse.json(
-      { error: 'Failed to analyze URL' },
+      { 
+        error: 'Failed to analyze URL',
+        details: error instanceof Error ? error.message : String(error),
+        suggestion: 'Please try again or fill the form manually.'
+      },
       { status: 500 }
     )
   }

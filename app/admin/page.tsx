@@ -243,7 +243,10 @@ export default function AdminPage() {
       })
 
       if (!response.ok) {
-        throw new Error('Failed to analyze URL')
+        const errorData = await response.json().catch(() => ({}))
+        const errorMessage = errorData.details || errorData.error || errorData.suggestion || 'Failed to analyze URL'
+        console.error('❌ Analysis error:', errorData)
+        throw new Error(errorMessage)
       }
 
       const data = await response.json()
