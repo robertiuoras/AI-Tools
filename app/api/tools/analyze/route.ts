@@ -220,34 +220,50 @@ async function analyzeWithAI(
   pricingContent: string,
   pageContent: string
 ): Promise<Partial<AnalysisResult>> {
-  const openaiApiKey = process.env.OPENAI_API_KEY
+  // Check for API key in multiple possible locations
+  const openaiApiKey = process.env.OPENAI_API_KEY || process.env.NEXT_PUBLIC_OPENAI_API_KEY
 
+  console.log('🔍 [OpenAI Check] ==========================================')
   console.log('🔍 [OpenAI Check] Checking for OpenAI API key...')
-  console.log('🔍 [OpenAI Check] OPENAI_API_KEY exists:', !!openaiApiKey)
-  console.log('🔍 [OpenAI Check] OPENAI_API_KEY length:', openaiApiKey?.length || 0)
-  console.log('🔍 [OpenAI Check] OPENAI_API_KEY starts with:', openaiApiKey?.substring(0, 10) || 'N/A')
-  console.log('🔍 [OpenAI Check] OPENAI_API_KEY format valid:', openaiApiKey?.startsWith('sk-') || false)
+  console.log('🔍 [OpenAI Check] OPENAI_API_KEY exists:', !!process.env.OPENAI_API_KEY)
+  console.log('🔍 [OpenAI Check] NEXT_PUBLIC_OPENAI_API_KEY exists:', !!process.env.NEXT_PUBLIC_OPENAI_API_KEY)
+  console.log('🔍 [OpenAI Check] Final key exists:', !!openaiApiKey)
+  console.log('🔍 [OpenAI Check] Key length:', openaiApiKey?.length || 0)
+  console.log('🔍 [OpenAI Check] Key starts with:', openaiApiKey?.substring(0, 10) || 'N/A')
+  console.log('🔍 [OpenAI Check] Key format valid:', openaiApiKey?.startsWith('sk-') || false)
+  console.log('🔍 [OpenAI Check] Environment:', process.env.NODE_ENV)
+  console.log('🔍 [OpenAI Check] All OPENAI env vars:', Object.keys(process.env).filter(k => k.toUpperCase().includes('OPENAI')))
+  console.log('🔍 [OpenAI Check] ==========================================')
 
   if (!openaiApiKey) {
     // Fallback to rule-based analysis if no API key
-    console.log('⚠️ [OpenAI] API key not found. Using basic analysis. Add OPENAI_API_KEY to .env for better results.')
-    console.log('⚠️ [OpenAI] Current env vars with OPENAI:', Object.keys(process.env).filter(k => k.includes('OPENAI')))
-    console.log('⚠️ [OpenAI] Environment:', process.env.NODE_ENV)
-    console.log('⚠️ [OpenAI] All env vars (first 20):', Object.keys(process.env).sort().slice(0, 20).join(', '))
+    console.log('⚠️ [OpenAI] ==========================================')
+    console.log('⚠️ [OpenAI] API key not found!')
+    console.log('⚠️ [OpenAI] Checked: OPENAI_API_KEY and NEXT_PUBLIC_OPENAI_API_KEY')
+    console.log('⚠️ [OpenAI] Using basic analysis instead.')
+    console.log('⚠️ [OpenAI] To fix: Add OPENAI_API_KEY to your environment variables')
+    console.log('⚠️ [OpenAI] ==========================================')
     return analyzeWithoutAI(url, title, description, pricingContent, pageContent)
   }
 
   // Validate API key format
   if (!openaiApiKey.startsWith('sk-')) {
-    console.error('❌ [OpenAI] Invalid API key format. OpenAI API keys should start with "sk-"')
+    console.error('❌ [OpenAI] ==========================================')
+    console.error('❌ [OpenAI] Invalid API key format!')
+    console.error('❌ [OpenAI] OpenAI API keys should start with "sk-"')
     console.error('❌ [OpenAI] API key provided starts with:', openaiApiKey.substring(0, 5))
+    console.error('❌ [OpenAI] Using basic analysis instead.')
+    console.error('❌ [OpenAI] ==========================================')
     return analyzeWithoutAI(url, title, description, pricingContent, pageContent)
   }
   
+  console.log('✨ [OpenAI] ==========================================')
+  console.log('✨ [OpenAI] ✅ API KEY FOUND AND VALID!')
   console.log('✨ [OpenAI] Using AI analysis with OpenAI')
   console.log('✨ [OpenAI] API Key present (first 10 chars):', openaiApiKey.substring(0, 10) + '...')
   console.log('✨ [OpenAI] API Key format: Valid (starts with sk-)')
   console.log('✨ [OpenAI] Model: gpt-4o-mini')
+  console.log('✨ [OpenAI] ==========================================')
 
   try {
     const pricingContext = pricingContent 
@@ -310,11 +326,36 @@ IMPORTANT:
 
 Return ONLY valid JSON, no markdown formatting.`
 
+    console.log('🚀 [OpenAI] ==========================================')
     console.log('🚀 [OpenAI] Making API request to OpenAI...')
     console.log('🚀 [OpenAI] Request URL:', 'https://api.openai.com/v1/chat/completions')
     console.log('🚀 [OpenAI] Prompt length:', prompt.length)
     console.log('🚀 [OpenAI] Pricing content length:', pricingContent.length)
     console.log('🚀 [OpenAI] Page content length:', pageContent.length)
+    console.log('🚀 [OpenAI] Authorization header:', `Bearer ${openaiApiKey.substring(0, 10)}...`)
+    console.log('🚀 [OpenAI] ==========================================')
+
+    const requestBody = {
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are an expert at analyzing AI tools and categorizing them. Always respond with valid JSON only.',
+        },
+        { role: 'user', content: prompt },
+      ],
+      temperature: 0.7,
+      response_format: { type: 'json_object' },
+    }
+
+    console.log('📤 [OpenAI] Request body (without prompt):', JSON.stringify({
+      ...requestBody,
+      messages: requestBody.messages.map(m => ({
+        ...m,
+        content: m.content.substring(0, 100) + '...'
+      }))
+    }, null, 2))
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -322,38 +363,37 @@ Return ONLY valid JSON, no markdown formatting.`
         'Content-Type': 'application/json',
         Authorization: `Bearer ${openaiApiKey}`,
       },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content:
-              'You are an expert at analyzing AI tools and categorizing them. Always respond with valid JSON only.',
-          },
-          { role: 'user', content: prompt },
-        ],
-        temperature: 0.7,
-        response_format: { type: 'json_object' },
-      }),
+      body: JSON.stringify(requestBody),
     })
 
+    console.log('📥 [OpenAI] ==========================================')
     console.log('📥 [OpenAI] Response status:', response.status)
     console.log('📥 [OpenAI] Response ok:', response.ok)
+    console.log('📥 [OpenAI] Response headers:', Object.fromEntries(response.headers.entries()))
 
     if (!response.ok) {
       const errorText = await response.text()
       console.error('❌ [OpenAI] API error response:', errorText)
+      console.error('❌ [OpenAI] Status:', response.status)
+      console.error('❌ [OpenAI] Status text:', response.statusText)
       throw new Error(`OpenAI API error: ${response.status} - ${errorText}`)
     }
 
     const data = await response.json()
-    console.log('✅ [OpenAI] API response received')
+    console.log('✅ [OpenAI] ==========================================')
+    console.log('✅ [OpenAI] ✅ API RESPONSE RECEIVED SUCCESSFULLY!')
     console.log('✅ [OpenAI] Response ID:', data.id)
     console.log('✅ [OpenAI] Model used:', data.model)
     console.log('✅ [OpenAI] Usage:', JSON.stringify(data.usage, null, 2))
+    console.log('✅ [OpenAI] Choices count:', data.choices?.length || 0)
+    
+    if (!data.choices || data.choices.length === 0) {
+      throw new Error('OpenAI API returned no choices')
+    }
     
     const content = JSON.parse(data.choices[0].message.content)
     console.log('✅ [OpenAI] Parsed content:', JSON.stringify(content, null, 2))
+    console.log('✅ [OpenAI] ==========================================')
 
     const result = {
       name: content.name || title,

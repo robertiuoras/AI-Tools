@@ -697,12 +697,12 @@ export default function AdminPage() {
           </CardContent>
         </Card>
 
-        <Card className="flex flex-col">
+        <Card className="flex flex-col h-full">
           <CardHeader className="flex-shrink-0">
             <CardTitle>All Tools ({tools.length})</CardTitle>
             <CardDescription>Manage existing tools in the directory</CardDescription>
           </CardHeader>
-          <CardContent className="flex flex-col flex-1 min-h-0">
+          <CardContent className="flex flex-col flex-1 min-h-0 p-6">
             {loading ? (
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-6 w-6 animate-spin" />
@@ -721,7 +721,7 @@ export default function AdminPage() {
                     className="w-full"
                   />
                 </div>
-                <div className="flex-1 overflow-y-auto pr-2 space-y-2 min-h-0 max-h-[640px]">
+                <div className="flex-1 overflow-y-auto pr-2 space-y-2">
                   {tools
                     .filter((tool) => {
                       if (!searchQuery.trim()) return true
