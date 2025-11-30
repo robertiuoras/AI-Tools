@@ -88,17 +88,81 @@ async function scrapeWebsiteInfo(url: string): Promise<{
       .substring(0, 5000) // Limit to first 5000 chars
       .toLowerCase()
 
-    // Try to find logo/favicon
+    // Try to find logo/favicon with multiple fallback methods
     let logoUrl: string | null = null
-    const logoMatch = html.match(/<link[^>]*rel=["'](?:icon|shortcut icon|apple-touch-icon)["'][^>]*href=["']([^"']+)["']/i)
-    if (logoMatch) {
-      const logoPath = logoMatch[1]
-      logoUrl = logoPath.startsWith('http') ? logoPath : new URL(logoPath, url).toString()
-    } else {
-      // Try og:image
+    const urlObj = new URL(url)
+    
+    // Method 1: Try favicon link tags (multiple variations)
+    const faviconPatterns = [
+      /<link[^>]*rel=["'](?:icon|shortcut icon|apple-touch-icon|apple-touch-icon-precomposed)["'][^>]*href=["']([^"']+)["']/i,
+      /<link[^>]*href=["']([^"']+)["'][^>]*rel=["'](?:icon|shortcut icon|apple-touch-icon)["']/i,
+    ]
+    
+    for (const pattern of faviconPatterns) {
+      const match = html.match(pattern)
+      if (match) {
+        const logoPath = match[1]
+        try {
+          logoUrl = logoPath.startsWith('http') 
+            ? logoPath 
+            : new URL(logoPath, url).toString()
+          // Verify it's a valid URL
+          if (logoUrl) break
+        } catch (e) {
+          continue
+        }
+      }
+    }
+    
+    // Method 2: Try og:image (often higher quality)
+    if (!logoUrl) {
       const ogImageMatch = html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i)
       if (ogImageMatch) {
-        logoUrl = ogImageMatch[1]
+        try {
+          logoUrl = ogImageMatch[1]
+        } catch (e) {
+          // Continue to next method
+        }
+      }
+    }
+    
+    // Method 3: Try common favicon paths
+    if (!logoUrl) {
+      const commonPaths = [
+        '/favicon.ico',
+        '/favicon.png',
+        '/logo.png',
+        '/logo.svg',
+        '/apple-touch-icon.png',
+        '/images/logo.png',
+        '/assets/logo.png',
+        '/static/logo.png',
+      ]
+      
+      for (const path of commonPaths) {
+        try {
+          const testUrl = new URL(path, url).toString()
+          // We'll let the frontend handle 404s, but construct valid URLs
+          logoUrl = testUrl
+          break
+        } catch (e) {
+          continue
+        }
+      }
+    }
+    
+    // Method 4: Try to find logo in common class/id patterns
+    if (!logoUrl) {
+      const logoImgMatch = html.match(/<img[^>]*(?:class|id)=["'][^"']*logo[^"']*["'][^>]*src=["']([^"']+)["']/i)
+      if (logoImgMatch) {
+        try {
+          const logoPath = logoImgMatch[1]
+          logoUrl = logoPath.startsWith('http') 
+            ? logoPath 
+            : new URL(logoPath, url).toString()
+        } catch (e) {
+          // Continue
+        }
       }
     }
 
@@ -143,37 +207,55 @@ async function analyzeWithAI(
       ? `\n\nMain Page Content (first 2000 chars for context):\n${pageContent.substring(0, 2000)}`
       : ''
 
-    const prompt = `Analyze this AI tool website and provide structured information. Pay special attention to the pricing model:
+    const prompt = `Analyze this AI tool website and provide structured information. Pay EXTREME attention to finding accurate revenue model and visit statistics.
 
 URL: ${url}
 Title: ${title}
 Description: ${description || 'No description available'}${pricingContext}${pageContext}
 
-IMPORTANT - Revenue Model Analysis:
-- "free": Completely free with no paid options (e.g., open source, free forever)
-- "freemium": Has a free tier/plan AND paid plans (e.g., free plan + pro/paid tiers)
-- "paid": Only paid plans, no free tier (e.g., subscription required, one-time purchase)
-- "enterprise": Enterprise/business focused with custom pricing (e.g., contact sales, enterprise plans)
-- null: Cannot determine from available information
+CRITICAL - Revenue Model Analysis (MUST be accurate):
+Carefully examine the pricing content and page content for EXACT pricing structure:
+- "free": Completely free with NO paid options whatsoever (e.g., open source, free forever, no pricing page)
+- "freemium": Has BOTH a free tier/plan AND paid plans (e.g., "Free plan" + "Pro $X/month" or "Free tier" + "Premium")
+- "paid": ONLY paid plans, NO free tier (e.g., "Starting at $X/month", subscription required, one-time purchase, no free option mentioned)
+- "enterprise": Enterprise/business focused with custom pricing (e.g., "Contact sales", "Enterprise plans", "Custom pricing", "Request demo")
+- null: ONLY if you truly cannot determine from the available content
 
-Look for indicators like:
-- Free tier mentions, free plan, free forever → "freemium" or "free"
-- Pricing pages with multiple tiers including free → "freemium"
-- "Contact sales", "Enterprise", "Custom pricing" → "enterprise"
-- Only paid plans, subscription required → "paid"
-- Completely open source, no pricing → "free"
+Look for EXACT indicators:
+- "Free plan" or "Free tier" + any paid plans → "freemium"
+- Multiple pricing tiers with one being "Free" → "freemium"
+- Only "$X/month" or "Subscribe" with no free option → "paid"
+- "Contact sales" or "Enterprise" as primary option → "enterprise"
+- No pricing page, completely open source → "free"
+
+CRITICAL - Estimated Visits Analysis (MUST search thoroughly):
+Search the page content and pricing content for EXACT numbers:
+1. Look for explicit mentions: "X million visits", "X million users", "X million monthly", "XM visits", "XK visits"
+2. Look for user counts: "X million users", "X thousand users", "X users"
+3. Look for traffic indicators: "X million page views", "X million visitors", "serving X million"
+4. If you find a number, use it directly (convert: "2.5M users" = 2,500,000, assume 3 visits/user/month = 7,500,000 visits)
+5. If no explicit number but mentions "millions" → estimate 2-5M
+6. If mentions "hundreds of thousands" → estimate 300K-800K
+7. If mentions "thousands" → estimate 10K-50K
+8. If well-known tool with press coverage → estimate 1M-5M
+9. If newer/niche tool → estimate 10K-100K
+10. Only use null if truly no indicators found
 
 Please provide a JSON response with:
 1. "name": A clean, concise name for the tool (max 50 chars)
 2. "description": A 2-3 sentence description of what the tool does
 3. "category": One of these exact categories: ${categories.join(', ')}
 4. "tags": Comma-separated relevant tags (3-5 tags, e.g., "ai, automation, productivity")
-5. "revenue": One of: "free", "freemium", "paid", "enterprise", or null if unknown (be precise based on pricing info)
-6. "traffic": Estimate as "low", "medium", "high", or "unknown" (based on popularity indicators)
-7. "rating": A number between 0-5 (or null if unknown, estimate based on quality indicators)
-8. "estimatedVisits": Estimated monthly visits as a number (or null, estimate based on popularity)
+5. "revenue": One of: "free", "freemium", "paid", "enterprise", or null (MUST be accurate based on pricing analysis)
+6. "traffic": Estimate as "low", "medium", "high", or "unknown" (based on popularity indicators, press coverage, user mentions)
+7. "rating": A number between 0-5 (or null if unknown, estimate based on quality indicators, reviews, or general perception)
+8. "estimatedVisits": A NUMBER (not null unless truly unknown). Search thoroughly for explicit visit/user numbers. If found, use them. If not found but indicators exist, provide reasonable estimate based on traffic level and popularity.
 
-IMPORTANT: Always provide tags, even if generic. Always try to determine revenue model from pricing content. Provide estimates for traffic and rating when possible.
+IMPORTANT: 
+- Revenue model MUST be accurate - carefully analyze pricing content
+- Estimated visits MUST be a number if any indicators exist (don't default to null)
+- Always provide tags, even if generic
+- Be thorough in searching for visit/user statistics
 
 Return ONLY valid JSON, no markdown formatting.`
 
@@ -321,27 +403,87 @@ function analyzeWithoutAI(
     rating = 3.5
   }
 
-  // Estimate visits (very rough)
+  // Estimate visits with improved heuristics
   let estimatedVisits: number | null = null
-  const visitsMatch = combined.match(/(\d+(?:\.\d+)?)\s*(?:million|m|thousand|k)\s*(?:visits|users|monthly)/i)
-  if (visitsMatch) {
-    const num = parseFloat(visitsMatch[1])
-    const unit = visitsMatch[0].toLowerCase()
-    if (unit.includes('million') || unit.includes('m')) {
-      estimatedVisits = Math.round(num * 1000000)
-    } else if (unit.includes('thousand') || unit.includes('k')) {
-      estimatedVisits = Math.round(num * 1000)
+  
+  // Method 1: Look for explicit visit/user numbers in text
+  const visitPatterns = [
+    /(\d+(?:\.\d+)?)\s*(?:million|m)\s*(?:visits|users|monthly|per month|monthly visits)/i,
+    /(\d+(?:\.\d+)?)\s*(?:thousand|k)\s*(?:visits|users|monthly|per month|monthly visits)/i,
+    /(\d+(?:,\d{3})*)\s*(?:visits|users|monthly|per month)/i,
+    /(?:visits|users|monthly)[:\s]+(\d+(?:\.\d+)?)\s*(?:million|m)/i,
+    /(?:visits|users|monthly)[:\s]+(\d+(?:\.\d+)?)\s*(?:thousand|k)/i,
+  ]
+  
+  for (const pattern of visitPatterns) {
+    const match = combined.match(pattern)
+    if (match) {
+      const num = parseFloat(match[1].replace(/,/g, ''))
+      const text = match[0].toLowerCase()
+      if (text.includes('million') || text.includes('m')) {
+        estimatedVisits = Math.round(num * 1000000)
+        break
+      } else if (text.includes('thousand') || text.includes('k')) {
+        estimatedVisits = Math.round(num * 1000)
+        break
+      } else if (num > 1000) {
+        estimatedVisits = Math.round(num)
+        break
+      }
     }
   }
   
-  // Set default estimates based on traffic level
+  // Method 2: Look for user count indicators
+  if (estimatedVisits === null) {
+    const userPatterns = [
+      /(\d+(?:\.\d+)?)\s*(?:million|m)\s*(?:users|customers|subscribers)/i,
+      /(\d+(?:\.\d+)?)\s*(?:thousand|k)\s*(?:users|customers|subscribers)/i,
+      /(?:over|more than|above)\s+(\d+(?:\.\d+)?)\s*(?:million|m)\s*(?:users|customers)/i,
+      /(?:over|more than|above)\s+(\d+(?:\.\d+)?)\s*(?:thousand|k)\s*(?:users|customers)/i,
+    ]
+    
+    for (const pattern of userPatterns) {
+      const match = combined.match(pattern)
+      if (match) {
+        const num = parseFloat(match[1])
+        const text = match[0].toLowerCase()
+        // Convert users to estimated visits (users typically visit multiple times)
+        if (text.includes('million') || text.includes('m')) {
+          estimatedVisits = Math.round(num * 1000000 * 3) // Assume 3 visits per user per month
+          break
+        } else if (text.includes('thousand') || text.includes('k')) {
+          estimatedVisits = Math.round(num * 1000 * 3)
+          break
+        }
+      }
+    }
+  }
+  
+  // Method 3: Look for traffic indicators and estimate
+  if (estimatedVisits === null) {
+    // Check for specific traffic mentions
+    if (combined.includes('millions of visitors') || combined.includes('millions of users')) {
+      estimatedVisits = 5000000 // Conservative estimate for "millions"
+    } else if (combined.includes('hundreds of thousands')) {
+      estimatedVisits = 500000
+    } else if (combined.includes('tens of thousands')) {
+      estimatedVisits = 50000
+    } else if (combined.includes('thousands of')) {
+      estimatedVisits = 5000
+    }
+  }
+  
+  // Method 4: Set estimates based on traffic level with better ranges
   if (estimatedVisits === null) {
     if (traffic === 'high') {
-      estimatedVisits = 1000000
+      // High traffic: 500K - 5M range
+      estimatedVisits = 2000000
     } else if (traffic === 'medium') {
-      estimatedVisits = 100000
+      // Medium traffic: 50K - 500K range
+      estimatedVisits = 250000
     } else if (traffic === 'low') {
-      estimatedVisits = 10000
+      // Low traffic: 5K - 50K range
+      estimatedVisits = 25000
     }
   }
 

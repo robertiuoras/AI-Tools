@@ -26,6 +26,8 @@ export default function AdminPage() {
   const [quickAddUrl, setQuickAddUrl] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [autoSubmitTimer, setAutoSubmitTimer] = useState<NodeJS.Timeout | null>(null)
+  const [countdown, setCountdown] = useState<number | null>(null)
+  const [countdownInterval, setCountdownInterval] = useState<NodeJS.Timeout | null>(null)
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -63,6 +65,13 @@ export default function AdminPage() {
       clearTimeout(autoSubmitTimer)
       setAutoSubmitTimer(null)
     }
+    
+    // Clear countdown
+    if (countdownInterval) {
+      clearInterval(countdownInterval)
+      setCountdownInterval(null)
+    }
+    setCountdown(null)
     
     setSubmitting(true)
 
@@ -150,6 +159,13 @@ export default function AdminPage() {
       setAutoSubmitTimer(null)
     }
     
+    // Clear countdown
+    if (countdownInterval) {
+      clearInterval(countdownInterval)
+      setCountdownInterval(null)
+    }
+    setCountdown(null)
+    
     setEditingId(tool.id)
     setFormData({
       name: tool.name,
@@ -231,15 +247,124 @@ export default function AdminPage() {
         clearTimeout(autoSubmitTimer)
       }
       
+      // Start countdown
+      setCountdown(3)
+      let currentCountdown = 3
+      const interval = setInterval(() => {
+        currentCountdown -= 1
+        if (currentCountdown <= 0) {
+          clearInterval(interval)
+          setCountdownInterval(null)
+          setCountdown(null)
+        } else {
+          setCountdown(currentCountdown)
+        }
+      }, 1000)
+      setCountdownInterval(interval)
+      
+      // Store the form data that was just set (for the timer closure)
+      const formDataToSubmit = {
+        name: data.name || '',
+        description: data.description || '',
+        url: data.url || quickAddUrl,
+        logoUrl: data.logoUrl || '',
+        category: data.category || 'Other',
+        tags: data.tags || '',
+        traffic: data.traffic || '',
+        revenue: data.revenue || '',
+        rating: data.rating !== null && data.rating !== undefined ? data.rating.toString() : '',
+        estimatedVisits: data.estimatedVisits !== null && data.estimatedVisits !== undefined ? data.estimatedVisits.toString() : '',
+      }
+      
       const timer = setTimeout(async () => {
+        // Clear countdown when timer fires
+        if (countdownInterval) {
+          clearInterval(countdownInterval)
+          setCountdownInterval(null)
+        }
+        setCountdown(null)
+        
         // Validate required fields before auto-submitting
-        if (data.name && data.description && data.url && data.category && !editingId) {
-          // Create a synthetic event and call handleSubmit
-          const syntheticEvent = {
-            preventDefault: () => {},
-          } as React.FormEvent<HTMLFormElement>
+        // Use the stored form data, not the closure's data variable
+        if (formDataToSubmit.name && formDataToSubmit.description && formDataToSubmit.url && formDataToSubmit.category && !editingId) {
+          // Temporarily set formData to ensure handleSubmit has the right data
+          // Since state updates are async, we'll use the stored data directly
+          const currentFormData = formDataToSubmit
           
-          await handleSubmit(syntheticEvent)
+          // Create payload from the stored form data
+          const payload: any = {
+            name: currentFormData.name.trim(),
+            description: currentFormData.description.trim(),
+            url: currentFormData.url.trim(),
+            category: currentFormData.category,
+          }
+
+          // Optional fields - only include if they have values
+          if (currentFormData.logoUrl && currentFormData.logoUrl.trim()) {
+            payload.logoUrl = currentFormData.logoUrl.trim()
+          }
+          if (currentFormData.tags && currentFormData.tags.trim()) {
+            payload.tags = currentFormData.tags.trim()
+          }
+          if (currentFormData.traffic && currentFormData.traffic.trim()) {
+            payload.traffic = currentFormData.traffic
+          }
+          if (currentFormData.revenue && currentFormData.revenue.trim()) {
+            payload.revenue = currentFormData.revenue
+          }
+          if (currentFormData.rating && currentFormData.rating.trim()) {
+            const ratingNum = parseFloat(currentFormData.rating)
+            if (!isNaN(ratingNum) && ratingNum >= 0 && ratingNum <= 5) {
+              payload.rating = ratingNum
+            }
+          }
+          if (currentFormData.estimatedVisits && currentFormData.estimatedVisits.trim()) {
+            const visitsNum = parseInt(currentFormData.estimatedVisits)
+            if (!isNaN(visitsNum) && visitsNum > 0) {
+              payload.estimatedVisits = visitsNum
+            }
+          }
+
+          console.log('Auto-submitting payload:', payload)
+
+          // Clear countdown
+          if (countdownInterval) {
+            clearInterval(countdownInterval)
+            setCountdownInterval(null)
+          }
+          setCountdown(null)
+          
+          // Submit directly to API
+          setSubmitting(true)
+          try {
+            const response = await fetch('/api/tools', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            })
+
+            if (!response.ok) {
+              const errorData = await response.json().catch(() => ({}))
+              const errorMessage = errorData.details || errorData.error || errorData.message || `HTTP error! status: ${response.status}`
+              console.error('API Error:', errorData)
+              throw new Error(errorMessage)
+            }
+
+            const result = await response.json()
+            console.log('Tool saved successfully:', result)
+
+            resetForm()
+            await fetchTools()
+            // No success popup - only show errors
+          } catch (error) {
+            console.error('Error saving tool:', error)
+            const errorMessage = error instanceof Error 
+              ? error.message 
+              : 'Unknown error occurred. Check console for details.'
+            alert(`Failed to save tool: ${errorMessage}`)
+          } finally {
+            setSubmitting(false)
+          }
         }
       }, 3000)
       
@@ -259,6 +384,13 @@ export default function AdminPage() {
       setAutoSubmitTimer(null)
     }
     
+    // Clear countdown
+    if (countdownInterval) {
+      clearInterval(countdownInterval)
+      setCountdownInterval(null)
+    }
+    setCountdown(null)
+    
     setFormData({
       name: '',
       description: '',
@@ -275,14 +407,17 @@ export default function AdminPage() {
     setQuickAddUrl('')
   }
   
-  // Cleanup timer on unmount
+  // Cleanup timers on unmount
   useEffect(() => {
     return () => {
       if (autoSubmitTimer) {
         clearTimeout(autoSubmitTimer)
       }
+      if (countdownInterval) {
+        clearInterval(countdownInterval)
+      }
     }
-  }, [autoSubmitTimer])
+  }, [autoSubmitTimer, countdownInterval])
 
   return (
     <div className="container mx-auto px-4 py-8 max-w-7xl">
@@ -346,6 +481,14 @@ export default function AdminPage() {
                     )}
                   </Button>
                 </div>
+                {countdown !== null && countdown > 0 && (
+                  <div className="mt-3 p-2 rounded-md bg-indigo-100 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-800">
+                    <p className="text-sm text-indigo-700 dark:text-indigo-300 flex items-center gap-2">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Auto-submitting in <span className="font-bold text-indigo-900 dark:text-indigo-100">{countdown}</span> second{countdown !== 1 ? 's' : ''}...
+                    </p>
+                  </div>
+                )}
                 <p className="text-xs text-muted-foreground mt-2">
                   💡 AI analysis available. Add OPENAI_API_KEY to .env for enhanced results.
                 </p>
@@ -541,18 +684,18 @@ export default function AdminPage() {
                 No tools yet. Add your first tool!
               </p>
             ) : (
-              <div className="space-y-2 max-h-[600px] overflow-y-auto">
+              <div className="space-y-2 max-h-[calc(100vh-300px)] overflow-y-auto pr-2">
                 {tools.map((tool) => (
                   <div
                     key={tool.id}
-                    className="flex items-center justify-between rounded-lg border p-4"
+                    className="flex items-start justify-between rounded-lg border p-4 hover:bg-accent/50 transition-colors min-h-[80px]"
                   >
-                    <div className="flex-1">
-                      <h3 className="font-semibold">{tool.name}</h3>
-                      <p className="text-sm text-muted-foreground line-clamp-1">
+                    <div className="flex-1 min-w-0 pr-4">
+                      <h3 className="font-semibold truncate">{tool.name}</h3>
+                      <p className="text-sm text-muted-foreground line-clamp-2 mt-1">
                         {tool.description}
                       </p>
-                      <div className="mt-1 flex gap-2">
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
                         <span className="text-xs text-muted-foreground">
                           {tool.category}
                         </span>
@@ -561,13 +704,19 @@ export default function AdminPage() {
                             ⭐ {tool.rating.toFixed(1)}
                           </span>
                         )}
+                        {tool.revenue && (
+                          <span className="text-xs text-muted-foreground capitalize">
+                            {tool.revenue}
+                          </span>
+                        )}
                       </div>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 flex-shrink-0">
                       <Button
                         variant="ghost"
                         size="icon"
                         onClick={() => handleEdit(tool)}
+                        title="Edit tool"
                       >
                         <Edit2 className="h-4 w-4" />
                       </Button>
@@ -575,6 +724,7 @@ export default function AdminPage() {
                         variant="ghost"
                         size="icon"
                         onClick={() => handleDelete(tool.id)}
+                        title="Delete tool"
                       >
                         <Trash2 className="h-4 w-4 text-destructive" />
                       </Button>

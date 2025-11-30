@@ -90,9 +90,26 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
 
           <div className="flex flex-wrap items-center gap-2 mb-4">
             {tool.rating && (
-              <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                <Star className="h-3.5 w-3.5 fill-yellow-400 text-yellow-400" />
-                <span>{tool.rating.toFixed(1)}</span>
+              <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-0.5">
+                  {[1, 2, 3, 4, 5].map((star) => {
+                    // Show filled star if rating is >= star value
+                    const filled = tool.rating! >= star
+                    return (
+                      <Star
+                        key={star}
+                        className={`h-3.5 w-3.5 transition-colors ${
+                          filled
+                            ? 'fill-yellow-400 text-yellow-400'
+                            : 'fill-transparent text-yellow-200 dark:text-yellow-900'
+                        }`}
+                      />
+                    )
+                  })}
+                </div>
+                <span className="text-sm font-medium text-foreground">
+                  {tool.rating.toFixed(1)}
+                </span>
               </div>
             )}
             {tool.traffic && tool.traffic !== 'unknown' && (
