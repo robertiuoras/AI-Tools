@@ -721,7 +721,7 @@ export default function AdminPage() {
                     className="w-full"
                   />
                 </div>
-                <div className="flex-1 overflow-y-auto pr-2 space-y-2 min-h-0">
+                <div className="flex-1 overflow-y-auto pr-2 space-y-2 min-h-0 max-h-[640px]">
                   {tools
                     .filter((tool) => {
                       if (!searchQuery.trim()) return true

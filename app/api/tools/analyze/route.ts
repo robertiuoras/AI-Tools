@@ -17,18 +17,20 @@ interface AnalysisResult {
  * Try to fetch pricing page content
  */
 async function fetchPricingInfo(baseUrl: string): Promise<string> {
-  const pricingPaths = ['/pricing', '/plans', '/prices', '/subscribe', '/purchase', '/buy']
-  const urlObj = new URL(baseUrl)
-  
-  for (const path of pricingPaths) {
-    try {
-      const pricingUrl = `${urlObj.origin}${path}`
-      const response = await fetch(pricingUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        },
-        signal: AbortSignal.timeout(3000), // 3 second timeout
-      })
+  try {
+    const urlObj = new URL(baseUrl)
+    const pricingPaths = ['/pricing', '/plans', '/prices', '/subscribe', '/purchase', '/buy']
+    
+    for (const path of pricingPaths) {
+      try {
+        const pricingUrl = `${urlObj.origin}${path}`
+        console.log('🔍 [Pricing] Trying:', pricingUrl)
+        const response = await fetch(pricingUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          },
+          signal: AbortSignal.timeout(5000), // 5 second timeout
+        })
       
       if (response.ok) {
         const html = await response.text()
@@ -63,13 +65,34 @@ async function scrapeWebsiteInfo(url: string): Promise<{
   pageContent: string
 }> {
   try {
-    const response = await fetch(url, {
+    // Validate and normalize URL
+    let validUrl: URL
+    try {
+      // Ensure URL has protocol
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        url = `https://${url}`
+      }
+      validUrl = new URL(url)
+      console.log('🌐 [Scrape] Fetching URL:', validUrl.toString())
+    } catch (error) {
+      console.error('❌ [Scrape] Invalid URL format:', url, error)
+      return { title: '', description: '', logoUrl: null, pricingContent: '', pageContent: '' }
+    }
+
+    const response = await fetch(validUrl.toString(), {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       },
-      signal: AbortSignal.timeout(5000), // 5 second timeout
+      signal: AbortSignal.timeout(10000), // 10 second timeout
     })
+    
+    if (!response.ok) {
+      console.error('❌ [Scrape] HTTP error:', response.status, response.statusText)
+      return { title: '', description: '', logoUrl: null, pricingContent: '', pageContent: '' }
+    }
+    
     const html = await response.text()
+    console.log('✅ [Scrape] Successfully fetched HTML, length:', html.length)
 
     // Extract title
     const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i)
@@ -167,11 +190,18 @@ async function scrapeWebsiteInfo(url: string): Promise<{
     }
 
     // Try to get pricing information
-    const pricingContent = await fetchPricingInfo(url)
+    console.log('🔍 [Scrape] Fetching pricing info...')
+    const pricingContent = await fetchPricingInfo(validUrl.toString())
+    console.log('✅ [Scrape] Pricing content length:', pricingContent.length)
 
     return { title, description, logoUrl, pricingContent, pageContent }
   } catch (error) {
-    console.error('Error scraping website:', error)
+    console.error('❌ [Scrape] Error scraping website:', error)
+    console.error('❌ [Scrape] Error type:', error instanceof Error ? error.constructor.name : typeof error)
+    console.error('❌ [Scrape] Error message:', error instanceof Error ? error.message : String(error))
+    if (error instanceof Error && 'cause' in error) {
+      console.error('❌ [Scrape] Error cause:', error.cause)
+    }
     return { title: '', description: '', logoUrl: null, pricingContent: '', pageContent: '' }
   }
 }
@@ -578,14 +608,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'URL is required' }, { status: 400 })
     }
 
-    // Validate URL
+    // Validate URL - ensure it's a proper URL
     let validUrl: URL
     try {
-      validUrl = new URL(url.startsWith('http') ? url : `https://${url}`)
+      // Normalize URL - add protocol if missing
+      let normalizedUrl = url.trim()
+      if (!normalizedUrl.startsWith('http://') && !normalizedUrl.startsWith('https://')) {
+        normalizedUrl = `https://${normalizedUrl}`
+      }
+      validUrl = new URL(normalizedUrl)
       console.log('✅ [Analyze] Valid URL:', validUrl.toString())
-    } catch {
-      console.error('❌ [Analyze] Invalid URL format')
-      return NextResponse.json({ error: 'Invalid URL' }, { status: 400 })
+      console.log('✅ [Analyze] URL hostname:', validUrl.hostname)
+    } catch (error) {
+      console.error('❌ [Analyze] Invalid URL format:', url, error)
+      return NextResponse.json({ error: `Invalid URL: ${url}` }, { status: 400 })
     }
 
     // Scrape basic info (including pricing page)
@@ -601,6 +637,13 @@ export async function POST(request: NextRequest) {
 
     // Analyze with AI or fallback
     console.log('🤖 [Analyze] Starting AI analysis...')
+    console.log('🤖 [Analyze] Scraped data summary:', {
+      hasTitle: !!scraped.title,
+      hasDescription: !!scraped.description,
+      hasPricingContent: scraped.pricingContent.length > 0,
+      hasPageContent: scraped.pageContent.length > 0,
+    })
+    
     const analysis = await analyzeWithAI(
       validUrl.toString(),
       scraped.title,
@@ -609,6 +652,7 @@ export async function POST(request: NextRequest) {
       scraped.pageContent
     )
     console.log('✅ [Analyze] Analysis complete:', JSON.stringify(analysis, null, 2))
+    console.log('✅ [Analyze] Analysis source:', analysis.revenue || analysis.estimatedVisits ? 'AI' : 'Basic (fallback)')
 
     const result: AnalysisResult = {
       name: analysis.name || scraped.title || validUrl.hostname.replace('www.', ''),
@@ -622,7 +666,7 @@ export async function POST(request: NextRequest) {
       logoUrl: analysis.logoUrl || scraped.logoUrl || null,
     }
 
-    console.log('Analysis result:', result)
+    console.log('📊 [Analyze] Final result:', JSON.stringify(result, null, 2))
     return NextResponse.json({ ...result, url: validUrl.toString() })
   } catch (error) {
     console.error('Error analyzing URL:', error)
