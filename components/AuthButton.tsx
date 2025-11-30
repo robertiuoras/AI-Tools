@@ -118,14 +118,19 @@ export function AuthButton() {
     setAuthLoading(true)
 
     try {
-      const { error: googleError } = await supabase.auth.signInWithOAuth({
+      const { data, error: googleError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
           redirectTo: `${window.location.origin}/auth/callback`,
         },
       })
 
-      if (googleError) throw googleError
+      if (googleError) {
+        throw googleError
+      }
+
+      // OAuth will redirect automatically - don't set loading to false here
+      // The redirect will happen automatically
     } catch (err: any) {
       setError(err.message || 'Failed to sign in with Google')
       setAuthLoading(false)
