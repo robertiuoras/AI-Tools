@@ -25,6 +25,7 @@ export default function AdminPage() {
   const [analyzing, setAnalyzing] = useState(false)
   const [quickAddUrl, setQuickAddUrl] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [autoSubmitTimer, setAutoSubmitTimer] = useState<NodeJS.Timeout | null>(null)
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -56,6 +57,13 @@ export default function AdminPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    
+    // Clear auto-submit timer if it exists (user submitted manually)
+    if (autoSubmitTimer) {
+      clearTimeout(autoSubmitTimer)
+      setAutoSubmitTimer(null)
+    }
+    
     setSubmitting(true)
 
     try {
@@ -123,7 +131,7 @@ export default function AdminPage() {
 
       resetForm()
       await fetchTools()
-      alert(editingId ? 'Tool updated successfully!' : 'Tool added successfully!')
+      // No success popup - only show errors
     } catch (error) {
       console.error('Error saving tool:', error)
       const errorMessage = error instanceof Error 
@@ -136,6 +144,12 @@ export default function AdminPage() {
   }
 
   const handleEdit = (tool: Tool) => {
+    // Clear auto-submit timer when editing
+    if (autoSubmitTimer) {
+      clearTimeout(autoSubmitTimer)
+      setAutoSubmitTimer(null)
+    }
+    
     setEditingId(tool.id)
     setFormData({
       name: tool.name,
@@ -210,6 +224,26 @@ export default function AdminPage() {
       setQuickAddUrl('')
       // Silently fill the form - no popup
       window.scrollTo({ top: 0, behavior: 'smooth' })
+      
+      // Auto-submit after 3 seconds for quick bulk adding
+      // Clear any existing timer first
+      if (autoSubmitTimer) {
+        clearTimeout(autoSubmitTimer)
+      }
+      
+      const timer = setTimeout(async () => {
+        // Validate required fields before auto-submitting
+        if (data.name && data.description && data.url && data.category && !editingId) {
+          // Create a synthetic event and call handleSubmit
+          const syntheticEvent = {
+            preventDefault: () => {},
+          } as React.FormEvent<HTMLFormElement>
+          
+          await handleSubmit(syntheticEvent)
+        }
+      }, 3000)
+      
+      setAutoSubmitTimer(timer)
     } catch (error) {
       console.error('Error analyzing URL:', error)
       alert('Failed to analyze URL. Please fill in the form manually.')
@@ -219,6 +253,12 @@ export default function AdminPage() {
   }
 
   const resetForm = () => {
+    // Clear auto-submit timer if it exists
+    if (autoSubmitTimer) {
+      clearTimeout(autoSubmitTimer)
+      setAutoSubmitTimer(null)
+    }
+    
     setFormData({
       name: '',
       description: '',
@@ -234,6 +274,15 @@ export default function AdminPage() {
     setEditingId(null)
     setQuickAddUrl('')
   }
+  
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (autoSubmitTimer) {
+        clearTimeout(autoSubmitTimer)
+      }
+    }
+  }, [autoSubmitTimer])
 
   return (
     <div className="container mx-auto px-4 py-8 max-w-7xl">
