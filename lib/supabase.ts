@@ -22,7 +22,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 // Only create this on the server side to avoid exposing the service role key to the client
 let supabaseAdminInstance: ReturnType<typeof createClient> | null = null;
 
-function createSupabaseAdmin() {
+function createSupabaseAdmin(): ReturnType<typeof createClient> {
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   
   if (!supabaseServiceKey) {
@@ -37,7 +37,8 @@ function createSupabaseAdmin() {
   });
 }
 
-export const supabaseAdmin = (() => {
+// Type for supabaseAdmin - always returns a client, but throws on client-side
+export const supabaseAdmin: ReturnType<typeof createClient> = (() => {
   // Only create admin client on server side
   if (typeof window !== 'undefined') {
     // Return a proxy that throws if any method is called on the client
@@ -54,7 +55,7 @@ export const supabaseAdmin = (() => {
   }
 
   return supabaseAdminInstance;
-})();
+})() as ReturnType<typeof createClient>;
 
 // Type definitions matching our Prisma schema
 export interface Tool {
