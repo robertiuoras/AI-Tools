@@ -68,23 +68,47 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
+    console.log('Received tool data:', body)
+    
     const validatedData = toolSchema.parse(body)
+    console.log('Validated data:', validatedData)
 
     const tool = await prisma.tool.create({
       data: validatedData,
     })
 
+    console.log('Tool created successfully:', tool.id)
     return NextResponse.json(tool, { status: 201 })
   } catch (error) {
     console.error('Error creating tool:', error)
-    if (error instanceof Error && error.name === 'ZodError') {
+    
+    // Handle Zod validation errors
+    if (error && typeof error === 'object' && 'issues' in error) {
+      const zodError = error as { issues: Array<{ path: string[]; message: string }> }
+      const errorMessages = zodError.issues.map(issue => 
+        `${issue.path.join('.')}: ${issue.message}`
+      ).join(', ')
+      
       return NextResponse.json(
-        { error: 'Validation error', details: error },
+        { 
+          error: 'Validation error', 
+          details: errorMessages,
+          issues: zodError.issues 
+        },
         { status: 400 }
       )
     }
+    
+    // Handle Prisma errors
+    if (error instanceof Error) {
+      return NextResponse.json(
+        { error: 'Failed to create tool', message: error.message },
+        { status: 500 }
+      )
+    }
+    
     return NextResponse.json(
-      { error: 'Failed to create tool' },
+      { error: 'Failed to create tool', message: 'Unknown error' },
       { status: 500 }
     )
   }

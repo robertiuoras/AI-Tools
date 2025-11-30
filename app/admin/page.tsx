@@ -59,37 +59,77 @@ export default function AdminPage() {
     setSubmitting(true)
 
     try {
-      const payload = {
-        ...formData,
-        logoUrl: formData.logoUrl || undefined,
-        tags: formData.tags || undefined,
-        traffic: formData.traffic || undefined,
-        revenue: formData.revenue || undefined,
-        rating: formData.rating ? parseFloat(formData.rating) : undefined,
-        estimatedVisits: formData.estimatedVisits
-          ? parseInt(formData.estimatedVisits)
-          : undefined,
+      // Validate required fields
+      if (!formData.name || !formData.description || !formData.url || !formData.category) {
+        alert('Please fill in all required fields: Name, Description, URL, and Category')
+        setSubmitting(false)
+        return
       }
 
-      if (editingId) {
-        await fetch(`/api/tools/${editingId}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        })
-      } else {
-        await fetch('/api/tools', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        })
+      // Clean up empty strings and convert to proper types
+      const payload: any = {
+        name: formData.name.trim(),
+        description: formData.description.trim(),
+        url: formData.url.trim(),
+        category: formData.category,
       }
+
+      // Optional fields - only include if they have values
+      if (formData.logoUrl && formData.logoUrl.trim()) {
+        payload.logoUrl = formData.logoUrl.trim()
+      }
+      if (formData.tags && formData.tags.trim()) {
+        payload.tags = formData.tags.trim()
+      }
+      if (formData.traffic && formData.traffic.trim()) {
+        payload.traffic = formData.traffic
+      }
+      if (formData.revenue && formData.revenue.trim()) {
+        payload.revenue = formData.revenue
+      }
+      if (formData.rating && formData.rating.trim()) {
+        const ratingNum = parseFloat(formData.rating)
+        if (!isNaN(ratingNum) && ratingNum >= 0 && ratingNum <= 5) {
+          payload.rating = ratingNum
+        }
+      }
+      if (formData.estimatedVisits && formData.estimatedVisits.trim()) {
+        const visitsNum = parseInt(formData.estimatedVisits)
+        if (!isNaN(visitsNum) && visitsNum > 0) {
+          payload.estimatedVisits = visitsNum
+        }
+      }
+
+      console.log('Submitting payload:', payload)
+
+      const url = editingId ? `/api/tools/${editingId}` : '/api/tools'
+      const method = editingId ? 'PUT' : 'POST'
+
+      const response = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        const errorMessage = errorData.details || errorData.error || errorData.message || `HTTP error! status: ${response.status}`
+        console.error('API Error:', errorData)
+        throw new Error(errorMessage)
+      }
+
+      const result = await response.json()
+      console.log('Tool saved successfully:', result)
 
       resetForm()
-      fetchTools()
+      await fetchTools()
+      alert(editingId ? 'Tool updated successfully!' : 'Tool added successfully!')
     } catch (error) {
       console.error('Error saving tool:', error)
-      alert('Failed to save tool. Please try again.')
+      const errorMessage = error instanceof Error 
+        ? error.message 
+        : 'Unknown error occurred. Check console for details.'
+      alert(`Failed to save tool: ${errorMessage}`)
     } finally {
       setSubmitting(false)
     }
@@ -143,6 +183,8 @@ export default function AdminPage() {
       }
 
       const data = await response.json()
+      
+      console.log('Analysis result:', data)
 
       // Auto-fill the form with analyzed data
       setFormData({
@@ -150,7 +192,7 @@ export default function AdminPage() {
         description: data.description || '',
         url: data.url || quickAddUrl,
         logoUrl: data.logoUrl || '',
-        category: data.category || '',
+        category: data.category || 'Other',
         tags: data.tags || '',
         traffic: data.traffic || '',
         revenue: data.revenue || '',
@@ -159,7 +201,18 @@ export default function AdminPage() {
       })
 
       setQuickAddUrl('')
-      alert('Tool analyzed! Review and edit the details below, then click "Add Tool".')
+      
+      const foundFields = []
+      if (data.name) foundFields.push('name')
+      if (data.description) foundFields.push('description')
+      if (data.category) foundFields.push('category')
+      if (data.tags) foundFields.push('tags')
+      if (data.revenue) foundFields.push('revenue')
+      if (data.traffic) foundFields.push('traffic')
+      if (data.rating) foundFields.push('rating')
+      
+      const message = `Tool analyzed! Found: ${foundFields.join(', ') || 'basic info'}. Review and edit below, then click "Add Tool".`
+      alert(message)
       window.scrollTo({ top: 0, behavior: 'smooth' })
     } catch (error) {
       console.error('Error analyzing URL:', error)

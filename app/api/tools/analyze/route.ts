@@ -60,12 +60,14 @@ async function scrapeWebsiteInfo(url: string): Promise<{
   description: string
   logoUrl: string | null
   pricingContent: string
+  pageContent: string
 }> {
   try {
     const response = await fetch(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       },
+      signal: AbortSignal.timeout(5000), // 5 second timeout
     })
     const html = await response.text()
 
@@ -76,6 +78,15 @@ async function scrapeWebsiteInfo(url: string): Promise<{
     // Extract meta description
     const descMatch = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i)
     const description = descMatch ? descMatch[1].trim() : ''
+
+    // Extract page content for better analysis
+    let pageContent = html
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .substring(0, 5000) // Limit to first 5000 chars
+      .toLowerCase()
 
     // Try to find logo/favicon
     let logoUrl: string | null = null
@@ -94,10 +105,10 @@ async function scrapeWebsiteInfo(url: string): Promise<{
     // Try to get pricing information
     const pricingContent = await fetchPricingInfo(url)
 
-    return { title, description, logoUrl, pricingContent }
+    return { title, description, logoUrl, pricingContent, pageContent }
   } catch (error) {
     console.error('Error scraping website:', error)
-    return { title: '', description: '', logoUrl: null, pricingContent: '' }
+    return { title: '', description: '', logoUrl: null, pricingContent: '', pageContent: '' }
   }
 }
 
@@ -108,25 +119,35 @@ async function analyzeWithAI(
   url: string,
   title: string,
   description: string,
-  pricingContent: string
+  pricingContent: string,
+  pageContent: string
 ): Promise<Partial<AnalysisResult>> {
   const openaiApiKey = process.env.OPENAI_API_KEY
 
   if (!openaiApiKey) {
     // Fallback to rule-based analysis if no API key
-    return analyzeWithoutAI(url, title, description, pricingContent)
+    console.log('⚠️ OpenAI API key not found. Using basic analysis. Add OPENAI_API_KEY to .env for better results.')
+    console.log('Current env vars:', Object.keys(process.env).filter(k => k.includes('OPENAI')))
+    return analyzeWithoutAI(url, title, description, pricingContent, pageContent)
   }
+  
+  console.log('✨ Using AI analysis with OpenAI')
+  console.log('API Key present:', openaiApiKey.substring(0, 7) + '...')
 
   try {
     const pricingContext = pricingContent 
       ? `\n\nPricing Page Content (for revenue model analysis):\n${pricingContent.substring(0, 2000)}`
-      : '\n\nNote: No pricing page found. Analyze based on URL and description only.'
+      : ''
+    
+    const pageContext = pageContent
+      ? `\n\nMain Page Content (first 2000 chars for context):\n${pageContent.substring(0, 2000)}`
+      : ''
 
     const prompt = `Analyze this AI tool website and provide structured information. Pay special attention to the pricing model:
 
 URL: ${url}
 Title: ${title}
-Description: ${description || 'No description available'}${pricingContext}
+Description: ${description || 'No description available'}${pricingContext}${pageContext}
 
 IMPORTANT - Revenue Model Analysis:
 - "free": Completely free with no paid options (e.g., open source, free forever)
@@ -146,11 +167,13 @@ Please provide a JSON response with:
 1. "name": A clean, concise name for the tool (max 50 chars)
 2. "description": A 2-3 sentence description of what the tool does
 3. "category": One of these exact categories: ${categories.join(', ')}
-4. "tags": Comma-separated relevant tags (3-5 tags)
+4. "tags": Comma-separated relevant tags (3-5 tags, e.g., "ai, automation, productivity")
 5. "revenue": One of: "free", "freemium", "paid", "enterprise", or null if unknown (be precise based on pricing info)
-6. "traffic": Estimate as "low", "medium", "high", or "unknown"
-7. "rating": A number between 0-5 (or null if unknown)
-8. "estimatedVisits": Estimated monthly visits as a number (or null)
+6. "traffic": Estimate as "low", "medium", "high", or "unknown" (based on popularity indicators)
+7. "rating": A number between 0-5 (or null if unknown, estimate based on quality indicators)
+8. "estimatedVisits": Estimated monthly visits as a number (or null, estimate based on popularity)
+
+IMPORTANT: Always provide tags, even if generic. Always try to determine revenue model from pricing content. Provide estimates for traffic and rating when possible.
 
 Return ONLY valid JSON, no markdown formatting.`
 
@@ -194,7 +217,7 @@ Return ONLY valid JSON, no markdown formatting.`
     }
   } catch (error) {
     console.error('AI analysis error:', error)
-    return analyzeWithoutAI(url, title, description, pricingContent)
+    return analyzeWithoutAI(url, title, description, pricingContent, pageContent)
   }
 }
 
@@ -205,14 +228,16 @@ function analyzeWithoutAI(
   url: string,
   title: string,
   description: string,
-  pricingContent: string
+  pricingContent: string,
+  pageContent: string
 ): Partial<AnalysisResult> {
   // Simple keyword-based categorization
   const urlLower = url.toLowerCase()
   const titleLower = title.toLowerCase()
   const descLower = description.toLowerCase()
   const pricingLower = pricingContent.toLowerCase()
-  const combined = `${urlLower} ${titleLower} ${descLower} ${pricingLower}`
+  const pageLower = pageContent.toLowerCase()
+  const combined = `${urlLower} ${titleLower} ${descLower} ${pricingLower} ${pageLower}`
 
   let category = 'Other'
   const categoryKeywords: Record<string, string[]> = {
@@ -268,31 +293,64 @@ function analyzeWithoutAI(
     revenue = 'paid'
   }
 
+  // Estimate traffic based on common indicators
+  let traffic: 'low' | 'medium' | 'high' | 'unknown' = 'unknown'
+  if (combined.includes('popular') || combined.includes('millions') || combined.includes('millions of users')) {
+    traffic = 'high'
+  } else if (combined.includes('thousands') || combined.includes('growing') || combined.includes('trending')) {
+    traffic = 'medium'
+  }
+
+  // Estimate rating (very basic, AI would do better)
+  let rating: number | null = null
+  const ratingMatch = combined.match(/(\d+\.?\d*)\s*(?:star|rating|score|out of 5)/i)
+  if (ratingMatch) {
+    const parsed = parseFloat(ratingMatch[1])
+    if (parsed >= 0 && parsed <= 5) {
+      rating = parsed
+    }
+  } else if (combined.includes('excellent') || combined.includes('great') || combined.includes('top rated')) {
+    rating = 4.5
+  } else if (combined.includes('good') || combined.includes('recommended')) {
+    rating = 4.0
+  }
+
   return {
     name: title || new URL(url).hostname.replace('www.', ''),
     description: description || 'AI tool description',
     category,
     tags: extractTags(combined),
     revenue,
-    traffic: 'unknown',
-    rating: null,
+    traffic,
+    rating,
     estimatedVisits: null,
   }
 }
 
 function extractTags(text: string): string {
-  const commonTags = [
-    'ai',
-    'artificial intelligence',
-    'machine learning',
-    'automation',
-    'productivity',
-    'saas',
-    'cloud',
-    'api',
-  ]
-  const found = commonTags.filter((tag) => text.includes(tag))
-  return found.slice(0, 5).join(', ')
+  const tagKeywords: Record<string, string[]> = {
+    'ai': ['ai', 'artificial intelligence', 'machine learning', 'ml', 'neural'],
+    'automation': ['automation', 'automate', 'workflow', 'bot'],
+    'productivity': ['productivity', 'efficient', 'streamline', 'optimize'],
+    'saas': ['saas', 'software as a service', 'cloud', 'web app'],
+    'api': ['api', 'integration', 'developer', 'sdk'],
+    'collaboration': ['collaboration', 'team', 'share', 'workspace'],
+    'analytics': ['analytics', 'data', 'insights', 'metrics', 'tracking'],
+  }
+  
+  const found: string[] = []
+  for (const [tag, keywords] of Object.entries(tagKeywords)) {
+    if (keywords.some(keyword => text.includes(keyword))) {
+      found.push(tag)
+    }
+  }
+  
+  // Always include 'ai' if not already found
+  if (!found.includes('ai') && text.includes('ai')) {
+    found.unshift('ai')
+  }
+  
+  return found.slice(0, 5).join(', ') || 'ai, tool'
 }
 
 export async function POST(request: NextRequest) {
@@ -319,7 +377,8 @@ export async function POST(request: NextRequest) {
       validUrl.toString(),
       scraped.title,
       scraped.description,
-      scraped.pricingContent
+      scraped.pricingContent,
+      scraped.pageContent
     )
 
     const result: AnalysisResult = {
