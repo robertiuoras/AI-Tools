@@ -29,16 +29,54 @@ export function AuthButton() {
 
   useEffect(() => {
     // Check current session
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       setUser(session?.user ?? null)
       setLoading(false)
+
+      // Ensure user record exists in database
+      if (session?.user) {
+        try {
+          const response = await fetch('/api/user/ensure', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session.access_token}`,
+            },
+          })
+
+          if (!response.ok) {
+            console.error('Failed to ensure user record exists')
+          }
+        } catch (err) {
+          console.error('Error ensuring user record:', err)
+        }
+      }
     })
 
     // Listen for auth changes
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
       setUser(session?.user ?? null)
+
+      // Ensure user record exists when auth state changes
+      if (session?.user) {
+        try {
+          const response = await fetch('/api/user/ensure', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session.access_token}`,
+            },
+          })
+
+          if (!response.ok) {
+            console.error('Failed to ensure user record exists')
+          }
+        } catch (err) {
+          console.error('Error ensuring user record:', err)
+        }
+      }
     })
 
     return () => subscription.unsubscribe()
@@ -63,18 +101,20 @@ export function AuthButton() {
       if (signUpError) throw signUpError
 
       if (data.user) {
-        // Create user record in database
-        const { error: dbError } = await supabase.from('user').insert([
-          {
-            id: data.user.id,
-            email: data.user.email!,
-            name: name || email.split('@')[0],
-            role: 'user',
-          },
-        ])
+        // Ensure user record exists in database (using API route with service role)
+        const { data: { session } } = await supabase.auth.getSession()
+        if (session) {
+          const response = await fetch('/api/user/ensure', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session.access_token}`,
+            },
+          })
 
-        if (dbError && !dbError.message.includes('duplicate')) {
-          console.error('Error creating user record:', dbError)
+          if (!response.ok) {
+            console.error('Failed to ensure user record exists')
+          }
         }
 
         alert('Sign up successful! Please check your email to verify your account.')
@@ -96,12 +136,30 @@ export function AuthButton() {
     setAuthLoading(true)
 
     try {
-      const { error: loginError } = await supabase.auth.signInWithPassword({
+      const { data, error: loginError } = await supabase.auth.signInWithPassword({
         email,
         password,
       })
 
       if (loginError) throw loginError
+
+      // Ensure user record exists in database
+      if (data.user) {
+        const { data: { session } } = await supabase.auth.getSession()
+        if (session) {
+          const response = await fetch('/api/user/ensure', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session.access_token}`,
+            },
+          })
+
+          if (!response.ok) {
+            console.error('Failed to ensure user record exists')
+          }
+        }
+      }
 
       setShowLogin(false)
       setEmail('')

@@ -27,33 +27,32 @@ export default function AuthCallbackPage() {
           }
 
           if (data.user) {
-            // Create user record if it doesn't exist
-            const { data: existingUser } = await supabase
-              .from("user")
-              .select("id")
-              .eq("id", data.user.id)
-              .single();
-
-            if (!existingUser) {
-              const { error: insertError } = await supabase
-                .from("user")
-                .insert([
-                  {
-                    id: data.user.id,
-                    email: data.user.email!,
-                    name:
-                      data.user.user_metadata?.name ||
-                      data.user.user_metadata?.full_name ||
-                      data.user.user_metadata?.display_name ||
-                      data.user.email?.split("@")[0] ||
-                      "User",
-                    role: "user",
+            // Ensure user record exists using API route (bypasses RLS)
+            try {
+              const { data: { session } } = await supabase.auth.getSession();
+              if (session) {
+                const response = await fetch("/api/user/ensure", {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${session.access_token}`,
                   },
-                ]);
+                });
 
-              if (insertError) {
-                console.error("Error creating user:", insertError);
+                if (response.ok) {
+                  const result = await response.json();
+                  console.log(
+                    result.created
+                      ? "User created successfully"
+                      : "User already exists",
+                    data.user.id
+                  );
+                } else {
+                  console.error("Failed to ensure user record");
+                }
               }
+            } catch (err) {
+              console.error("Error ensuring user record:", err);
             }
           }
 
@@ -88,46 +87,29 @@ export default function AuthCallbackPage() {
             console.log("Session set successfully, user:", data.user?.email);
 
             if (data.user) {
-              // Create user record if it doesn't exist
-              const { data: existingUser } = await supabase
-                .from("user")
-                .select("id")
-                .eq("id", data.user.id)
-                .single();
+              // Ensure user record exists using API route (bypasses RLS)
+              try {
+                const response = await fetch("/api/user/ensure", {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${accessToken}`,
+                  },
+                });
 
-              if (!existingUser) {
-                const { error: insertError } = await supabase
-                  .from("user")
-                  .insert([
-                    {
-                      id: data.user.id,
-                      email: data.user.email!,
-                      name:
-                        data.user.user_metadata?.name ||
-                        data.user.user_metadata?.full_name ||
-                        data.user.user_metadata?.display_name ||
-                        data.user.email?.split("@")[0] ||
-                        "User",
-                      role: "user",
-                    },
-                  ]);
-
-                if (insertError) {
-                  console.error("Error creating user:", insertError);
-                  // Try to get more details about the error
-                  if (insertError.code === "23505") {
-                    console.log("User already exists (duplicate key)");
-                  } else {
-                    console.error(
-                      "Insert error details:",
-                      JSON.stringify(insertError, null, 2)
-                    );
-                  }
+                if (response.ok) {
+                  const result = await response.json();
+                  console.log(
+                    result.created
+                      ? "User created successfully"
+                      : "User already exists",
+                    data.user.id
+                  );
                 } else {
-                  console.log("User created successfully:", data.user.id);
+                  console.error("Failed to ensure user record");
                 }
-              } else {
-                console.log("User already exists:", existingUser.id);
+              } catch (err) {
+                console.error("Error ensuring user record:", err);
               }
             }
 
