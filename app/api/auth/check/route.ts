@@ -37,9 +37,11 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ user: user.id, role: 'user' })
     }
 
+    const role = (userData as { role?: string })?.role || 'user'
+
     return NextResponse.json({
       user: user.id,
-      role: userData.role || 'user',
+      role: role,
     })
   } catch (error) {
     console.error('Error checking auth:', error)
