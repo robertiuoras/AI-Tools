@@ -12,6 +12,7 @@ A modern, enterprise-grade web application for discovering and organizing AI too
 - 📱 **Responsive Design** - Mobile-first design that works on all devices
 - ⚡ **Fast Performance** - Optimized with Next.js App Router and server components
 - 🛠️ **Admin Dashboard** - Easy-to-use interface for managing tools
+- 🤖 **AI-Powered Quick Add** - Paste a URL and let AI analyze and auto-fill tool information
 - 📈 **Analytics** - Vercel Analytics and Speed Insights integrated
 
 ## Tech Stack
@@ -100,6 +101,24 @@ npm run dev
 ## Usage
 
 ### Adding Tools
+
+#### Quick Add by URL (Recommended)
+
+1. Navigate to `/admin` in your browser
+2. Use the **"Quick Add by URL"** feature at the top
+3. Paste a website URL (e.g., `https://chat.openai.com`)
+4. Click **"Analyze"** - AI will automatically:
+   - Extract name, description, and logo
+   - Determine the category
+   - Detect revenue model (free/paid/etc)
+   - Generate tags
+   - Estimate traffic and ratings (with AI)
+5. Review and adjust the auto-filled information
+6. Click **"Add Tool"** to save
+
+**Note:** For best results, add an `OPENAI_API_KEY` to your `.env` file. See `AI_SETUP.md` for details.
+
+#### Manual Entry
 
 1. Navigate to `/admin` in your browser
 2. Fill in the tool information:

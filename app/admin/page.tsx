@@ -15,13 +15,15 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { categories } from '@/lib/schemas'
 import type { Tool } from '@prisma/client'
-import { Loader2, Plus, Trash2, Edit2 } from 'lucide-react'
+import { Loader2, Plus, Trash2, Edit2, Sparkles } from 'lucide-react'
 
 export default function AdminPage() {
   const router = useRouter()
   const [tools, setTools] = useState<Tool[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const [analyzing, setAnalyzing] = useState(false)
+  const [quickAddUrl, setQuickAddUrl] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [formData, setFormData] = useState({
     name: '',
@@ -122,6 +124,51 @@ export default function AdminPage() {
     }
   }
 
+  const handleQuickAdd = async () => {
+    if (!quickAddUrl.trim()) {
+      alert('Please enter a URL')
+      return
+    }
+
+    setAnalyzing(true)
+    try {
+      const response = await fetch('/api/tools/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: quickAddUrl }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to analyze URL')
+      }
+
+      const data = await response.json()
+
+      // Auto-fill the form with analyzed data
+      setFormData({
+        name: data.name || '',
+        description: data.description || '',
+        url: data.url || quickAddUrl,
+        logoUrl: data.logoUrl || '',
+        category: data.category || '',
+        tags: data.tags || '',
+        traffic: data.traffic || '',
+        revenue: data.revenue || '',
+        rating: data.rating?.toString() || '',
+        estimatedVisits: data.estimatedVisits?.toString() || '',
+      })
+
+      setQuickAddUrl('')
+      alert('Tool analyzed! Review and edit the details below, then click "Add Tool".')
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    } catch (error) {
+      console.error('Error analyzing URL:', error)
+      alert('Failed to analyze URL. Please fill in the form manually.')
+    } finally {
+      setAnalyzing(false)
+    }
+  }
+
   const resetForm = () => {
     setFormData({
       name: '',
@@ -136,6 +183,7 @@ export default function AdminPage() {
       estimatedVisits: '',
     })
     setEditingId(null)
+    setQuickAddUrl('')
   }
 
   return (
@@ -158,6 +206,53 @@ export default function AdminPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
+            {!editingId && (
+              <div className="mb-6 p-4 rounded-lg border bg-gradient-to-r from-indigo-50 to-purple-50 dark:from-indigo-950/20 dark:to-purple-950/20">
+                <div className="flex items-center gap-2 mb-2">
+                  <Sparkles className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
+                  <Label className="font-semibold">Quick Add by URL</Label>
+                </div>
+                <p className="text-sm text-muted-foreground mb-3">
+                  Paste a website URL and let AI analyze it to auto-fill the form
+                </p>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="https://example.com"
+                    value={quickAddUrl}
+                    onChange={(e) => setQuickAddUrl(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        handleQuickAdd()
+                      }
+                    }}
+                    disabled={analyzing}
+                    className="flex-1"
+                  />
+                  <Button
+                    type="button"
+                    onClick={handleQuickAdd}
+                    disabled={analyzing || !quickAddUrl.trim()}
+                    variant="default"
+                  >
+                    {analyzing ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Analyzing...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="mr-2 h-4 w-4" />
+                        Analyze
+                      </>
+                    )}
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground mt-2">
+                  💡 AI analysis available. Add OPENAI_API_KEY to .env for enhanced results.
+                </p>
+              </div>
+            )}
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="name">Name *</Label>
