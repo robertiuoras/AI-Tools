@@ -24,18 +24,16 @@ function getSupabaseClient(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    // Get user from session
+    // Get user from token
     const client = getSupabaseClient(request);
     const {
-      data: { session },
-      error: sessionError,
-    } = await client.auth.getSession();
+      data: { user },
+      error: userError,
+    } = await client.auth.getUser();
 
-    if (sessionError || !session?.user) {
+    if (userError || !user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-
-    const user = session.user;
     const admin = supabaseAdmin as any;
 
     // Check if user record exists

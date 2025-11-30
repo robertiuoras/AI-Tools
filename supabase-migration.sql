@@ -51,9 +51,18 @@ ALTER TABLE "upvote" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "comment" ENABLE ROW LEVEL SECURITY;
 
 -- 6. Create RLS policies for User table
+-- Drop existing policies if they exist (to allow re-running this script)
+DROP POLICY IF EXISTS "Users can read own data" ON "user";
+DROP POLICY IF EXISTS "Users can insert own record" ON "user";
+DROP POLICY IF EXISTS "Users can update own data" ON "user";
+
 -- Users can read their own data
 CREATE POLICY "Users can read own data" ON "user"
   FOR SELECT USING (auth.uid() = id);
+
+-- Users can insert their own record
+CREATE POLICY "Users can insert own record" ON "user"
+  FOR INSERT WITH CHECK (auth.uid() = id);
 
 -- Users can update their own data (except role)
 CREATE POLICY "Users can update own data" ON "user"
@@ -61,6 +70,11 @@ CREATE POLICY "Users can update own data" ON "user"
   WITH CHECK (auth.uid() = id AND role = (SELECT role FROM "user" WHERE id = auth.uid()));
 
 -- 7. Create RLS policies for Upvote table
+-- Drop existing policies if they exist
+DROP POLICY IF EXISTS "Anyone can read upvotes" ON "upvote";
+DROP POLICY IF EXISTS "Users can create own upvotes" ON "upvote";
+DROP POLICY IF EXISTS "Users can delete own upvotes" ON "upvote";
+
 -- Anyone can read upvotes
 CREATE POLICY "Anyone can read upvotes" ON "upvote"
   FOR SELECT USING (true);
@@ -74,6 +88,12 @@ CREATE POLICY "Users can delete own upvotes" ON "upvote"
   FOR DELETE USING (auth.uid() = "userId");
 
 -- 8. Create RLS policies for Comment table
+-- Drop existing policies if they exist
+DROP POLICY IF EXISTS "Anyone can read comments" ON "comment";
+DROP POLICY IF EXISTS "Users can create own comments" ON "comment";
+DROP POLICY IF EXISTS "Users can update own comments" ON "comment";
+DROP POLICY IF EXISTS "Users can delete own comments" ON "comment";
+
 -- Anyone can read comments
 CREATE POLICY "Anyone can read comments" ON "comment"
   FOR SELECT USING (true);
@@ -101,6 +121,10 @@ END;
 $$ language 'plpgsql';
 
 -- 10. Create triggers to auto-update updatedAt
+-- Drop existing triggers if they exist
+DROP TRIGGER IF EXISTS update_user_updated_at ON "user";
+DROP TRIGGER IF EXISTS update_comment_updated_at ON "comment";
+
 CREATE TRIGGER update_user_updated_at BEFORE UPDATE ON "user"
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
