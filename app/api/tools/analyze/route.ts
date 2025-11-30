@@ -47,8 +47,12 @@ async function fetchPricingInfo(baseUrl: string): Promise<string> {
       }
     } catch (error) {
       // Continue to next path
+      console.log('⚠️ [Pricing] Failed to fetch:', pricingUrl, error instanceof Error ? error.message : String(error))
       continue
     }
+  }
+  } catch (error) {
+    console.error('❌ [Pricing] Error in fetchPricingInfo:', error)
   }
   
   return ''
