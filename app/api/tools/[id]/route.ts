@@ -37,7 +37,7 @@ export async function PUT(
     const validatedData = toolSchema.parse(body)
 
     // Prepare data for Supabase - handle null values
-    const updateData: Record<string, any> = {
+    const updateData = {
       name: validatedData.name,
       description: validatedData.description,
       url: validatedData.url,
@@ -51,7 +51,9 @@ export async function PUT(
       updatedAt: new Date().toISOString(), // Update timestamp
     }
 
-    const { data: tool, error } = await (supabaseAdmin as ReturnType<typeof createClient>)
+    // Type assertion to work around Proxy type issues
+    const admin = supabaseAdmin as any
+    const { data: tool, error } = await admin
       .from('tool')
       .update(updateData)
       .eq('id', params.id)
