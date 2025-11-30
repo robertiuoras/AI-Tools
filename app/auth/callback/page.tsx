@@ -33,7 +33,7 @@ export default function AuthCallbackPage() {
               .single()
 
             if (!existingUser) {
-              await supabase.from('user').insert([
+              const { error: insertError } = await supabase.from('user').insert([
                 {
                   id: data.user.id,
                   email: data.user.email!,
@@ -45,18 +45,27 @@ export default function AuthCallbackPage() {
                   role: 'user',
                 },
               ])
+
+              if (insertError) {
+                console.error('Error creating user:', insertError)
+              }
             }
           }
 
           // Redirect to home
           router.push('/')
-        } else {
-          // Check if we have tokens in the hash (implicit flow)
+          return
+        }
+
+        // Check if we have tokens in the hash (implicit flow - what's happening)
+        if (typeof window !== 'undefined' && window.location.hash) {
           const hashParams = new URLSearchParams(window.location.hash.substring(1))
           const accessToken = hashParams.get('access_token')
           const refreshToken = hashParams.get('refresh_token')
 
           if (accessToken && refreshToken) {
+            console.log('Found tokens in hash, setting session...')
+            
             // Set the session manually
             const { data, error } = await supabase.auth.setSession({
               access_token: accessToken,
@@ -69,6 +78,8 @@ export default function AuthCallbackPage() {
               return
             }
 
+            console.log('Session set successfully, user:', data.user?.email)
+
             if (data.user) {
               // Create user record if it doesn't exist
               const { data: existingUser } = await supabase
@@ -78,7 +89,7 @@ export default function AuthCallbackPage() {
                 .single()
 
               if (!existingUser) {
-                await supabase.from('user').insert([
+                const { error: insertError } = await supabase.from('user').insert([
                   {
                     id: data.user.id,
                     email: data.user.email!,
@@ -90,24 +101,40 @@ export default function AuthCallbackPage() {
                     role: 'user',
                   },
                 ])
+
+                if (insertError) {
+                  console.error('Error creating user:', insertError)
+                } else {
+                  console.log('User created successfully')
+                }
+              } else {
+                console.log('User already exists')
               }
             }
 
             // Clear the hash and redirect
             window.history.replaceState({}, '', '/')
-            router.push('/')
-          } else {
-            // No code or tokens, redirect to home
-            router.push('/')
+            // Force a reload to update auth state
+            window.location.href = '/'
+            return
           }
         }
+
+        // No code or tokens found, redirect to home
+        console.log('No auth tokens found, redirecting to home')
+        router.push('/')
       } catch (error: any) {
         console.error('Error in auth callback:', error)
         router.push(`/?error=${encodeURIComponent(error.message || 'Authentication failed')}`)
       }
     }
 
-    handleAuthCallback()
+    // Small delay to ensure page is fully loaded
+    const timer = setTimeout(() => {
+      handleAuthCallback()
+    }, 100)
+
+    return () => clearTimeout(timer)
   }, [router])
 
   return (

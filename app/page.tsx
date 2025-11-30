@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Hero } from '@/components/Hero'
 import { ToolCard } from '@/components/ToolCard'
 import { SearchBar } from '@/components/SearchBar'
@@ -12,12 +13,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { supabase } from '@/lib/supabase'
 import type { Tool } from '@/lib/supabase'
 
 type SortOption = 'alphabetical' | 'newest' | 'popular' | 'traffic' | 'upvotes'
 type SortOrder = 'asc' | 'desc'
 
 export default function HomePage() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
   const [tools, setTools] = useState<Tool[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -26,6 +30,65 @@ export default function HomePage() {
   const [selectedRevenue, setSelectedRevenue] = useState<string[]>([])
   const [sort, setSort] = useState<SortOption>('alphabetical')
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc')
+
+  // Handle OAuth callback if tokens are in the hash
+  useEffect(() => {
+    const handleAuthCallback = async () => {
+      // Check if we have tokens in the hash
+      if (typeof window !== 'undefined' && window.location.hash) {
+        const hashParams = new URLSearchParams(window.location.hash.substring(1))
+        const accessToken = hashParams.get('access_token')
+        const refreshToken = hashParams.get('refresh_token')
+
+        if (accessToken && refreshToken) {
+          try {
+            // Set the session
+            const { data, error } = await supabase.auth.setSession({
+              access_token: accessToken,
+              refresh_token: refreshToken,
+            })
+
+            if (error) {
+              console.error('Error setting session:', error)
+              return
+            }
+
+            if (data.user) {
+              // Create user record if it doesn't exist
+              const { data: existingUser } = await supabase
+                .from('user')
+                .select('id')
+                .eq('id', data.user.id)
+                .single()
+
+              if (!existingUser) {
+                await supabase.from('user').insert([
+                  {
+                    id: data.user.id,
+                    email: data.user.email!,
+                    name: data.user.user_metadata?.name || 
+                          data.user.user_metadata?.full_name || 
+                          data.user.user_metadata?.display_name ||
+                          data.user.email?.split('@')[0] || 
+                          'User',
+                    role: 'user',
+                  },
+                ])
+              }
+            }
+
+            // Clear the hash and reload to show logged in state
+            window.history.replaceState({}, '', '/')
+            window.location.reload()
+          } catch (error: any) {
+            console.error('Error in auth callback:', error)
+          }
+        }
+      }
+    }
+
+    handleAuthCallback()
+  }, [])
 
   const fetchTools = useCallback(async () => {
     setLoading(true)
