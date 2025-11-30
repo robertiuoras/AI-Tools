@@ -29,6 +29,7 @@ export default function AdminPage() {
   const [countdown, setCountdown] = useState<number | null>(null)
   const [countdownInterval, setCountdownInterval] = useState<NodeJS.Timeout | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const [isProcessing, setIsProcessing] = useState(false)
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -159,8 +160,12 @@ export default function AdminPage() {
       const result = await response.json()
       console.log('Tool saved successfully:', result)
 
+      // Wait a bit for the database to update
+      await new Promise(resolve => setTimeout(resolve, 500))
+      
       resetForm()
       await fetchTools()
+      setIsProcessing(false)
       // No success popup - only show errors
     } catch (error) {
       console.error('Error saving tool:', error)
@@ -168,6 +173,7 @@ export default function AdminPage() {
         ? error.message 
         : 'Unknown error occurred. Check console for details.'
       alert(`Failed to save tool: ${errorMessage}`)
+      setIsProcessing(false)
     } finally {
       setSubmitting(false)
     }
@@ -221,7 +227,14 @@ export default function AdminPage() {
       return
     }
 
+    // Prevent multiple simultaneous analyses
+    if (analyzing || isProcessing) {
+      console.log('Already processing, please wait...')
+      return
+    }
+
     setAnalyzing(true)
+    setIsProcessing(true)
     try {
       const response = await fetch('/api/tools/analyze', {
         method: 'POST',
@@ -278,6 +291,7 @@ export default function AdminPage() {
       // Clear any existing timer first
       if (autoSubmitTimer) {
         clearTimeout(autoSubmitTimer)
+        setAutoSubmitTimer(null)
       }
       
       // Start countdown
@@ -369,6 +383,7 @@ export default function AdminPage() {
           
           // Submit directly to API
           setSubmitting(true)
+          setIsProcessing(true)
           try {
             const response = await fetch('/api/tools', {
               method: 'POST',
@@ -393,8 +408,14 @@ export default function AdminPage() {
             const result = await response.json()
             console.log('Tool saved successfully:', result)
 
+            // Wait a bit for the database to update
+            await new Promise(resolve => setTimeout(resolve, 500))
+            
             resetForm()
             await fetchTools()
+            
+            // Reset processing state after everything is done
+            setIsProcessing(false)
             // No success popup - only show errors
           } catch (error) {
             console.error('Error saving tool:', error)
@@ -402,6 +423,7 @@ export default function AdminPage() {
               ? error.message 
               : 'Unknown error occurred. Check console for details.'
             alert(`Failed to save tool: ${errorMessage}`)
+            setIsProcessing(false)
           } finally {
             setSubmitting(false)
           }
@@ -412,8 +434,10 @@ export default function AdminPage() {
     } catch (error) {
       console.error('Error analyzing URL:', error)
       alert('Failed to analyze URL. Please fill in the form manually.')
+      setIsProcessing(false)
     } finally {
       setAnalyzing(false)
+      // Keep isProcessing true until auto-submit completes
     }
   }
 
@@ -445,6 +469,7 @@ export default function AdminPage() {
     })
     setEditingId(null)
     setQuickAddUrl('')
+    setIsProcessing(false)
   }
   
   // Cleanup timers on unmount
@@ -494,18 +519,18 @@ export default function AdminPage() {
                     value={quickAddUrl}
                     onChange={(e) => setQuickAddUrl(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
+                      if (e.key === 'Enter' && !analyzing && !isProcessing) {
                         e.preventDefault()
                         handleQuickAdd()
                       }
                     }}
-                    disabled={analyzing}
+                    disabled={analyzing || isProcessing}
                     className="flex-1"
                   />
                   <Button
                     type="button"
                     onClick={handleQuickAdd}
-                    disabled={analyzing || !quickAddUrl.trim()}
+                    disabled={analyzing || isProcessing || !quickAddUrl.trim()}
                     variant="default"
                   >
                     {analyzing ? (
