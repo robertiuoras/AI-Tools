@@ -12,13 +12,15 @@ export const toolSchema = z.object({
   rating: z.number().min(0).max(5).optional().nullable(),
   estimatedVisits: z.number().int().positive().optional().nullable(),
 }).transform((data) => {
-  // Transform empty strings to null for optional fields
+  // Transform empty strings to null for string fields only
+  // Note: traffic and revenue are enums, so they can't be empty strings
   return {
     ...data,
-    logoUrl: data.logoUrl === '' ? null : data.logoUrl,
-    tags: data.tags === '' ? null : data.tags,
-    traffic: data.traffic === '' ? null : data.traffic,
-    revenue: data.revenue === '' ? null : data.revenue,
+    logoUrl: (data.logoUrl === '' || data.logoUrl === null) ? null : data.logoUrl,
+    tags: (data.tags === '' || data.tags === null) ? null : data.tags,
+    // traffic and revenue are enums, so they're either the enum value or null/undefined
+    traffic: data.traffic || null,
+    revenue: data.revenue || null,
   }
 })
 
