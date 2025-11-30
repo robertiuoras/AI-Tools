@@ -295,9 +295,11 @@ function analyzeWithoutAI(
 
   // Estimate traffic based on common indicators
   let traffic: 'low' | 'medium' | 'high' | 'unknown' = 'unknown'
-  if (combined.includes('popular') || combined.includes('millions') || combined.includes('millions of users')) {
+  if (combined.includes('popular') || combined.includes('millions') || combined.includes('millions of users') || combined.includes('millions of')) {
     traffic = 'high'
-  } else if (combined.includes('thousands') || combined.includes('growing') || combined.includes('trending')) {
+  } else if (combined.includes('thousands') || combined.includes('growing') || combined.includes('trending') || combined.includes('100k') || combined.includes('500k')) {
+    traffic = 'medium'
+  } else if (combined.includes('users') || combined.includes('active')) {
     traffic = 'medium'
   }
 
@@ -309,10 +311,31 @@ function analyzeWithoutAI(
     if (parsed >= 0 && parsed <= 5) {
       rating = parsed
     }
-  } else if (combined.includes('excellent') || combined.includes('great') || combined.includes('top rated')) {
+  } else if (combined.includes('excellent') || combined.includes('great') || combined.includes('top rated') || combined.includes('best')) {
     rating = 4.5
-  } else if (combined.includes('good') || combined.includes('recommended')) {
+  } else if (combined.includes('good') || combined.includes('recommended') || combined.includes('highly')) {
     rating = 4.0
+  } else if (combined.includes('well') || combined.includes('solid')) {
+    rating = 3.5
+  }
+
+  // Estimate visits (very rough)
+  let estimatedVisits: number | null = null
+  const visitsMatch = combined.match(/(\d+(?:\.\d+)?)\s*(?:million|m|thousand|k)\s*(?:visits|users|monthly)/i)
+  if (visitsMatch) {
+    const num = parseFloat(visitsMatch[1])
+    const unit = visitsMatch[0].toLowerCase()
+    if (unit.includes('million') || unit.includes('m')) {
+      estimatedVisits = Math.round(num * 1000000)
+    } else if (unit.includes('thousand') || unit.includes('k')) {
+      estimatedVisits = Math.round(num * 1000)
+    }
+  } else if (traffic === 'high') {
+    estimatedVisits = 1000000 // Default high traffic estimate
+  } else if (traffic === 'medium') {
+    estimatedVisits = 100000 // Default medium traffic estimate
+  } else if (traffic === 'low') {
+    estimatedVisits = 10000 // Default low traffic estimate
   }
 
   return {
@@ -323,7 +346,7 @@ function analyzeWithoutAI(
     revenue,
     traffic,
     rating,
-    estimatedVisits: null,
+    estimatedVisits,
   }
 }
 
@@ -386,13 +409,14 @@ export async function POST(request: NextRequest) {
       description: analysis.description || scraped.description || 'AI tool',
       category: analysis.category || 'Other',
       tags: analysis.tags || '',
-      revenue: analysis.revenue || null,
-      traffic: analysis.traffic || 'unknown',
-      rating: analysis.rating || null,
-      estimatedVisits: analysis.estimatedVisits || null,
+      revenue: analysis.revenue ?? null,
+      traffic: analysis.traffic ?? 'unknown',
+      rating: analysis.rating ?? null,
+      estimatedVisits: analysis.estimatedVisits ?? null,
       logoUrl: analysis.logoUrl || scraped.logoUrl || null,
     }
 
+    console.log('Analysis result:', result)
     return NextResponse.json({ ...result, url: validUrl.toString() })
   } catch (error) {
     console.error('Error analyzing URL:', error)

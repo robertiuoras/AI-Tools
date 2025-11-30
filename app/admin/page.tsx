@@ -196,8 +196,15 @@ export default function AdminPage() {
         tags: data.tags || '',
         traffic: data.traffic || '',
         revenue: data.revenue || '',
-        rating: data.rating?.toString() || '',
-        estimatedVisits: data.estimatedVisits?.toString() || '',
+        rating: data.rating !== null && data.rating !== undefined ? data.rating.toString() : '',
+        estimatedVisits: data.estimatedVisits !== null && data.estimatedVisits !== undefined ? data.estimatedVisits.toString() : '',
+      })
+      
+      console.log('Filled form data:', {
+        revenue: data.revenue,
+        traffic: data.traffic,
+        rating: data.rating,
+        estimatedVisits: data.estimatedVisits,
       })
 
       setQuickAddUrl('')
