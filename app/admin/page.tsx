@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
-import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -17,7 +16,6 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { categories } from '@/lib/schemas'
 import type { Tool } from '@/lib/supabase'
-import { supabase } from '@/lib/supabase'
 import { Loader2, Plus, Trash2, Edit2, Sparkles } from 'lucide-react'
 
 export default function AdminPage() {
