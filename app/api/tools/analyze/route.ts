@@ -11,6 +11,11 @@ interface AnalysisResult {
   rating: number | null
   estimatedVisits: number | null
   logoUrl: string | null
+  _debug?: {
+    usedOpenAI: boolean
+    apiKeyFound: boolean
+    error?: string
+  }
 }
 
 /**
@@ -243,7 +248,15 @@ async function analyzeWithAI(
     console.log('⚠️ [OpenAI] Using basic analysis instead.')
     console.log('⚠️ [OpenAI] To fix: Add OPENAI_API_KEY to your environment variables')
     console.log('⚠️ [OpenAI] ==========================================')
-    return analyzeWithoutAI(url, title, description, pricingContent, pageContent)
+    const basicResult = analyzeWithoutAI(url, title, description, pricingContent, pageContent)
+    return {
+      ...basicResult,
+      _debug: {
+        usedOpenAI: false,
+        apiKeyFound: false,
+        error: 'API key not found in environment variables'
+      }
+    }
   }
 
   // Validate API key format
@@ -254,7 +267,15 @@ async function analyzeWithAI(
     console.error('❌ [OpenAI] API key provided starts with:', openaiApiKey.substring(0, 5))
     console.error('❌ [OpenAI] Using basic analysis instead.')
     console.error('❌ [OpenAI] ==========================================')
-    return analyzeWithoutAI(url, title, description, pricingContent, pageContent)
+    const basicResult = analyzeWithoutAI(url, title, description, pricingContent, pageContent)
+    return {
+      ...basicResult,
+      _debug: {
+        usedOpenAI: false,
+        apiKeyFound: true,
+        error: 'Invalid API key format (must start with sk-)'
+      }
+    }
   }
   
   console.log('✨ [OpenAI] ==========================================')
@@ -404,10 +425,15 @@ Return ONLY valid JSON, no markdown formatting.`
       traffic: content.traffic || 'unknown',
       rating: content.rating || null,
       estimatedVisits: content.estimatedVisits || null,
+      _debug: {
+        usedOpenAI: true,
+        apiKeyFound: true,
+      }
     }
     
     console.log('✅ [OpenAI] Final analysis result:', JSON.stringify(result, null, 2))
     console.log('✅ [OpenAI] Analysis complete!')
+    console.log('✅ [OpenAI] ✅✅✅ OPENAI WAS SUCCESSFULLY USED ✅✅✅')
     
     return result
   } catch (error) {
@@ -415,7 +441,15 @@ Return ONLY valid JSON, no markdown formatting.`
     console.error('❌ [OpenAI] Error type:', error instanceof Error ? error.constructor.name : typeof error)
     console.error('❌ [OpenAI] Error message:', error instanceof Error ? error.message : String(error))
     console.error('❌ [OpenAI] Falling back to basic analysis...')
-    return analyzeWithoutAI(url, title, description, pricingContent, pageContent)
+    const basicResult = analyzeWithoutAI(url, title, description, pricingContent, pageContent)
+    return {
+      ...basicResult,
+      _debug: {
+        usedOpenAI: false,
+        apiKeyFound: true,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
   }
 }
 
@@ -708,9 +742,15 @@ export async function POST(request: NextRequest) {
       rating: analysis.rating ?? null,
       estimatedVisits: analysis.estimatedVisits ?? null,
       logoUrl: analysis.logoUrl || scraped.logoUrl || null,
+      _debug: analysis._debug,
     }
 
     console.log('📊 [Analyze] Final result:', JSON.stringify(result, null, 2))
+    console.log('📊 [Analyze] OpenAI was used:', result._debug?.usedOpenAI ? '✅ YES' : '❌ NO')
+    if (result._debug?.error) {
+      console.log('📊 [Analyze] Error reason:', result._debug.error)
+    }
+    
     return NextResponse.json({ ...result, url: validUrl.toString() })
   } catch (error) {
     console.error('Error analyzing URL:', error)

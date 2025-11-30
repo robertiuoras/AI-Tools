@@ -236,6 +236,18 @@ export default function AdminPage() {
       const data = await response.json()
       
       console.log('Analysis result:', data)
+      
+      // Log OpenAI usage status
+      if (data._debug) {
+        if (data._debug.usedOpenAI) {
+          console.log('✅ OpenAI was used for analysis!')
+        } else {
+          console.warn('⚠️ OpenAI was NOT used. Reason:', data._debug.error || 'Unknown')
+          console.warn('⚠️ Using basic analysis instead.')
+        }
+      } else {
+        console.warn('⚠️ No debug info available - cannot determine if OpenAI was used')
+      }
 
       // Auto-fill the form with analyzed data
       setFormData({
