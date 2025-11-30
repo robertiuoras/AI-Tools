@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/db'
+import { supabaseAdmin } from '@/lib/supabase'
 import { toolSchema } from '@/lib/schemas'
 
 export async function GET(
@@ -7,11 +7,13 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
-    const tool = await prisma.tool.findUnique({
-      where: { id: params.id },
-    })
+    const { data: tool, error } = await supabaseAdmin
+      .from('tool')
+      .select('*')
+      .eq('id', params.id)
+      .single()
 
-    if (!tool) {
+    if (error || !tool) {
       return NextResponse.json({ error: 'Tool not found' }, { status: 404 })
     }
 
@@ -33,15 +35,39 @@ export async function PUT(
     const body = await request.json()
     const validatedData = toolSchema.parse(body)
 
-    const tool = await prisma.tool.update({
-      where: { id: params.id },
-      data: validatedData,
-    })
+    // Prepare data for Supabase - handle null values
+    const updateData: any = {
+      name: validatedData.name,
+      description: validatedData.description,
+      url: validatedData.url,
+      category: validatedData.category,
+      logoUrl: validatedData.logoUrl || null,
+      tags: validatedData.tags || null,
+      traffic: validatedData.traffic || null,
+      revenue: validatedData.revenue || null,
+      rating: validatedData.rating ?? null,
+      estimatedVisits: validatedData.estimatedVisits ?? null,
+    }
+
+    const { data: tool, error } = await supabaseAdmin
+      .from('tool')
+      .update(updateData)
+      .eq('id', params.id)
+      .select()
+      .single()
+
+    if (error) {
+      console.error('Error updating tool:', error)
+      return NextResponse.json(
+        { error: 'Failed to update tool', details: error.message },
+        { status: 500 }
+      )
+    }
 
     return NextResponse.json(tool)
   } catch (error) {
     console.error('Error updating tool:', error)
-    if (error instanceof Error && error.name === 'ZodError') {
+    if (error && typeof error === 'object' && 'issues' in error) {
       return NextResponse.json(
         { error: 'Validation error', details: error },
         { status: 400 }
@@ -59,9 +85,18 @@ export async function DELETE(
   { params }: { params: { id: string } }
 ) {
   try {
-    await prisma.tool.delete({
-      where: { id: params.id },
-    })
+    const { error } = await supabaseAdmin
+      .from('tool')
+      .delete()
+      .eq('id', params.id)
+
+    if (error) {
+      console.error('Error deleting tool:', error)
+      return NextResponse.json(
+        { error: 'Failed to delete tool', details: error.message },
+        { status: 500 }
+      )
+    }
 
     return NextResponse.json({ success: true })
   } catch (error) {

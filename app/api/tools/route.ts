@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/db'
+import { supabaseAdmin } from '@/lib/supabase'
 import { toolSchema } from '@/lib/schemas'
 
 export async function GET(request: NextRequest) {
@@ -12,51 +12,62 @@ export async function GET(request: NextRequest) {
     const sort = searchParams.get('sort') || 'alphabetical'
     const order = searchParams.get('order') || 'asc'
 
-    let where: any = {}
 
+    // Build Supabase query
+    // Note: Supabase table names are case-sensitive. Use lowercase 'tool' if that's what's in your database
+    let query = supabaseAdmin.from('tool').select('*')
+
+    // Apply filters
     if (category) {
-      where.category = category
+      query = query.eq('category', category)
     }
 
     if (traffic.length > 0) {
-      where.traffic = { in: traffic }
+      query = query.in('traffic', traffic)
     }
 
     if (revenue.length > 0) {
-      where.revenue = { in: revenue }
+      query = query.in('revenue', revenue)
     }
 
-    // Note: SQLite doesn't support case-insensitive search natively
-    // For production with PostgreSQL, add mode: 'insensitive' to contains queries
-
-    let orderBy: any = {}
-    if (sort === 'alphabetical') {
-      orderBy.name = order
-    } else if (sort === 'newest') {
-      orderBy.createdAt = order === 'asc' ? 'desc' : 'asc'
-    } else if (sort === 'popular') {
-      orderBy.rating = order === 'asc' ? 'desc' : 'asc'
-    } else if (sort === 'traffic') {
-      orderBy.estimatedVisits = order === 'asc' ? 'desc' : 'asc'
-    }
-
-    let tools = await prisma.tool.findMany({
-      where,
-      orderBy,
-    })
-
-    // Apply case-insensitive search filter in memory for SQLite compatibility
+    // Apply search filter
     if (search) {
       const searchLower = search.toLowerCase()
-      tools = tools.filter(
-        (tool) =>
-          tool.name.toLowerCase().includes(searchLower) ||
-          tool.description.toLowerCase().includes(searchLower) ||
+      // Supabase doesn't support OR queries easily, so we'll filter in memory
+      // For better performance, you could use full-text search if enabled
+    }
+
+    // Apply sorting
+    if (sort === 'alphabetical') {
+      query = query.order('name', { ascending: order === 'asc' })
+    } else if (sort === 'newest') {
+      query = query.order('createdAt', { ascending: order !== 'asc' })
+    } else if (sort === 'popular') {
+      query = query.order('rating', { ascending: order === 'asc', nullsFirst: false })
+    } else if (sort === 'traffic') {
+      query = query.order('estimatedVisits', { ascending: order === 'asc', nullsFirst: false })
+    }
+
+    const { data: tools, error } = await query
+
+    if (error) {
+      console.error('❌ Supabase error fetching tools:', error)
+      return NextResponse.json([], { status: 200 })
+    }
+
+    // Apply case-insensitive search filter in memory
+    let filteredTools = tools || []
+    if (search) {
+      const searchLower = search.toLowerCase()
+      filteredTools = filteredTools.filter(
+        (tool: any) =>
+          tool.name?.toLowerCase().includes(searchLower) ||
+          tool.description?.toLowerCase().includes(searchLower) ||
           (tool.tags && tool.tags.toLowerCase().includes(searchLower))
       )
     }
 
-    return NextResponse.json(tools)
+    return NextResponse.json(filteredTools)
   } catch (error) {
     console.error('❌ Error fetching tools:', error)
     console.error('Error type:', error instanceof Error ? error.name : typeof error)
@@ -122,13 +133,27 @@ export async function POST(request: NextRequest) {
       prismaData.estimatedVisits = null
     }
 
-    console.log('Prisma data:', JSON.stringify(prismaData, null, 2))
+    console.log('Supabase data:', JSON.stringify(prismaData, null, 2))
 
-    const tool = await prisma.tool.create({
-      data: prismaData,
-    })
+    const { data: tool, error } = await supabaseAdmin
+      .from('tool')
+      .insert(prismaData)
+      .select()
+      .single()
 
-    console.log('Tool created successfully:', tool.id)
+    if (error) {
+      console.error('❌ Supabase error creating tool:', error)
+      return NextResponse.json(
+        {
+          error: 'Failed to create tool',
+          message: error.message,
+          details: error,
+        },
+        { status: 500 }
+      )
+    }
+
+    console.log('Tool created successfully:', tool?.id)
     return NextResponse.json(tool, { status: 201 })
   } catch (error) {
     console.error('Error creating tool:', error)
@@ -153,17 +178,17 @@ export async function POST(request: NextRequest) {
       )
     }
     
-    // Handle Prisma errors
+    // Handle Supabase errors
     if (error instanceof Error) {
-      console.error('Prisma error details:', {
+      console.error('Supabase error details:', {
         name: error.name,
         message: error.message,
         stack: error.stack,
       })
       
-      // Extract more details from Prisma errors
+      // Extract more details from Supabase errors
       let errorMessage = error.message
-      if (error.message.includes('Invalid')) {
+      if (error.message.includes('Invalid') || error.message.includes('violates')) {
         errorMessage = `Database error: ${error.message}. Check that all required fields are provided and data types are correct.`
       }
       

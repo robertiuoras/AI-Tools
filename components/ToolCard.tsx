@@ -7,7 +7,7 @@ import { ExternalLink, Star, TrendingUp } from 'lucide-react'
 import { Card, CardContent, CardFooter } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import type { Tool } from '@prisma/client'
+import type { Tool } from '@/lib/supabase'
 
 interface ToolCardProps {
   tool: Tool

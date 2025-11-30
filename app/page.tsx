@@ -12,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import type { Tool } from '@prisma/client'
+import type { Tool } from '@/lib/supabase'
 
 type SortOption = 'alphabetical' | 'newest' | 'popular' | 'traffic'
 type SortOrder = 'asc' | 'desc'

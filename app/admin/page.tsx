@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/select'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { categories } from '@/lib/schemas'
-import type { Tool } from '@prisma/client'
+import type { Tool } from '@/lib/supabase'
 import { Loader2, Plus, Trash2, Edit2, Sparkles } from 'lucide-react'
 
 export default function AdminPage() {
