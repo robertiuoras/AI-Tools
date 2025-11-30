@@ -39,10 +39,25 @@ export default function HomePage() {
       params.append('order', sortOrder)
 
       const response = await fetch(`/api/tools?${params.toString()}`)
+      
+      if (!response.ok) {
+        console.error('Failed to fetch tools:', response.statusText)
+        setTools([])
+        return
+      }
+
       const data = await response.json()
-      setTools(data)
+      
+      // Ensure data is an array
+      if (Array.isArray(data)) {
+        setTools(data)
+      } else {
+        console.error('Invalid response format:', data)
+        setTools([])
+      }
     } catch (error) {
       console.error('Error fetching tools:', error)
+      setTools([])
     } finally {
       setLoading(false)
     }

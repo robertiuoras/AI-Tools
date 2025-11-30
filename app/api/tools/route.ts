@@ -59,10 +59,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(tools)
   } catch (error) {
     console.error('Error fetching tools:', error)
-    return NextResponse.json(
-      { error: 'Failed to fetch tools' },
-      { status: 500 }
-    )
+    // Return empty array instead of error object to prevent frontend crashes
+    // In production, you might want to log this to an error tracking service
+    return NextResponse.json([], { status: 500 })
   }
 }
 
