@@ -241,22 +241,14 @@ async function analyzeWithAI(
   console.log('🔍 [OpenAI Check] ==========================================')
 
   if (!openaiApiKey) {
-    // Fallback to rule-based analysis if no API key
-    console.log('⚠️ [OpenAI] ==========================================')
-    console.log('⚠️ [OpenAI] API key not found!')
-    console.log('⚠️ [OpenAI] Checked: OPENAI_API_KEY and NEXT_PUBLIC_OPENAI_API_KEY')
-    console.log('⚠️ [OpenAI] Using basic analysis instead.')
-    console.log('⚠️ [OpenAI] To fix: Add OPENAI_API_KEY to your environment variables')
-    console.log('⚠️ [OpenAI] ==========================================')
-    const basicResult = analyzeWithoutAI(url, title, description, pricingContent, pageContent)
-    return {
-      ...basicResult,
-      _debug: {
-        usedOpenAI: false,
-        apiKeyFound: false,
-        error: 'API key not found in environment variables'
-      }
-    }
+    // OpenAI is required - no fallback
+    console.error('❌ [OpenAI] ==========================================')
+    console.error('❌ [OpenAI] API key not found!')
+    console.error('❌ [OpenAI] Checked: OPENAI_API_KEY and NEXT_PUBLIC_OPENAI_API_KEY')
+    console.error('❌ [OpenAI] OpenAI is REQUIRED - no fallback available')
+    console.error('❌ [OpenAI] To fix: Add OPENAI_API_KEY to your environment variables')
+    console.error('❌ [OpenAI] ==========================================')
+    throw new Error('OPENAI_API_KEY is required. Please add it to your environment variables.')
   }
 
   // Validate API key format
@@ -265,17 +257,9 @@ async function analyzeWithAI(
     console.error('❌ [OpenAI] Invalid API key format!')
     console.error('❌ [OpenAI] OpenAI API keys should start with "sk-"')
     console.error('❌ [OpenAI] API key provided starts with:', openaiApiKey.substring(0, 5))
-    console.error('❌ [OpenAI] Using basic analysis instead.')
+    console.error('❌ [OpenAI] OpenAI is REQUIRED - no fallback available')
     console.error('❌ [OpenAI] ==========================================')
-    const basicResult = analyzeWithoutAI(url, title, description, pricingContent, pageContent)
-    return {
-      ...basicResult,
-      _debug: {
-        usedOpenAI: false,
-        apiKeyFound: true,
-        error: 'Invalid API key format (must start with sk-)'
-      }
-    }
+    throw new Error('Invalid OpenAI API key format. Key must start with "sk-"')
   }
   
   console.log('✨ [OpenAI] ==========================================')
@@ -440,240 +424,11 @@ Return ONLY valid JSON, no markdown formatting.`
     console.error('❌ [OpenAI] AI analysis error:', error)
     console.error('❌ [OpenAI] Error type:', error instanceof Error ? error.constructor.name : typeof error)
     console.error('❌ [OpenAI] Error message:', error instanceof Error ? error.message : String(error))
-    console.error('❌ [OpenAI] Falling back to basic analysis...')
-    const basicResult = analyzeWithoutAI(url, title, description, pricingContent, pageContent)
-    return {
-      ...basicResult,
-      _debug: {
-        usedOpenAI: false,
-        apiKeyFound: true,
-        error: error instanceof Error ? error.message : String(error)
-      }
-    }
+    console.error('❌ [OpenAI] OpenAI is REQUIRED - rethrowing error')
+    throw error // Re-throw error since OpenAI is required
   }
 }
 
-/**
- * Fallback analysis without AI
- */
-function analyzeWithoutAI(
-  url: string,
-  title: string,
-  description: string,
-  pricingContent: string,
-  pageContent: string
-): Partial<AnalysisResult> {
-  // Simple keyword-based categorization
-  const urlLower = url.toLowerCase()
-  const titleLower = title.toLowerCase()
-  const descLower = description.toLowerCase()
-  const pricingLower = pricingContent.toLowerCase()
-  const pageLower = pageContent.toLowerCase()
-  const combined = `${urlLower} ${titleLower} ${descLower} ${pricingLower} ${pageLower}`
-
-  let category = 'Other'
-  const categoryKeywords: Record<string, string[]> = {
-    'Video Editing': ['video', 'edit', 'film', 'movie', 'clip'],
-    'Image Generation': ['image', 'generate', 'art', 'picture', 'photo', 'ai art', 'dalle', 'midjourney'],
-    'Code Assistants': ['code', 'programming', 'developer', 'coding', 'github copilot', 'cursor'],
-    'Writing': ['write', 'text', 'content', 'blog', 'article', 'copy', 'gpt', 'chatgpt'],
-    'AI Automation': ['automate', 'workflow', 'bot', 'automation', 'zapier'],
-    'Productivity': ['productivity', 'task', 'todo', 'organize', 'manage'],
-    'Design': ['design', 'ui', 'ux', 'figma', 'sketch'],
-    'Marketing': ['marketing', 'seo', 'social', 'ad', 'campaign'],
-    'Analytics': ['analytics', 'data', 'insight', 'metric', 'track'],
-  }
-
-  for (const [cat, keywords] of Object.entries(categoryKeywords)) {
-    if (keywords.some((keyword) => combined.includes(keyword))) {
-      category = cat
-      break
-    }
-  }
-
-  // Enhanced revenue detection with pricing page analysis
-  let revenue: 'free' | 'freemium' | 'paid' | 'enterprise' | null = null
-  
-  // Check for enterprise indicators (highest priority)
-  const enterpriseKeywords = ['enterprise', 'business plan', 'contact sales', 'custom pricing', 'request demo', 'sales team']
-  if (enterpriseKeywords.some(keyword => combined.includes(keyword))) {
-    revenue = 'enterprise'
-  }
-  // Check for freemium (free tier + paid plans)
-  else if (
-    (combined.includes('free') || combined.includes('free tier') || combined.includes('free plan')) &&
-    (combined.includes('pro') || combined.includes('premium') || combined.includes('paid') || 
-     combined.includes('subscription') || combined.includes('$') || combined.includes('pricing') ||
-     combined.includes('plan') || combined.includes('tier'))
-  ) {
-    revenue = 'freemium'
-  }
-  // Check for completely free (no paid options)
-  else if (
-    (combined.includes('free') || combined.includes('open source') || combined.includes('free forever')) &&
-    !combined.includes('pro') && !combined.includes('premium') && !combined.includes('paid') &&
-    !combined.includes('subscription') && !combined.includes('$') && !combined.includes('pricing')
-  ) {
-    revenue = 'free'
-  }
-  // Check for paid only (no free tier)
-  else if (
-    (combined.includes('subscription') || combined.includes('$') || combined.includes('pricing') ||
-     combined.includes('paid') || combined.includes('purchase') || combined.includes('buy')) &&
-    !combined.includes('free') && !combined.includes('free tier') && !combined.includes('free plan')
-  ) {
-    revenue = 'paid'
-  }
-
-  // Estimate traffic based on common indicators
-  let traffic: 'low' | 'medium' | 'high' | 'unknown' = 'unknown'
-  if (combined.includes('popular') || combined.includes('millions') || combined.includes('millions of users') || combined.includes('millions of')) {
-    traffic = 'high'
-  } else if (combined.includes('thousands') || combined.includes('growing') || combined.includes('trending') || combined.includes('100k') || combined.includes('500k')) {
-    traffic = 'medium'
-  } else if (combined.includes('users') || combined.includes('active')) {
-    traffic = 'medium'
-  } else if (combined.includes('small') || combined.includes('new') || combined.includes('startup')) {
-    traffic = 'low'
-  }
-
-  // Estimate rating (very basic, AI would do better)
-  let rating: number | null = null
-  const ratingMatch = combined.match(/(\d+\.?\d*)\s*(?:star|rating|score|out of 5)/i)
-  if (ratingMatch) {
-    const parsed = parseFloat(ratingMatch[1])
-    if (parsed >= 0 && parsed <= 5) {
-      rating = parsed
-    }
-  } else if (combined.includes('excellent') || combined.includes('great') || combined.includes('top rated') || combined.includes('best')) {
-    rating = 4.5
-  } else if (combined.includes('good') || combined.includes('recommended') || combined.includes('highly')) {
-    rating = 4.0
-  } else if (combined.includes('well') || combined.includes('solid')) {
-    rating = 3.5
-  }
-
-  // Estimate visits with improved heuristics
-  let estimatedVisits: number | null = null
-  
-  // Method 1: Look for explicit visit/user numbers in text
-  const visitPatterns = [
-    /(\d+(?:\.\d+)?)\s*(?:million|m)\s*(?:visits|users|monthly|per month|monthly visits)/i,
-    /(\d+(?:\.\d+)?)\s*(?:thousand|k)\s*(?:visits|users|monthly|per month|monthly visits)/i,
-    /(\d+(?:,\d{3})*)\s*(?:visits|users|monthly|per month)/i,
-    /(?:visits|users|monthly)[:\s]+(\d+(?:\.\d+)?)\s*(?:million|m)/i,
-    /(?:visits|users|monthly)[:\s]+(\d+(?:\.\d+)?)\s*(?:thousand|k)/i,
-  ]
-  
-  for (const pattern of visitPatterns) {
-    const match = combined.match(pattern)
-    if (match) {
-      const num = parseFloat(match[1].replace(/,/g, ''))
-      const text = match[0].toLowerCase()
-      if (text.includes('million') || text.includes('m')) {
-        estimatedVisits = Math.round(num * 1000000)
-        break
-      } else if (text.includes('thousand') || text.includes('k')) {
-        estimatedVisits = Math.round(num * 1000)
-        break
-      } else if (num > 1000) {
-        estimatedVisits = Math.round(num)
-        break
-      }
-    }
-  }
-  
-  // Method 2: Look for user count indicators
-  if (estimatedVisits === null) {
-    const userPatterns = [
-      /(\d+(?:\.\d+)?)\s*(?:million|m)\s*(?:users|customers|subscribers)/i,
-      /(\d+(?:\.\d+)?)\s*(?:thousand|k)\s*(?:users|customers|subscribers)/i,
-      /(?:over|more than|above)\s+(\d+(?:\.\d+)?)\s*(?:million|m)\s*(?:users|customers)/i,
-      /(?:over|more than|above)\s+(\d+(?:\.\d+)?)\s*(?:thousand|k)\s*(?:users|customers)/i,
-    ]
-    
-    for (const pattern of userPatterns) {
-      const match = combined.match(pattern)
-      if (match) {
-        const num = parseFloat(match[1])
-        const text = match[0].toLowerCase()
-        // Convert users to estimated visits (users typically visit multiple times)
-        if (text.includes('million') || text.includes('m')) {
-          estimatedVisits = Math.round(num * 1000000 * 3) // Assume 3 visits per user per month
-          break
-        } else if (text.includes('thousand') || text.includes('k')) {
-          estimatedVisits = Math.round(num * 1000 * 3)
-          break
-        }
-      }
-    }
-  }
-  
-  // Method 3: Look for traffic indicators and estimate
-  if (estimatedVisits === null) {
-    // Check for specific traffic mentions
-    if (combined.includes('millions of visitors') || combined.includes('millions of users')) {
-      estimatedVisits = 5000000 // Conservative estimate for "millions"
-    } else if (combined.includes('hundreds of thousands')) {
-      estimatedVisits = 500000
-    } else if (combined.includes('tens of thousands')) {
-      estimatedVisits = 50000
-    } else if (combined.includes('thousands of')) {
-      estimatedVisits = 5000
-    }
-  }
-  
-  // Method 4: Set estimates based on traffic level with better ranges
-  if (estimatedVisits === null) {
-    if (traffic === 'high') {
-      // High traffic: 500K - 5M range
-      estimatedVisits = 2000000
-    } else if (traffic === 'medium') {
-      // Medium traffic: 50K - 500K range
-      estimatedVisits = 250000
-    } else if (traffic === 'low') {
-      // Low traffic: 5K - 50K range
-      estimatedVisits = 25000
-    }
-  }
-
-  return {
-    name: title || new URL(url).hostname.replace('www.', ''),
-    description: description || 'AI tool description',
-    category,
-    tags: extractTags(combined),
-    revenue,
-    traffic,
-    rating,
-    estimatedVisits,
-  }
-}
-
-function extractTags(text: string): string {
-  const tagKeywords: Record<string, string[]> = {
-    'ai': ['ai', 'artificial intelligence', 'machine learning', 'ml', 'neural'],
-    'automation': ['automation', 'automate', 'workflow', 'bot'],
-    'productivity': ['productivity', 'efficient', 'streamline', 'optimize'],
-    'saas': ['saas', 'software as a service', 'cloud', 'web app'],
-    'api': ['api', 'integration', 'developer', 'sdk'],
-    'collaboration': ['collaboration', 'team', 'share', 'workspace'],
-    'analytics': ['analytics', 'data', 'insights', 'metrics', 'tracking'],
-  }
-  
-  const found: string[] = []
-  for (const [tag, keywords] of Object.entries(tagKeywords)) {
-    if (keywords.some(keyword => text.includes(keyword))) {
-      found.push(tag)
-    }
-  }
-  
-  // Always include 'ai' if not already found
-  if (!found.includes('ai') && text.includes('ai')) {
-    found.unshift('ai')
-  }
-  
-  return found.slice(0, 5).join(', ') || 'ai, tool'
-}
 
 export async function POST(request: NextRequest) {
   try {
@@ -713,8 +468,8 @@ export async function POST(request: NextRequest) {
       pageContentLength: scraped.pageContent.length,
     })
 
-    // Analyze with AI or fallback
-    console.log('🤖 [Analyze] Starting AI analysis...')
+    // Analyze with OpenAI (required - no fallback)
+    console.log('🤖 [Analyze] Starting OpenAI analysis...')
     console.log('🤖 [Analyze] Scraped data summary:', {
       hasTitle: !!scraped.title,
       hasDescription: !!scraped.description,
@@ -729,8 +484,7 @@ export async function POST(request: NextRequest) {
       scraped.pricingContent,
       scraped.pageContent
     )
-    console.log('✅ [Analyze] Analysis complete:', JSON.stringify(analysis, null, 2))
-    console.log('✅ [Analyze] Analysis source:', analysis.revenue || analysis.estimatedVisits ? 'AI' : 'Basic (fallback)')
+    console.log('✅ [Analyze] OpenAI analysis complete:', JSON.stringify(analysis, null, 2))
 
     const result: AnalysisResult = {
       name: analysis.name || scraped.title || validUrl.hostname.replace('www.', ''),

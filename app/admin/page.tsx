@@ -733,7 +733,7 @@ export default function AdminPage() {
                     className="w-full"
                   />
                 </div>
-                <div className="flex-1 overflow-y-auto pr-2 space-y-2">
+                <div className="flex-1 overflow-y-auto pr-2 space-y-2" style={{ maxHeight: 'calc(9 * (80px + 8px))' }}>
                   {tools
                     .filter((tool) => {
                       if (!searchQuery.trim()) return true
