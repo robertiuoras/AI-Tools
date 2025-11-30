@@ -118,7 +118,7 @@ export async function POST(request: NextRequest) {
       prismaData.estimatedVisits = null
     }
 
-    console.log('Prisma data:', prismaData)
+    console.log('Prisma data:', JSON.stringify(prismaData, null, 2))
 
     const tool = await prisma.tool.create({
       data: prismaData,
@@ -128,6 +128,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(tool, { status: 201 })
   } catch (error) {
     console.error('Error creating tool:', error)
+    console.error('Error type:', typeof error)
+    console.error('Error name:', error instanceof Error ? error.name : 'Unknown')
+    console.error('Full error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
     
     // Handle Zod validation errors
     if (error && typeof error === 'object' && 'issues' in error) {
@@ -148,14 +151,30 @@ export async function POST(request: NextRequest) {
     
     // Handle Prisma errors
     if (error instanceof Error) {
+      console.error('Prisma error details:', {
+        name: error.name,
+        message: error.message,
+        stack: error.stack,
+      })
+      
+      // Extract more details from Prisma errors
+      let errorMessage = error.message
+      if (error.message.includes('Invalid')) {
+        errorMessage = `Database error: ${error.message}. Check that all required fields are provided and data types are correct.`
+      }
+      
       return NextResponse.json(
-        { error: 'Failed to create tool', message: error.message },
+        { 
+          error: 'Failed to create tool', 
+          message: errorMessage,
+          details: error.stack,
+        },
         { status: 500 }
       )
     }
     
     return NextResponse.json(
-      { error: 'Failed to create tool', message: 'Unknown error' },
+      { error: 'Failed to create tool', message: 'Unknown error', details: String(error) },
       { status: 500 }
     )
   }

@@ -201,18 +201,7 @@ export default function AdminPage() {
       })
 
       setQuickAddUrl('')
-      
-      const foundFields = []
-      if (data.name) foundFields.push('name')
-      if (data.description) foundFields.push('description')
-      if (data.category) foundFields.push('category')
-      if (data.tags) foundFields.push('tags')
-      if (data.revenue) foundFields.push('revenue')
-      if (data.traffic) foundFields.push('traffic')
-      if (data.rating) foundFields.push('rating')
-      
-      const message = `Tool analyzed! Found: ${foundFields.join(', ') || 'basic info'}. Review and edit below, then click "Add Tool".`
-      alert(message)
+      // Silently fill the form - no popup
       window.scrollTo({ top: 0, behavior: 'smooth' })
     } catch (error) {
       console.error('Error analyzing URL:', error)
