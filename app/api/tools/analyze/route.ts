@@ -46,8 +46,9 @@ async function fetchPricingInfo(baseUrl: string): Promise<string> {
           .replace(/\s+/g, ' ')
           .toLowerCase()
         
-        if (text.length > 100) { // Only return if we got substantial content
-          return text
+        if (text.length > 100) {
+          // Limit pricing content to reduce tokens
+          return text.substring(0, 2000) // Reduced from unlimited to 2000 chars
         }
       }
     } catch (error) {
@@ -121,13 +122,13 @@ async function scrapeWebsiteInfo(url: string): Promise<{
     const descMatch = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i)
     const description = descMatch ? descMatch[1].trim() : ''
 
-    // Extract page content for better analysis
+    // Extract page content for better analysis (reduced for token optimization)
     let pageContent = html
       .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
       .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
       .replace(/<[^>]+>/g, ' ')
       .replace(/\s+/g, ' ')
-      .substring(0, 5000) // Limit to first 5000 chars
+      .substring(0, 3000) // Reduced from 5000 to 3000 chars for token optimization
       .toLowerCase()
 
     // Try to find logo/favicon with multiple fallback methods
@@ -282,63 +283,56 @@ async function analyzeWithAI(
   console.log('✨ [OpenAI] ==========================================')
 
   try {
+    // Optimize token usage - only send essential content
     const pricingContext = pricingContent 
-      ? `\n\nPricing Page Content (for revenue model analysis):\n${pricingContent.substring(0, 2000)}`
+      ? `\nPricing: ${pricingContent.substring(0, 1000)}`
       : ''
     
     const pageContext = pageContent
-      ? `\n\nMain Page Content (first 2000 chars for context):\n${pageContent.substring(0, 2000)}`
+      ? `\nContent: ${pageContent.substring(0, 1000)}`
       : ''
 
-    const prompt = `Analyze this AI tool website and provide structured information. Pay EXTREME attention to finding accurate revenue model and visit statistics.
+    // Optimized prompt - concise but effective
+    const prompt = `Analyze AI tool. Return JSON only.
 
 URL: ${url}
 Title: ${title}
-Description: ${description || 'No description available'}${pricingContext}${pageContext}
+Desc: ${description || 'N/A'}${pricingContext}${pageContext}
 
-CRITICAL - Revenue Model Analysis (MUST be accurate):
-Carefully examine the pricing content and page content for EXACT pricing structure:
-- "free": Completely free with NO paid options whatsoever (e.g., open source, free forever, no pricing page)
-- "freemium": Has BOTH a free tier/plan AND paid plans (e.g., "Free plan" + "Pro $X/month" or "Free tier" + "Premium")
-- "paid": ONLY paid plans, NO free tier (e.g., "Starting at $X/month", subscription required, one-time purchase, no free option mentioned)
-- "enterprise": Enterprise/business focused with custom pricing (e.g., "Contact sales", "Enterprise plans", "Custom pricing", "Request demo")
-- null: ONLY if you truly cannot determine from the available content
+Revenue (MUST be accurate):
+- "free": No paid options (open source, free forever)
+- "freemium": Free tier + paid plans
+- "paid": Only paid, no free
+- "enterprise": Custom pricing, contact sales
+- null: Cannot determine
 
-Look for EXACT indicators:
-- "Free plan" or "Free tier" + any paid plans → "freemium"
-- Multiple pricing tiers with one being "Free" → "freemium"
-- Only "$X/month" or "Subscribe" with no free option → "paid"
-- "Contact sales" or "Enterprise" as primary option → "enterprise"
-- No pricing page, completely open source → "free"
+Visits (search for numbers):
+- Look for: "X million visits/users", "X million monthly", "XM visits"
+- Convert users to visits: "2.5M users" = 7.5M visits (3x multiplier)
+- If "millions" mentioned → 2-5M
+- If "hundreds of thousands" → 300K-800K
+- If "thousands" → 10K-50K
+- Well-known tool → 1M-5M
+- New/niche → 10K-100K
+- null only if no indicators
 
-CRITICAL - Estimated Visits Analysis (MUST search thoroughly):
-Search the page content and pricing content for EXACT numbers:
-1. Look for explicit mentions: "X million visits", "X million users", "X million monthly", "XM visits", "XK visits"
-2. Look for user counts: "X million users", "X thousand users", "X users"
-3. Look for traffic indicators: "X million page views", "X million visitors", "serving X million"
-4. If you find a number, use it directly (convert: "2.5M users" = 2,500,000, assume 3 visits/user/month = 7,500,000 visits)
-5. If no explicit number but mentions "millions" → estimate 2-5M
-6. If mentions "hundreds of thousands" → estimate 300K-800K
-7. If mentions "thousands" → estimate 10K-50K
-8. If well-known tool with press coverage → estimate 1M-5M
-9. If newer/niche tool → estimate 10K-100K
-10. Only use null if truly no indicators found
+Return JSON:
+{
+  "name": "Tool name (max 50 chars)",
+  "description": "2-3 sentence description",
+  "category": "${categories.join('|')}",
+  "tags": "ai, tag1, tag2 (3-5 tags)",
+  "revenue": "free|freemium|paid|enterprise|null",
+  "traffic": "low|medium|high|unknown",
+  "rating": 0-5 or null,
+  "estimatedVisits": number or null
+}
 
-Please provide a JSON response with:
-1. "name": A clean, concise name for the tool (max 50 chars)
-2. "description": A 2-3 sentence description of what the tool does
-3. "category": One of these exact categories: ${categories.join(', ')}
-4. "tags": Comma-separated relevant tags (3-5 tags, e.g., "ai, automation, productivity")
-5. "revenue": One of: "free", "freemium", "paid", "enterprise", or null (MUST be accurate based on pricing analysis)
-6. "traffic": Estimate as "low", "medium", "high", or "unknown" (based on popularity indicators, press coverage, user mentions)
-7. "rating": A number between 0-5 (or null if unknown, estimate based on quality indicators, reviews, or general perception)
-8. "estimatedVisits": A NUMBER (not null unless truly unknown). Search thoroughly for explicit visit/user numbers. If found, use them. If not found but indicators exist, provide reasonable estimate based on traffic level and popularity.
-
-IMPORTANT: 
-- Revenue model MUST be accurate - carefully analyze pricing content
-- Estimated visits MUST be a number if any indicators exist (don't default to null)
-- Always provide tags, even if generic
-- Be thorough in searching for visit/user statistics
+Rules:
+- Revenue: Analyze pricing carefully
+- Visits: Provide number if any indicators exist
+- Tags: Always provide (even if generic)
+- Category: Must match exactly`
 
 Return ONLY valid JSON, no markdown formatting.`
 
@@ -353,16 +347,16 @@ Return ONLY valid JSON, no markdown formatting.`
 
     const requestBody = {
       model: 'gpt-4o-mini',
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You are an expert at analyzing AI tools and categorizing them. Always respond with valid JSON only.',
-        },
-        { role: 'user', content: prompt },
-      ],
-      temperature: 0.7,
-      response_format: { type: 'json_object' },
+        messages: [
+          {
+            role: 'system',
+            content: 'Analyze AI tools. Return valid JSON only.',
+          },
+          { role: 'user', content: prompt },
+        ],
+        temperature: 0.3, // Lower temperature for more consistent, focused responses (saves tokens)
+        response_format: { type: 'json_object' },
+        max_tokens: 500, // Limit response tokens (default is higher, this saves tokens)
     }
 
     console.log('📤 [OpenAI] Request body (without prompt):', JSON.stringify({
@@ -392,6 +386,28 @@ Return ONLY valid JSON, no markdown formatting.`
       console.error('❌ [OpenAI] API error response:', errorText)
       console.error('❌ [OpenAI] Status:', response.status)
       console.error('❌ [OpenAI] Status text:', response.statusText)
+      
+      // Parse error for better handling
+      let errorDetails: any = {}
+      try {
+        errorDetails = JSON.parse(errorText)
+      } catch (e) {
+        // Not JSON, use raw text
+      }
+      
+      // Handle rate limit errors specifically
+      if (response.status === 429) {
+        const rateLimitError = errorDetails?.error || {}
+        const message = rateLimitError.message || errorText
+        const retryAfter = message.match(/try again in ([\d\w\s]+)/i)?.[1] || 'a few minutes'
+        
+        console.error('❌ [OpenAI] Rate limit exceeded!')
+        console.error('❌ [OpenAI] Retry after:', retryAfter)
+        console.error('❌ [OpenAI] Full message:', message)
+        
+        throw new Error(`OpenAI Rate Limit: ${message}. Please wait ${retryAfter} or add a payment method to increase limits at https://platform.openai.com/account/billing`)
+      }
+      
       throw new Error(`OpenAI API error: ${response.status} - ${errorText}`)
     }
 

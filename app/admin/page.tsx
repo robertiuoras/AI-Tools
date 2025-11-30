@@ -436,7 +436,17 @@ export default function AdminPage() {
       setAutoSubmitTimer(timer)
     } catch (error) {
       console.error('Error analyzing URL:', error)
-      alert('Failed to analyze URL. Please fill in the form manually.')
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      
+      // Show user-friendly error messages
+      if (errorMessage.includes('Rate Limit') || errorMessage.includes('rate limit')) {
+        alert(`⚠️ OpenAI Rate Limit Reached\n\n${errorMessage}\n\nPlease wait a few minutes or add a payment method to increase your limits.\n\nYou can still fill the form manually.`)
+      } else if (errorMessage.includes('API key')) {
+        alert(`⚠️ OpenAI API Key Issue\n\n${errorMessage}\n\nPlease check your OPENAI_API_KEY in Vercel environment variables.`)
+      } else {
+        alert(`Failed to analyze URL: ${errorMessage}\n\nPlease fill in the form manually.`)
+      }
+      
       setIsProcessing(false)
     } finally {
       setAnalyzing(false)
