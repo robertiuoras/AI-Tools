@@ -46,3 +46,11 @@ export const prisma =
 
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
 
+// Log connection attempt in production for debugging
+if (process.env.NODE_ENV === 'production') {
+  console.log('🔍 Attempting database connection...')
+  console.log('🔍 Hostname:', new URL(cleanDatabaseUrl).hostname)
+  console.log('🔍 Port:', new URL(cleanDatabaseUrl).port || '5432')
+  console.log('🔍 Has SSL:', cleanDatabaseUrl.includes('sslmode=require'))
+}
+
