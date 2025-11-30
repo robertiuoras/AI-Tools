@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import { supabase } from '@/lib/supabase'
+import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -15,12 +17,15 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { categories } from '@/lib/schemas'
 import type { Tool } from '@/lib/supabase'
+import { supabase } from '@/lib/supabase'
 import { Loader2, Plus, Trash2, Edit2, Sparkles } from 'lucide-react'
 
 export default function AdminPage() {
   const router = useRouter()
   const [tools, setTools] = useState<Tool[]>([])
   const [loading, setLoading] = useState(true)
+  const [authLoading, setAuthLoading] = useState(true)
+  const [isAdmin, setIsAdmin] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
   const [quickAddUrl, setQuickAddUrl] = useState('')
@@ -44,8 +49,35 @@ export default function AdminPage() {
   })
 
   useEffect(() => {
+    // Check authentication and admin role
+    const checkAuth = async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      
+      if (!session) {
+        router.push('/')
+        return
+      }
+
+      // Get user role
+      const { data: userData, error } = await supabase
+        .from('user')
+        .select('role')
+        .eq('id', session.user.id)
+        .single()
+
+      if (error || !userData || userData.role !== 'admin') {
+        alert('Access denied. Admin role required.')
+        router.push('/')
+        return
+      }
+
+      setIsAdmin(true)
+      setAuthLoading(false)
+    }
+
+    checkAuth()
     fetchTools()
-  }, [])
+  }, [router])
 
   const fetchTools = async () => {
     try {
@@ -496,6 +528,23 @@ export default function AdminPage() {
       }
     }
   }, [autoSubmitTimer, countdownInterval])
+
+  if (authLoading || loading) {
+    return (
+      <div className="container mx-auto px-4 py-8">
+        <div className="flex items-center justify-center min-h-[400px]">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+            <p className="text-muted-foreground">Loading...</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (!isAdmin) {
+    return null
+  }
 
   return (
     <div className="container mx-auto px-4 py-8 max-w-7xl">

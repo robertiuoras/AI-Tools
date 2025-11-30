@@ -4,6 +4,7 @@ import { Analytics } from '@vercel/analytics/react'
 import { SpeedInsights } from '@vercel/speed-insights/next'
 import './globals.css'
 import { ThemeToggle } from '@/components/ThemeToggle'
+import { AuthButton } from '@/components/AuthButton'
 import Link from 'next/link'
 
 const inter = Inter({ subsets: ['latin'] })
@@ -30,12 +31,7 @@ export default function RootLayout({
                 </span>
               </Link>
               <div className="flex items-center gap-4">
-                <Link
-                  href="/admin"
-                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  Admin
-                </Link>
+                <AuthButton />
                 <ThemeToggle />
               </div>
             </div>

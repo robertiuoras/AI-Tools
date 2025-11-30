@@ -14,9 +14,22 @@ export async function GET(request: NextRequest) {
     const order = searchParams.get('order') || 'asc'
 
 
-    // Build Supabase query
+    // Get current user if authenticated
+    const authHeader = request.headers.get('authorization')
+    let userId: string | null = null
+    if (authHeader) {
+      // In a real app, you'd verify the token here
+      // For now, we'll get user from session in the frontend
+    }
+
+    // Build Supabase query with upvote counts
     // Note: Supabase table names are case-sensitive. Use lowercase 'tool' if that's what's in your database
-    let query = supabaseAdmin.from('tool').select('*')
+    let query = supabaseAdmin
+      .from('tool')
+      .select(`
+        *,
+        upvoteCount:upvote(count)
+      `)
 
     // Apply filters
     if (category) {
@@ -47,6 +60,8 @@ export async function GET(request: NextRequest) {
       query = query.order('rating', { ascending: order === 'asc', nullsFirst: false })
     } else if (sort === 'traffic') {
       query = query.order('estimatedVisits', { ascending: order === 'asc', nullsFirst: false })
+    } else if (sort === 'upvotes') {
+      // For upvotes, we'll sort in memory after getting the data
     }
 
     const { data: tools, error } = await query
@@ -68,7 +83,33 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    return NextResponse.json(filteredTools)
+    // Process tools to add upvote counts and user upvote status
+    const processedTools = await Promise.all(
+      filteredTools.map(async (tool: any) => {
+        // Get upvote count
+        const { count } = await supabaseAdmin
+          .from('upvote')
+          .select('*', { count: 'exact', head: true })
+          .eq('toolId', tool.id)
+
+        return {
+          ...tool,
+          upvoteCount: count || 0,
+          userUpvoted: false, // Will be set by frontend based on user session
+        }
+      })
+    )
+
+    // Sort by upvotes if requested
+    if (sort === 'upvotes') {
+      processedTools.sort((a: any, b: any) => {
+        const aCount = a.upvoteCount || 0
+        const bCount = b.upvoteCount || 0
+        return order === 'desc' ? bCount - aCount : aCount - bCount
+      })
+    }
+
+    return NextResponse.json(processedTools)
   } catch (error) {
     console.error('❌ Error fetching tools:', error)
     console.error('Error type:', error instanceof Error ? error.name : typeof error)

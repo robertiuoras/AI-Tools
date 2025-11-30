@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/select'
 import type { Tool } from '@/lib/supabase'
 
-type SortOption = 'alphabetical' | 'newest' | 'popular' | 'traffic'
+type SortOption = 'alphabetical' | 'newest' | 'popular' | 'traffic' | 'upvotes'
 type SortOrder = 'asc' | 'desc'
 
 export default function HomePage() {
@@ -96,6 +96,7 @@ export default function HomePage() {
                     <SelectItem value="newest">Newest</SelectItem>
                     <SelectItem value="popular">Most Popular</SelectItem>
                     <SelectItem value="traffic">Highest Traffic</SelectItem>
+                    <SelectItem value="upvotes">Most Upvoted</SelectItem>
                   </SelectContent>
                 </Select>
                 <Select

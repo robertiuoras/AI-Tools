@@ -332,9 +332,8 @@ Rules:
 - Revenue: Analyze pricing carefully
 - Visits: Provide number if any indicators exist
 - Tags: Always provide (even if generic)
-- Category: Must match exactly`
-
-Return ONLY valid JSON, no markdown formatting.`
+- Category: Must match exactly
+- Return ONLY valid JSON, no markdown formatting`
 
     console.log('🚀 [OpenAI] ==========================================')
     console.log('🚀 [OpenAI] Making API request to OpenAI...')

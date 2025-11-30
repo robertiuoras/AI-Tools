@@ -1,13 +1,16 @@
 'use client'
 
+import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import Image from 'next/image'
 import Link from 'next/link'
-import { ExternalLink, Star, TrendingUp } from 'lucide-react'
+import { ExternalLink, Star, TrendingUp, ThumbsUp } from 'lucide-react'
 import { Card, CardContent, CardFooter } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { supabase } from '@/lib/supabase'
 import type { Tool } from '@/lib/supabase'
+import type { User as SupabaseUser } from '@supabase/supabase-js'
 
 interface ToolCardProps {
   tool: Tool
@@ -36,6 +39,53 @@ const trafficLabels: Record<string, string> = {
 }
 
 export function ToolCard({ tool, index = 0 }: ToolCardProps) {
+  const [user, setUser] = useState<SupabaseUser | null>(null)
+  const [upvoteCount, setUpvoteCount] = useState(tool.upvoteCount || 0)
+  const [userUpvoted, setUserUpvoted] = useState(tool.userUpvoted || false)
+  const [upvoting, setUpvoting] = useState(false)
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null)
+    })
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null)
+    })
+
+    return () => subscription.unsubscribe()
+  }, [])
+
+  const handleUpvote = async () => {
+    if (!user) {
+      alert('Please log in to upvote tools')
+      return
+    }
+
+    setUpvoting(true)
+    try {
+      const response = await fetch(`/api/tools/${tool.id}/upvote`, {
+        method: userUpvoted ? 'DELETE' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to upvote')
+      }
+
+      const data = await response.json()
+      setUpvoteCount(data.upvoteCount)
+      setUserUpvoted(data.userUpvoted)
+    } catch (error) {
+      console.error('Error upvoting:', error)
+      alert('Failed to upvote. Please try again.')
+    } finally {
+      setUpvoting(false)
+    }
+  }
+
   const formatVisits = (visits?: number | null) => {
     if (!visits) return null
     if (visits >= 1000000) return `${(visits / 1000000).toFixed(1)}M`
@@ -89,6 +139,16 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
           </p>
 
           <div className="flex flex-wrap items-center gap-2 mb-4">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleUpvote}
+              disabled={upvoting || !user}
+              className={`h-8 gap-1.5 ${userUpvoted ? 'text-primary' : ''}`}
+            >
+              <ThumbsUp className={`h-4 w-4 ${userUpvoted ? 'fill-current' : ''}`} />
+              <span className="text-sm font-medium">{upvoteCount}</span>
+            </Button>
             {tool.rating && (
               <div className="flex items-center gap-1.5">
                 <div className="flex items-center gap-0.5">

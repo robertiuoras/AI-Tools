@@ -46,4 +46,32 @@ export interface Tool {
   estimatedVisits: number | null;
   createdAt: string;
   updatedAt: string;
+  upvoteCount?: number; // Added for upvote count
+  userUpvoted?: boolean; // Added to check if current user upvoted
+}
+
+export interface User {
+  id: string;
+  email: string;
+  name: string | null;
+  role: "user" | "admin";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Upvote {
+  id: string;
+  userId: string;
+  toolId: string;
+  createdAt: string;
+}
+
+export interface Comment {
+  id: string;
+  userId: string;
+  toolId: string;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+  user?: User;
 }
