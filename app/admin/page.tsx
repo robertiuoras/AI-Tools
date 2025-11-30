@@ -28,6 +28,7 @@ export default function AdminPage() {
   const [autoSubmitTimer, setAutoSubmitTimer] = useState<NodeJS.Timeout | null>(null)
   const [countdown, setCountdown] = useState<number | null>(null)
   const [countdownInterval, setCountdownInterval] = useState<NodeJS.Timeout | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -83,6 +84,19 @@ export default function AdminPage() {
         return
       }
 
+      // Check for duplicate URL (normalize URL for comparison)
+      const normalizedUrl = formData.url.trim().toLowerCase().replace(/\/$/, '') // Remove trailing slash
+      const existingTool = tools.find(tool => {
+        const existingUrl = tool.url.toLowerCase().replace(/\/$/, '')
+        return existingUrl === normalizedUrl && tool.id !== editingId
+      })
+      
+      if (existingTool) {
+        alert(`A tool with this URL already exists: ${existingTool.name}\n\nPlease edit the existing tool instead.`)
+        setSubmitting(false)
+        return
+      }
+
       // Clean up empty strings and convert to proper types
       const payload: any = {
         name: formData.name.trim(),
@@ -130,6 +144,13 @@ export default function AdminPage() {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
+        // Handle duplicate URL error (409 status)
+        if (response.status === 409) {
+          const errorMessage = errorData.message || 'A tool with this URL already exists'
+          alert(`❌ ${errorMessage}\n\nPlease use a different URL or edit the existing tool.`)
+          setSubmitting(false)
+          return
+        }
         const errorMessage = errorData.details || errorData.error || errorData.message || `HTTP error! status: ${response.status}`
         console.error('API Error:', errorData)
         throw new Error(errorMessage)
@@ -345,6 +366,13 @@ export default function AdminPage() {
 
             if (!response.ok) {
               const errorData = await response.json().catch(() => ({}))
+              // Handle duplicate URL error (409 status)
+              if (response.status === 409) {
+                const errorMessage = errorData.message || 'A tool with this URL already exists'
+                alert(`❌ ${errorMessage}\n\nPlease use a different URL or edit the existing tool.`)
+                setSubmitting(false)
+                return
+              }
               const errorMessage = errorData.details || errorData.error || errorData.message || `HTTP error! status: ${response.status}`
               console.error('API Error:', errorData)
               throw new Error(errorMessage)
@@ -669,12 +697,12 @@ export default function AdminPage() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
+        <Card className="flex flex-col">
+          <CardHeader className="flex-shrink-0">
             <CardTitle>All Tools ({tools.length})</CardTitle>
             <CardDescription>Manage existing tools in the directory</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="flex flex-col flex-1 min-h-0">
             {loading ? (
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-6 w-6 animate-spin" />
@@ -684,8 +712,29 @@ export default function AdminPage() {
                 No tools yet. Add your first tool!
               </p>
             ) : (
-              <div className="space-y-2 max-h-[calc(100vh-300px)] overflow-y-auto pr-2">
-                {tools.map((tool) => (
+              <>
+                <div className="mb-4 flex-shrink-0">
+                  <Input
+                    placeholder="Search tools by name, description, or category..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full"
+                  />
+                </div>
+                <div className="flex-1 overflow-y-auto pr-2 space-y-2 min-h-0">
+                  {tools
+                    .filter((tool) => {
+                      if (!searchQuery.trim()) return true
+                      const query = searchQuery.toLowerCase()
+                      return (
+                        tool.name.toLowerCase().includes(query) ||
+                        tool.description.toLowerCase().includes(query) ||
+                        tool.category.toLowerCase().includes(query) ||
+                        (tool.tags && tool.tags.toLowerCase().includes(query)) ||
+                        tool.url.toLowerCase().includes(query)
+                      )
+                    })
+                    .map((tool) => (
                   <div
                     key={tool.id}
                     className="flex items-start justify-between rounded-lg border p-4 hover:bg-accent/50 transition-colors min-h-[80px]"
@@ -730,8 +779,24 @@ export default function AdminPage() {
                       </Button>
                     </div>
                   </div>
-                ))}
-              </div>
+                    ))}
+                </div>
+                {tools.filter((tool) => {
+                  if (!searchQuery.trim()) return true
+                  const query = searchQuery.toLowerCase()
+                  return (
+                    tool.name.toLowerCase().includes(query) ||
+                    tool.description.toLowerCase().includes(query) ||
+                    tool.category.toLowerCase().includes(query) ||
+                    (tool.tags && tool.tags.toLowerCase().includes(query)) ||
+                    tool.url.toLowerCase().includes(query)
+                  )
+                }).length === 0 && searchQuery.trim() && (
+                  <p className="text-center text-muted-foreground py-8">
+                    No tools match your search.
+                  </p>
+                )}
+              </>
             )}
           </CardContent>
         </Card>

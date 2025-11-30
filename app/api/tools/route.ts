@@ -145,6 +145,32 @@ export async function POST(request: NextRequest) {
 
     console.log('Supabase data:', JSON.stringify(supabaseData, null, 2))
 
+    // Check for duplicate URL before inserting
+    const normalizedUrl = validatedData.url.trim().toLowerCase().replace(/\/$/, '')
+    const { data: existingTools } = await supabaseAdmin
+      .from('tool')
+      .select('id, url')
+      .ilike('url', `%${normalizedUrl}%`)
+    
+    // Check if any existing tool has the same normalized URL
+    if (existingTools && existingTools.length > 0) {
+      const isDuplicate = existingTools.some(t => {
+        const existingNormalized = t.url.toLowerCase().replace(/\/$/, '')
+        return existingNormalized === normalizedUrl
+      })
+      
+      if (isDuplicate) {
+        return NextResponse.json(
+          {
+            error: 'Duplicate URL',
+            message: 'A tool with this URL already exists',
+            details: 'Please use a different URL or edit the existing tool',
+          },
+          { status: 409 }
+        )
+      }
+    }
+
     const { data: tool, error } = await supabaseAdmin
       .from('tool')
       .insert(supabaseData)

@@ -188,15 +188,32 @@ async function analyzeWithAI(
 ): Promise<Partial<AnalysisResult>> {
   const openaiApiKey = process.env.OPENAI_API_KEY
 
+  console.log('🔍 [OpenAI Check] Checking for OpenAI API key...')
+  console.log('🔍 [OpenAI Check] OPENAI_API_KEY exists:', !!openaiApiKey)
+  console.log('🔍 [OpenAI Check] OPENAI_API_KEY length:', openaiApiKey?.length || 0)
+  console.log('🔍 [OpenAI Check] OPENAI_API_KEY starts with:', openaiApiKey?.substring(0, 10) || 'N/A')
+  console.log('🔍 [OpenAI Check] OPENAI_API_KEY format valid:', openaiApiKey?.startsWith('sk-') || false)
+
   if (!openaiApiKey) {
     // Fallback to rule-based analysis if no API key
-    console.log('⚠️ OpenAI API key not found. Using basic analysis. Add OPENAI_API_KEY to .env for better results.')
-    console.log('Current env vars:', Object.keys(process.env).filter(k => k.includes('OPENAI')))
+    console.log('⚠️ [OpenAI] API key not found. Using basic analysis. Add OPENAI_API_KEY to .env for better results.')
+    console.log('⚠️ [OpenAI] Current env vars with OPENAI:', Object.keys(process.env).filter(k => k.includes('OPENAI')))
+    console.log('⚠️ [OpenAI] Environment:', process.env.NODE_ENV)
+    console.log('⚠️ [OpenAI] All env vars (first 20):', Object.keys(process.env).sort().slice(0, 20).join(', '))
+    return analyzeWithoutAI(url, title, description, pricingContent, pageContent)
+  }
+
+  // Validate API key format
+  if (!openaiApiKey.startsWith('sk-')) {
+    console.error('❌ [OpenAI] Invalid API key format. OpenAI API keys should start with "sk-"')
+    console.error('❌ [OpenAI] API key provided starts with:', openaiApiKey.substring(0, 5))
     return analyzeWithoutAI(url, title, description, pricingContent, pageContent)
   }
   
-  console.log('✨ Using AI analysis with OpenAI')
-  console.log('API Key present:', openaiApiKey.substring(0, 7) + '...')
+  console.log('✨ [OpenAI] Using AI analysis with OpenAI')
+  console.log('✨ [OpenAI] API Key present (first 10 chars):', openaiApiKey.substring(0, 10) + '...')
+  console.log('✨ [OpenAI] API Key format: Valid (starts with sk-)')
+  console.log('✨ [OpenAI] Model: gpt-4o-mini')
 
   try {
     const pricingContext = pricingContent 
@@ -259,6 +276,12 @@ IMPORTANT:
 
 Return ONLY valid JSON, no markdown formatting.`
 
+    console.log('🚀 [OpenAI] Making API request to OpenAI...')
+    console.log('🚀 [OpenAI] Request URL:', 'https://api.openai.com/v1/chat/completions')
+    console.log('🚀 [OpenAI] Prompt length:', prompt.length)
+    console.log('🚀 [OpenAI] Pricing content length:', pricingContent.length)
+    console.log('🚀 [OpenAI] Page content length:', pageContent.length)
+
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -280,14 +303,25 @@ Return ONLY valid JSON, no markdown formatting.`
       }),
     })
 
+    console.log('📥 [OpenAI] Response status:', response.status)
+    console.log('📥 [OpenAI] Response ok:', response.ok)
+
     if (!response.ok) {
-      throw new Error('OpenAI API error')
+      const errorText = await response.text()
+      console.error('❌ [OpenAI] API error response:', errorText)
+      throw new Error(`OpenAI API error: ${response.status} - ${errorText}`)
     }
 
     const data = await response.json()
+    console.log('✅ [OpenAI] API response received')
+    console.log('✅ [OpenAI] Response ID:', data.id)
+    console.log('✅ [OpenAI] Model used:', data.model)
+    console.log('✅ [OpenAI] Usage:', JSON.stringify(data.usage, null, 2))
+    
     const content = JSON.parse(data.choices[0].message.content)
+    console.log('✅ [OpenAI] Parsed content:', JSON.stringify(content, null, 2))
 
-    return {
+    const result = {
       name: content.name || title,
       description: content.description || description,
       category: content.category || 'Other',
@@ -297,8 +331,16 @@ Return ONLY valid JSON, no markdown formatting.`
       rating: content.rating || null,
       estimatedVisits: content.estimatedVisits || null,
     }
+    
+    console.log('✅ [OpenAI] Final analysis result:', JSON.stringify(result, null, 2))
+    console.log('✅ [OpenAI] Analysis complete!')
+    
+    return result
   } catch (error) {
-    console.error('AI analysis error:', error)
+    console.error('❌ [OpenAI] AI analysis error:', error)
+    console.error('❌ [OpenAI] Error type:', error instanceof Error ? error.constructor.name : typeof error)
+    console.error('❌ [OpenAI] Error message:', error instanceof Error ? error.message : String(error))
+    console.error('❌ [OpenAI] Falling back to basic analysis...')
     return analyzeWithoutAI(url, title, description, pricingContent, pageContent)
   }
 }
@@ -527,9 +569,12 @@ function extractTags(text: string): string {
 
 export async function POST(request: NextRequest) {
   try {
+    console.log('📋 [Analyze] Starting URL analysis...')
     const { url } = await request.json()
+    console.log('📋 [Analyze] Received URL:', url)
 
     if (!url || typeof url !== 'string') {
+      console.error('❌ [Analyze] Invalid URL provided')
       return NextResponse.json({ error: 'URL is required' }, { status: 400 })
     }
 
@@ -537,14 +582,25 @@ export async function POST(request: NextRequest) {
     let validUrl: URL
     try {
       validUrl = new URL(url.startsWith('http') ? url : `https://${url}`)
+      console.log('✅ [Analyze] Valid URL:', validUrl.toString())
     } catch {
+      console.error('❌ [Analyze] Invalid URL format')
       return NextResponse.json({ error: 'Invalid URL' }, { status: 400 })
     }
 
     // Scrape basic info (including pricing page)
+    console.log('🔍 [Analyze] Scraping website info...')
     const scraped = await scrapeWebsiteInfo(validUrl.toString())
+    console.log('✅ [Analyze] Scraped info:', {
+      title: scraped.title,
+      description: scraped.description?.substring(0, 100),
+      logoUrl: scraped.logoUrl,
+      pricingContentLength: scraped.pricingContent.length,
+      pageContentLength: scraped.pageContent.length,
+    })
 
     // Analyze with AI or fallback
+    console.log('🤖 [Analyze] Starting AI analysis...')
     const analysis = await analyzeWithAI(
       validUrl.toString(),
       scraped.title,
@@ -552,6 +608,7 @@ export async function POST(request: NextRequest) {
       scraped.pricingContent,
       scraped.pageContent
     )
+    console.log('✅ [Analyze] Analysis complete:', JSON.stringify(analysis, null, 2))
 
     const result: AnalysisResult = {
       name: analysis.name || scraped.title || validUrl.hostname.replace('www.', ''),
