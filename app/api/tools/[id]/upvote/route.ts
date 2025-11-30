@@ -39,8 +39,11 @@ export async function POST(
     const userId = session.user.id
     const toolId = params.id
 
+    // Type assertion to work around Proxy type issues
+    const admin = supabaseAdmin as any
+    
     // Check if upvote already exists
-    const { data: existing } = await supabaseAdmin
+    const { data: existing } = await admin
       .from('upvote')
       .select('id')
       .eq('userId', userId)
@@ -55,7 +58,7 @@ export async function POST(
     }
 
     // Create upvote
-    const { error: insertError } = await supabaseAdmin
+    const { error: insertError } = await admin
       .from('upvote')
       .insert([{ userId, toolId }])
 
@@ -68,7 +71,7 @@ export async function POST(
     }
 
     // Get updated upvote count
-    const { count } = await supabaseAdmin
+    const { count } = await admin
       .from('upvote')
       .select('*', { count: 'exact', head: true })
       .eq('toolId', toolId)
@@ -105,8 +108,11 @@ export async function DELETE(
     const userId = session.user.id
     const toolId = params.id
 
+    // Type assertion to work around Proxy type issues
+    const admin = supabaseAdmin as any
+    
     // Delete upvote
-    const { error: deleteError } = await supabaseAdmin
+    const { error: deleteError } = await admin
       .from('upvote')
       .delete()
       .eq('userId', userId)
@@ -121,7 +127,7 @@ export async function DELETE(
     }
 
     // Get updated upvote count
-    const { count } = await supabaseAdmin
+    const { count } = await admin
       .from('upvote')
       .select('*', { count: 'exact', head: true })
       .eq('toolId', toolId)
