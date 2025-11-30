@@ -22,6 +22,21 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 // Only create this on the server side to avoid exposing the service role key to the client
 let supabaseAdminInstance: ReturnType<typeof createClient> | null = null;
 
+function createSupabaseAdmin() {
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  
+  if (!supabaseServiceKey) {
+    throw new Error("SUPABASE_SERVICE_ROLE_KEY environment variable is not set");
+  }
+
+  return createClient(supabaseUrl!, supabaseServiceKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  });
+}
+
 export const supabaseAdmin = (() => {
   // Only create admin client on server side
   if (typeof window !== 'undefined') {
@@ -30,23 +45,12 @@ export const supabaseAdmin = (() => {
       get() {
         throw new Error('supabaseAdmin can only be used on the server side. Make sure you are importing it in a server component or API route.');
       },
-    });
+    }) as ReturnType<typeof createClient>;
   }
 
   // Server-side: create the admin client
   if (!supabaseAdminInstance) {
-    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    
-    if (!supabaseServiceKey) {
-      throw new Error("SUPABASE_SERVICE_ROLE_KEY environment variable is not set");
-    }
-
-    supabaseAdminInstance = createClient(supabaseUrl!, supabaseServiceKey, {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false,
-      },
-    });
+    supabaseAdminInstance = createSupabaseAdmin();
   }
 
   return supabaseAdminInstance;

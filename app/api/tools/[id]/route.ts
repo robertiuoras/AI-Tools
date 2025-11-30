@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { toolSchema } from '@/lib/schemas'
+import { createClient } from '@supabase/supabase-js'
 
 export async function GET(
   request: NextRequest,
@@ -36,7 +37,7 @@ export async function PUT(
     const validatedData = toolSchema.parse(body)
 
     // Prepare data for Supabase - handle null values
-    const updateData = {
+    const updateData: Record<string, any> = {
       name: validatedData.name,
       description: validatedData.description,
       url: validatedData.url,
@@ -48,9 +49,9 @@ export async function PUT(
       rating: validatedData.rating ?? null,
       estimatedVisits: validatedData.estimatedVisits ?? null,
       updatedAt: new Date().toISOString(), // Update timestamp
-    } as Record<string, any>
+    }
 
-    const { data: tool, error } = await supabaseAdmin
+    const { data: tool, error } = await (supabaseAdmin as ReturnType<typeof createClient>)
       .from('tool')
       .update(updateData)
       .eq('id', params.id)
