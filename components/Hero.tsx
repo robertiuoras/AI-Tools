@@ -43,9 +43,9 @@ export function Hero() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ duration: 0.5, delay: 0.3 }}
-            className="mt-8 flex items-center justify-center gap-2 text-sm text-white/80"
+            className="mt-8 flex items-center justify-center gap-2 text-base text-white/80"
           >
-            <span>Built by</span>
+            <span className="text-lg">Built by</span>
             <a
               href="https://taskdriver.ai"
               target="_blank"
@@ -53,13 +53,13 @@ export function Hero() {
               className="flex items-center gap-2 transition-opacity hover:opacity-80"
             >
               <Image
-                src="/whiteicon.png"
+                src="/whiteiconbgremove.png"
                 alt="TaskDriver"
-                width={20}
-                height={20}
-                className="h-5 w-5"
+                width={24}
+                height={24}
+                className="h-6 w-6"
               />
-              <span className="font-medium text-white">taskdriver.ai</span>
+              <span className="text-lg font-medium text-white">TaskDriver.ai</span>
             </a>
           </motion.div>
         </motion.div>

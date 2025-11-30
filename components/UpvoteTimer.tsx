@@ -45,12 +45,17 @@ export function UpvoteTimer() {
         <div className="flex items-center gap-2 text-sm">
           <Clock className="h-4 w-4 text-muted-foreground" />
           <div className="flex flex-col gap-1">
-            <span className="text-muted-foreground">
-              Daily reset:{" "}
-              <span className="font-medium text-foreground">
-                {timeUntilReset}
+            <div className="flex flex-col gap-0.5">
+              <span className="text-xs font-semibold text-foreground uppercase tracking-wide">
+                Upvotes
               </span>
-            </span>
+              <span className="text-muted-foreground">
+                Daily reset:{" "}
+                <span className="font-medium text-foreground">
+                  {timeUntilReset}
+                </span>
+              </span>
+            </div>
             <span className="text-muted-foreground">
               Monthly reset:{" "}
               <span className="font-medium text-foreground">
