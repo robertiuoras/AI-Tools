@@ -1,5 +1,8 @@
-import { PrismaClient } from '@prisma/client'
 import { NextResponse } from 'next/server'
+import { supabaseAdmin } from '@/lib/supabase'
+
+// Mark this route as dynamic
+export const dynamic = 'force-dynamic'
 
 export async function GET() {
   try {
@@ -22,24 +25,20 @@ export async function GET() {
       }
     }
     
-    // Create a fresh Prisma client to test connection
-    const testPrisma = new PrismaClient({
-      datasources: {
-        db: {
-          url: process.env.DATABASE_URL,
-        },
-      },
-    })
+    // Test Supabase connection
+    const admin = supabaseAdmin as any
     
-    // Try to connect with timeout
-    const count = await Promise.race([
-      testPrisma.tool.count(),
-      new Promise((_, reject) => 
+    // Try to query with timeout
+    const { count, error } = await Promise.race([
+      admin.from('tool').select('*', { count: 'exact', head: true }),
+      new Promise<{ count: null; error: Error }>((_, reject) => 
         setTimeout(() => reject(new Error('Connection timeout after 10 seconds')), 10000)
       ),
-    ]) as number
+    ]) as { count: number | null; error?: any }
     
-    await testPrisma.$disconnect()
+    if (error) {
+      throw error
+    }
     
     return NextResponse.json({ 
       success: true,

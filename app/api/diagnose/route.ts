@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server'
 
+// Mark this route as dynamic
+export const dynamic = 'force-dynamic'
+
 export async function GET() {
   const diagnostics: any = {
     timestamp: new Date().toISOString(),
@@ -29,27 +32,30 @@ export async function GET() {
     }
   }
 
-  // Check 3: Try to import Prisma (will fail if DATABASE_URL is wrong at build time)
+  // Check 3: Try Supabase connection (we're using Supabase API now, not Prisma)
   try {
-    const { prisma } = await import('@/lib/db')
-    diagnostics.checks.prismaImport = 'success'
+    const { supabaseAdmin } = await import('@/lib/supabase')
+    diagnostics.checks.supabaseImport = 'success'
     
     // Check 4: Try actual connection
     try {
-      await prisma.$connect()
-      diagnostics.checks.connection = 'success'
+      const admin = supabaseAdmin as any
+      const { data, error } = await admin.from('tool').select('id').limit(1)
       
-      // Try a simple query
-      try {
-        const count = await prisma.tool.count()
+      if (error) {
+        diagnostics.checks.connection = 'failed'
+        diagnostics.checks.connectionError = error.message
+        diagnostics.checks.connectionErrorCode = error.code
+      } else {
+        diagnostics.checks.connection = 'success'
         diagnostics.checks.query = 'success'
-        diagnostics.checks.toolCount = count
-      } catch (queryError: any) {
-        diagnostics.checks.query = 'failed'
-        diagnostics.checks.queryError = queryError.message
+        
+        // Get count
+        const { count } = await admin
+          .from('tool')
+          .select('*', { count: 'exact', head: true })
+        diagnostics.checks.toolCount = count || 0
       }
-      
-      await prisma.$disconnect()
     } catch (connError: any) {
       diagnostics.checks.connection = 'failed'
       diagnostics.checks.connectionError = connError.message
@@ -57,7 +63,7 @@ export async function GET() {
       diagnostics.checks.connectionErrorName = connError.name
     }
   } catch (importError: any) {
-    diagnostics.checks.prismaImport = 'failed'
+    diagnostics.checks.supabaseImport = 'failed'
     diagnostics.checks.importError = importError.message
   }
 

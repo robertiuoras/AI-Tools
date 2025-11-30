@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useState, useEffect, useCallback, Suspense } from 'react'
+import { useRouter } from 'next/navigation'
 import { Hero } from '@/components/Hero'
 import { ToolCard } from '@/components/ToolCard'
 import { SearchBar } from '@/components/SearchBar'
@@ -19,9 +19,8 @@ import type { Tool } from '@/lib/supabase'
 type SortOption = 'alphabetical' | 'newest' | 'popular' | 'traffic' | 'upvotes'
 type SortOrder = 'asc' | 'desc'
 
-export default function HomePage() {
+function HomePageContent() {
   const router = useRouter()
-  const searchParams = useSearchParams()
   const [tools, setTools] = useState<Tool[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -208,6 +207,23 @@ export default function HomePage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function HomePage() {
+  return (
+    <Suspense fallback={
+      <div className="flex min-h-screen flex-col">
+        <Hero />
+        <div className="container mx-auto px-4 py-8">
+          <div className="flex items-center justify-center py-16">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+          </div>
+        </div>
+      </div>
+    }>
+      <HomePageContent />
+    </Suspense>
   )
 }
 
