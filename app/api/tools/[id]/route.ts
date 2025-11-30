@@ -36,7 +36,7 @@ export async function PUT(
     const validatedData = toolSchema.parse(body)
 
     // Prepare data for Supabase - handle null values
-    const updateData: any = {
+    const updateData = {
       name: validatedData.name,
       description: validatedData.description,
       url: validatedData.url,
@@ -48,7 +48,7 @@ export async function PUT(
       rating: validatedData.rating ?? null,
       estimatedVisits: validatedData.estimatedVisits ?? null,
       updatedAt: new Date().toISOString(), // Update timestamp
-    }
+    } as Record<string, any>
 
     const { data: tool, error } = await supabaseAdmin
       .from('tool')
