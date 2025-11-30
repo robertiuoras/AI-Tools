@@ -22,8 +22,8 @@ async function fetchPricingInfo(baseUrl: string): Promise<string> {
     const pricingPaths = ['/pricing', '/plans', '/prices', '/subscribe', '/purchase', '/buy']
     
     for (const path of pricingPaths) {
+      const pricingUrl = `${urlObj.origin}${path}`
       try {
-        const pricingUrl = `${urlObj.origin}${path}`
         console.log('🔍 [Pricing] Trying:', pricingUrl)
         const response = await fetch(pricingUrl, {
           headers: {
