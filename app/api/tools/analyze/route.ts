@@ -301,6 +301,8 @@ function analyzeWithoutAI(
     traffic = 'medium'
   } else if (combined.includes('users') || combined.includes('active')) {
     traffic = 'medium'
+  } else if (combined.includes('small') || combined.includes('new') || combined.includes('startup')) {
+    traffic = 'low'
   }
 
   // Estimate rating (very basic, AI would do better)
@@ -330,12 +332,17 @@ function analyzeWithoutAI(
     } else if (unit.includes('thousand') || unit.includes('k')) {
       estimatedVisits = Math.round(num * 1000)
     }
-  } else if (traffic === 'high') {
-    estimatedVisits = 1000000 // Default high traffic estimate
-  } else if (traffic === 'medium') {
-    estimatedVisits = 100000 // Default medium traffic estimate
-  } else if (traffic === 'low') {
-    estimatedVisits = 10000 // Default low traffic estimate
+  }
+  
+  // Set default estimates based on traffic level
+  if (estimatedVisits === null) {
+    if (traffic === 'high') {
+      estimatedVisits = 1000000
+    } else if (traffic === 'medium') {
+      estimatedVisits = 100000
+    } else if (traffic === 'low') {
+      estimatedVisits = 10000
+    }
   }
 
   return {
