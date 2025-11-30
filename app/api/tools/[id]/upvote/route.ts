@@ -103,13 +103,7 @@ export async function POST(
     }
 
     // Get updated upvote count (only from current month)
-    const monthStart = new Date(
-      new Date().getFullYear(),
-      new Date().getMonth(),
-      1
-    )
-      .toISOString()
-      .split("T")[0];
+    // Reuse monthStart variable defined above
     const { count } = await admin
       .from("upvote")
       .select("*", { count: "exact", head: true })
