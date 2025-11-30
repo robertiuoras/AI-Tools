@@ -7,6 +7,7 @@ const globalForPrisma = globalThis as unknown as {
 // Validate DATABASE_URL
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
+  console.error('❌ DATABASE_URL environment variable is not set')
   throw new Error('DATABASE_URL environment variable is not set')
 }
 
@@ -14,10 +15,16 @@ if (!databaseUrl) {
 const cleanDatabaseUrl = databaseUrl.trim().replace(/^["']|["']$/g, '')
 
 if (!cleanDatabaseUrl.startsWith('postgresql://') && !cleanDatabaseUrl.startsWith('postgres://')) {
+  console.error('❌ Invalid DATABASE_URL format:', cleanDatabaseUrl.substring(0, 50))
   throw new Error(
     `Invalid DATABASE_URL: must start with postgresql:// or postgres://. Got: ${cleanDatabaseUrl.substring(0, 20)}...`
   )
 }
+
+// Log connection info (without password)
+const urlObj = new URL(cleanDatabaseUrl)
+const safeUrl = `${urlObj.protocol}//${urlObj.username}@${urlObj.hostname}:${urlObj.port}${urlObj.pathname}${urlObj.search}`
+console.log('🔌 Database connection:', safeUrl)
 
 export const prisma =
   globalForPrisma.prisma ??
