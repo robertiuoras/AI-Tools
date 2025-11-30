@@ -15,8 +15,11 @@ export async function GET(request: NextRequest) {
     }
 
     if (data.user) {
+      // Type assertion to work around Proxy type issues
+      const admin = supabaseAdmin as any
+      
       // Check if user exists in database, if not create them
-      const { data: existingUser } = await supabaseAdmin
+      const { data: existingUser } = await admin
         .from('user')
         .select('id')
         .eq('id', data.user.id)
@@ -24,7 +27,7 @@ export async function GET(request: NextRequest) {
 
       if (!existingUser) {
         // Create user record
-        await supabaseAdmin.from('user').insert([
+        await admin.from('user').insert([
           {
             id: data.user.id,
             email: data.user.email!,
