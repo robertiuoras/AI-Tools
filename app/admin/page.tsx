@@ -14,12 +14,14 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { useToast } from '@/components/ui/toaster'
 import { categories } from '@/lib/schemas'
 import type { Tool } from '@/lib/supabase'
 import { Loader2, Plus, Trash2, Edit2, Sparkles } from 'lucide-react'
 
 export default function AdminPage() {
   const router = useRouter()
+  const { addToast } = useToast()
   const [tools, setTools] = useState<Tool[]>([])
   const [loading, setLoading] = useState(true)
   const [authLoading, setAuthLoading] = useState(true)
@@ -64,7 +66,11 @@ export default function AdminPage() {
         .single()
 
       if (error || !userData || userData.role !== 'admin') {
-        alert('Access denied. Admin role required.')
+        addToast({
+          variant: 'error',
+          title: 'Access Denied',
+          description: 'Admin role required to access this page.',
+        })
         router.push('/')
         return
       }
@@ -96,7 +102,11 @@ export default function AdminPage() {
     try {
       // Validate required fields
       if (!formData.name || !formData.description || !formData.url || !formData.category) {
-        alert('Please fill in all required fields: Name, Description, URL, and Category')
+        addToast({
+          variant: 'warning',
+          title: 'Missing Required Fields',
+          description: 'Please fill in all required fields: Name, Description, URL, and Category',
+        })
         setSubmitting(false)
         return
       }
@@ -109,7 +119,11 @@ export default function AdminPage() {
       })
       
       if (existingTool) {
-        alert(`A tool with this URL already exists: ${existingTool.name}\n\nPlease edit the existing tool instead.`)
+        addToast({
+          variant: 'warning',
+          title: 'Duplicate URL',
+          description: `A tool with this URL already exists: ${existingTool.name}. Please edit the existing tool instead.`,
+        })
         setSubmitting(false)
         return
       }
@@ -164,7 +178,11 @@ export default function AdminPage() {
         // Handle duplicate URL error (409 status)
         if (response.status === 409) {
           const errorMessage = errorData.message || 'A tool with this URL already exists'
-          alert(`❌ ${errorMessage}\n\nPlease use a different URL or edit the existing tool.`)
+          addToast({
+            variant: 'error',
+            title: 'Duplicate URL',
+            description: `${errorMessage}. Please use a different URL or edit the existing tool.`,
+          })
           setSubmitting(false)
           return
         }
@@ -220,13 +238,21 @@ export default function AdminPage() {
       fetchTools()
     } catch (error) {
       console.error('Error deleting tool:', error)
-      alert('Failed to delete tool. Please try again.')
+      addToast({
+        variant: 'error',
+        title: 'Failed to Delete Tool',
+        description: 'Please try again.',
+      })
     }
   }
 
   const handleQuickAdd = async () => {
     if (!quickAddUrl.trim()) {
-      alert('Please enter a URL')
+      addToast({
+        variant: 'warning',
+        title: 'URL Required',
+        description: 'Please enter a URL to analyze.',
+      })
       return
     }
 
@@ -376,7 +402,11 @@ export default function AdminPage() {
             const errorData = await response.json().catch(() => ({}))
             if (response.status === 409) {
               const errorMessage = errorData.message || 'A tool with this URL already exists'
-              alert(`❌ ${errorMessage}\n\nPlease use a different URL or edit the existing tool.`)
+              addToast({
+                variant: 'error',
+                title: 'Duplicate URL',
+                description: `${errorMessage}. Please use a different URL or edit the existing tool.`,
+              })
               setSubmitting(false)
               setIsProcessing(false)
               return
@@ -390,7 +420,11 @@ export default function AdminPage() {
         } catch (error) {
           console.error('Error saving tool:', error)
           const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
-          alert(`Failed to save tool: ${errorMessage}`)
+          addToast({
+            variant: 'error',
+            title: 'Failed to Save Tool',
+            description: errorMessage,
+          })
         } finally {
           setSubmitting(false)
           setIsProcessing(false)
@@ -402,11 +436,33 @@ export default function AdminPage() {
       
       // Show user-friendly error messages
       if (errorMessage.includes('429') || errorMessage.includes('Rate Limit') || errorMessage.includes('rate limit') || errorMessage.includes('Too Many Requests')) {
-        alert(`⚠️ Rate Limit Reached\n\n${errorMessage}\n\nI've already retried 3 times with increasing delays.\n\nPlease wait a few minutes before trying again, or:\n- Add a payment method to increase your OpenAI limits\n- Fill in the form manually\n- Try using the bulk add feature (it has better rate limit handling)`)
+        addToast({
+          variant: 'error',
+          title: 'Rate Limit Reached',
+          description: `${errorMessage}. I've already retried 3 times. Please wait a few minutes, add payment to increase limits, or fill the form manually.`,
+          duration: 8000,
+        })
       } else if (errorMessage.includes('API key')) {
-        alert(`⚠️ OpenAI API Key Issue\n\n${errorMessage}\n\nPlease check your OPENAI_API_KEY in Vercel environment variables.`)
+        addToast({
+          variant: 'error',
+          title: 'OpenAI API Key Issue',
+          description: `${errorMessage}. Please check your OPENAI_API_KEY in Vercel environment variables.`,
+          duration: 8000,
+        })
+      } else if (errorMessage.includes('scrape') || errorMessage.includes('Failed to scrape')) {
+        addToast({
+          variant: 'warning',
+          title: 'Website Scraping Failed',
+          description: `Could not fetch website content for ${quickAddUrl}. The website may be blocking requests or unreachable. You can still fill the form manually.`,
+          duration: 6000,
+        })
       } else {
-        alert(`Failed to analyze URL: ${errorMessage}\n\nPlease fill in the form manually.`)
+        addToast({
+          variant: 'error',
+          title: 'Failed to Analyze URL',
+          description: `${errorMessage}. Please fill in the form manually.`,
+          duration: 6000,
+        })
       }
       
       setIsProcessing(false)
@@ -437,7 +493,11 @@ export default function AdminPage() {
       .filter((url): url is string => url !== null)
     
     if (urls.length === 0) {
-      alert('Please enter at least one valid URL (one per line). URLs can be with or without https://')
+      addToast({
+        variant: 'warning',
+        title: 'No Valid URLs',
+        description: 'Please enter at least one valid URL (one per line). URLs can be with or without https://',
+      })
       return
     }
 
@@ -497,7 +557,14 @@ export default function AdminPage() {
         
         if (!response || !response.ok) {
           const errorMessage = lastError || `HTTP ${response?.status || 'Unknown'}`
-          errors.push(`${url}: ${errorMessage}`)
+          // Better error messages
+          if (errorMessage.includes('scrape') || errorMessage.includes('Failed to scrape')) {
+            errors.push(`${url}: Website could not be accessed (may be blocking requests)`)
+          } else if (errorMessage.includes('429') || errorMessage.includes('Rate Limit')) {
+            errors.push(`${url}: Rate limit reached (retried 3 times)`)
+          } else {
+            errors.push(`${url}: ${errorMessage}`)
+          }
           errorCount++
           continue
         }
@@ -553,11 +620,27 @@ export default function AdminPage() {
     setBulkProgress({ current: 0, total: 0, currentUrl: '' })
 
     // Show summary
-    const summary = `Bulk add complete!\n\n✅ Success: ${successCount}\n❌ Errors: ${errorCount}`
-    if (errors.length > 0) {
-      alert(`${summary}\n\nErrors:\n${errors.slice(0, 10).join('\n')}${errors.length > 10 ? `\n... and ${errors.length - 10} more` : ''}`)
-    } else {
-      alert(summary)
+    if (successCount > 0 && errorCount === 0) {
+      addToast({
+        variant: 'success',
+        title: 'Bulk Add Complete',
+        description: `Successfully added ${successCount} tool${successCount !== 1 ? 's' : ''}!`,
+        duration: 5000,
+      })
+    } else if (errorCount > 0 && successCount === 0) {
+      addToast({
+        variant: 'error',
+        title: 'Bulk Add Failed',
+        description: `Failed to add ${errorCount} tool${errorCount !== 1 ? 's' : ''}. ${errors.slice(0, 2).join('; ')}${errors.length > 2 ? ` and ${errors.length - 2} more` : ''}`,
+        duration: 8000,
+      })
+    } else if (errorCount > 0) {
+      addToast({
+        variant: 'warning',
+        title: 'Bulk Add Partially Complete',
+        description: `Added ${successCount} tool${successCount !== 1 ? 's' : ''}, but ${errorCount} failed. ${errors.slice(0, 2).join('; ')}${errors.length > 2 ? ` and ${errors.length - 2} more` : ''}`,
+        duration: 8000,
+      })
     }
   }
 

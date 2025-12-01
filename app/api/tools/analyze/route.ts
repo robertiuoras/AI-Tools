@@ -500,10 +500,38 @@ export async function POST(request: NextRequest) {
       })
     } catch (error) {
       console.error('❌ [Analyze] Error scraping website:', error)
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      
+      // Provide helpful error message
+      if (errorMessage.includes('timeout') || errorMessage.includes('aborted')) {
+        return NextResponse.json({
+          error: 'Website request timed out. The website may be slow or unreachable.',
+          details: errorMessage,
+          suggestion: 'Try again later or fill in the form manually.'
+        }, { status: 408 })
+      }
+      
+      if (errorMessage.includes('Failed to fetch') || errorMessage.includes('network') || errorMessage.includes('ECONNREFUSED') || errorMessage.includes('ENOTFOUND')) {
+        return NextResponse.json({
+          error: 'Could not reach the website. The URL may be invalid or the site may be down.',
+          details: errorMessage,
+          suggestion: 'Check the URL and try again, or fill in the form manually.'
+        }, { status: 503 })
+      }
+      
+      // For CORS or blocking errors, provide more context
+      if (errorMessage.includes('CORS') || errorMessage.includes('blocked')) {
+        return NextResponse.json({
+          error: 'Website is blocking automated requests. This is common for some sites.',
+          details: errorMessage,
+          suggestion: 'Please fill in the form manually with the tool information.'
+        }, { status: 403 })
+      }
+      
       return NextResponse.json({
-        error: 'Failed to scrape website',
-        details: error instanceof Error ? error.message : String(error),
-        suggestion: 'The website may be blocking requests or unreachable. Try again or fill the form manually.'
+        error: 'Could not access website content. The site may require authentication or block automated requests.',
+        details: errorMessage,
+        suggestion: 'Please fill in the form manually with the tool information.'
       }, { status: 500 })
     }
 
