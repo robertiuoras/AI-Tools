@@ -108,8 +108,8 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, delay: index * 0.05 }}
     >
-      <Card className="group relative h-full overflow-hidden border-border/50 bg-card transition-all duration-300 hover:border-primary/50 hover:shadow-lg hover:shadow-primary/10 dark:hover:shadow-primary/20">
-        <CardContent className="p-6">
+      <Card className="group relative flex h-full flex-col overflow-hidden border-border/50 bg-card transition-all duration-300 hover:border-primary/50 hover:shadow-lg hover:shadow-primary/10 dark:hover:shadow-primary/20">
+        <CardContent className="flex flex-1 flex-col p-6">
           <div className="mb-4 flex items-start justify-between">
             <div className="flex items-center gap-3">
               {tool.logoUrl ? (
@@ -145,11 +145,11 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
             </div>
           </div>
 
-          <p className="mb-4 line-clamp-2 text-sm text-muted-foreground">
+          <p className="mb-4 flex-1 line-clamp-2 text-sm text-muted-foreground">
             {tool.description}
           </p>
 
-          <div className="flex flex-wrap items-center gap-2 mb-4">
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="ghost"
               size="sm"
@@ -166,17 +166,31 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
               <div className="flex items-center gap-1.5">
                 <div className="flex items-center gap-0.5">
                   {[1, 2, 3, 4, 5].map((star) => {
-                    // Show filled star if rating is >= star value
-                    const filled = tool.rating! >= star;
+                    const rating = tool.rating!;
+                    // Calculate how much of this star should be filled
+                    const fillAmount = Math.max(0, Math.min(1, rating - (star - 1)));
+                    const isFilled = fillAmount >= 1;
+                    const isHalfFilled = fillAmount >= 0.5 && fillAmount < 1;
+                    const isEmpty = fillAmount < 0.5;
+                    
                     return (
-                      <Star
-                        key={star}
-                        className={`h-3.5 w-3.5 transition-colors ${
-                          filled
-                            ? "fill-yellow-400 text-yellow-400"
-                            : "fill-transparent text-yellow-200 dark:text-yellow-900"
-                        }`}
-                      />
+                      <div key={star} className="relative inline-flex">
+                        {/* Background star (always empty) */}
+                        <Star
+                          className={`h-3.5 w-3.5 text-yellow-200 dark:text-yellow-900/30 ${
+                            isEmpty ? "fill-transparent" : ""
+                          }`}
+                        />
+                        {/* Filled star overlay */}
+                        {!isEmpty && (
+                          <div
+                            className="absolute inset-0 overflow-hidden"
+                            style={{ width: `${fillAmount * 100}%` }}
+                          >
+                            <Star className="h-3.5 w-3.5 fill-yellow-400 text-yellow-400" />
+                          </div>
+                        )}
+                      </div>
                     );
                   })}
                 </div>
@@ -204,7 +218,7 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
           </div>
         </CardContent>
 
-        <CardFooter className="border-t border-border/50 p-4 pt-0">
+        <CardFooter className="mt-auto border-t border-border/50 p-4">
           <Button
             asChild
             variant="ghost"

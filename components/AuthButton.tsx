@@ -13,11 +13,13 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Loader2, LogIn, LogOut, User, Mail } from 'lucide-react'
+import { Loader2, LogIn, LogOut, User, Mail, Shield } from 'lucide-react'
 import type { User as SupabaseUser } from '@supabase/supabase-js'
+import Link from 'next/link'
 
 export function AuthButton() {
   const [user, setUser] = useState<SupabaseUser | null>(null)
+  const [isAdmin, setIsAdmin] = useState(false)
   const [loading, setLoading] = useState(true)
   const [showLogin, setShowLogin] = useState(false)
   const [showSignUp, setShowSignUp] = useState(false)
@@ -33,7 +35,7 @@ export function AuthButton() {
       setUser(session?.user ?? null)
       setLoading(false)
 
-      // Ensure user record exists in database
+      // Ensure user record exists in database and check admin role
       if (session?.user) {
         try {
           const response = await fetch('/api/user/ensure', {
@@ -46,6 +48,18 @@ export function AuthButton() {
 
           if (!response.ok) {
             console.error('Failed to ensure user record exists')
+          }
+
+          // Check admin role
+          const roleResponse = await fetch('/api/auth/check', {
+            headers: {
+              'Authorization': `Bearer ${session.access_token}`,
+            },
+          })
+
+          if (roleResponse.ok) {
+            const roleData = await roleResponse.json()
+            setIsAdmin(roleData.role === 'admin')
           }
         } catch (err) {
           console.error('Error ensuring user record:', err)
@@ -59,7 +73,7 @@ export function AuthButton() {
     } = supabase.auth.onAuthStateChange(async (_event, session) => {
       setUser(session?.user ?? null)
 
-      // Ensure user record exists when auth state changes
+      // Ensure user record exists when auth state changes and check admin role
       if (session?.user) {
         try {
           const response = await fetch('/api/user/ensure', {
@@ -73,9 +87,23 @@ export function AuthButton() {
           if (!response.ok) {
             console.error('Failed to ensure user record exists')
           }
+
+          // Check admin role
+          const roleResponse = await fetch('/api/auth/check', {
+            headers: {
+              'Authorization': `Bearer ${session.access_token}`,
+            },
+          })
+
+          if (roleResponse.ok) {
+            const roleData = await roleResponse.json()
+            setIsAdmin(roleData.role === 'admin')
+          }
         } catch (err) {
           console.error('Error ensuring user record:', err)
         }
+      } else {
+        setIsAdmin(false)
       }
     })
 
@@ -211,6 +239,14 @@ export function AuthButton() {
   if (user) {
     return (
       <div className="flex items-center gap-2">
+        {isAdmin && (
+          <Button variant="ghost" size="sm" asChild>
+            <Link href="/admin">
+              <Shield className="h-4 w-4 mr-2" />
+              Admin
+            </Link>
+          </Button>
+        )}
         <span className="text-sm text-muted-foreground hidden sm:inline">
           {user.email}
         </span>
