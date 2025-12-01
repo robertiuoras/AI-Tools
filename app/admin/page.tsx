@@ -27,10 +27,10 @@ export default function AdminPage() {
   const [submitting, setSubmitting] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
   const [quickAddUrl, setQuickAddUrl] = useState('')
+  const [bulkUrls, setBulkUrls] = useState('')
+  const [bulkProcessing, setBulkProcessing] = useState(false)
+  const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0, currentUrl: '' })
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [autoSubmitTimer, setAutoSubmitTimer] = useState<NodeJS.Timeout | null>(null)
-  const [countdown, setCountdown] = useState<number | null>(null)
-  const [countdownInterval, setCountdownInterval] = useState<NodeJS.Timeout | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [isProcessing, setIsProcessing] = useState(false)
   const [formData, setFormData] = useState({
@@ -91,20 +91,6 @@ export default function AdminPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    
-    // Clear auto-submit timer if it exists (user submitted manually)
-    if (autoSubmitTimer) {
-      clearTimeout(autoSubmitTimer)
-      setAutoSubmitTimer(null)
-    }
-    
-    // Clear countdown
-    if (countdownInterval) {
-      clearInterval(countdownInterval)
-      setCountdownInterval(null)
-    }
-    setCountdown(null)
-    
     setSubmitting(true)
 
     try {
@@ -320,150 +306,69 @@ export default function AdminPage() {
       // Silently fill the form - no popup
       window.scrollTo({ top: 0, behavior: 'smooth' })
       
-      // Auto-submit after 3 seconds for quick bulk adding
-      // Clear any existing timer first
-      if (autoSubmitTimer) {
-        clearTimeout(autoSubmitTimer)
-        setAutoSubmitTimer(null)
+      // Auto-submit immediately (no cooldown)
+      if (data.name && data.description && data.url && data.category && !editingId) {
+        const payload: any = {
+          name: data.name.trim(),
+          description: data.description.trim(),
+          url: data.url.trim(),
+          category: data.category,
+        }
+
+        // Optional fields
+        if (data.logoUrl && data.logoUrl.trim()) {
+          payload.logoUrl = data.logoUrl.trim()
+        }
+        if (data.tags && data.tags.trim()) {
+          payload.tags = data.tags.trim()
+        }
+        if (data.traffic && data.traffic.trim()) {
+          payload.traffic = data.traffic
+        }
+        if (data.revenue && data.revenue.trim()) {
+          payload.revenue = data.revenue
+        }
+        if (data.rating !== null && data.rating !== undefined) {
+          payload.rating = data.rating
+        }
+        if (data.estimatedVisits !== null && data.estimatedVisits !== undefined) {
+          payload.estimatedVisits = data.estimatedVisits
+        }
+
+        // Submit immediately
+        setSubmitting(true)
+        setIsProcessing(true)
+        try {
+          const response = await fetch('/api/tools', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          })
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}))
+            if (response.status === 409) {
+              const errorMessage = errorData.message || 'A tool with this URL already exists'
+              alert(`❌ ${errorMessage}\n\nPlease use a different URL or edit the existing tool.`)
+              setSubmitting(false)
+              setIsProcessing(false)
+              return
+            }
+            const errorMessage = errorData.details || errorData.error || errorData.message || `HTTP error! status: ${response.status}`
+            throw new Error(errorMessage)
+          }
+
+          await fetchTools()
+          resetForm()
+        } catch (error) {
+          console.error('Error saving tool:', error)
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
+          alert(`Failed to save tool: ${errorMessage}`)
+        } finally {
+          setSubmitting(false)
+          setIsProcessing(false)
+        }
       }
-      
-      // Start countdown
-      setCountdown(3)
-      let currentCountdown = 3
-      const interval = setInterval(() => {
-        currentCountdown -= 1
-        if (currentCountdown <= 0) {
-          clearInterval(interval)
-          setCountdownInterval(null)
-          setCountdown(null)
-        } else {
-          setCountdown(currentCountdown)
-        }
-      }, 1000)
-      setCountdownInterval(interval)
-      
-      // Store the form data that was just set (for the timer closure)
-      const formDataToSubmit = {
-        name: data.name || '',
-        description: data.description || '',
-        url: data.url || quickAddUrl,
-        logoUrl: data.logoUrl || '',
-        category: data.category || 'Other',
-        tags: data.tags || '',
-        traffic: data.traffic || '',
-        revenue: data.revenue || '',
-        rating: data.rating !== null && data.rating !== undefined ? data.rating.toString() : '',
-        estimatedVisits: data.estimatedVisits !== null && data.estimatedVisits !== undefined ? data.estimatedVisits.toString() : '',
-      }
-      
-      const timer = setTimeout(async () => {
-        // Clear countdown when timer fires
-        if (countdownInterval) {
-          clearInterval(countdownInterval)
-          setCountdownInterval(null)
-        }
-        setCountdown(null)
-        
-        // Validate required fields before auto-submitting
-        // Use the stored form data, not the closure's data variable
-        if (formDataToSubmit.name && formDataToSubmit.description && formDataToSubmit.url && formDataToSubmit.category && !editingId) {
-          // Temporarily set formData to ensure handleSubmit has the right data
-          // Since state updates are async, we'll use the stored data directly
-          const currentFormData = formDataToSubmit
-          
-          // Create payload from the stored form data
-          const payload: any = {
-            name: currentFormData.name.trim(),
-            description: currentFormData.description.trim(),
-            url: currentFormData.url.trim(),
-            category: currentFormData.category,
-          }
-
-          // Optional fields - only include if they have values
-          if (currentFormData.logoUrl && currentFormData.logoUrl.trim()) {
-            payload.logoUrl = currentFormData.logoUrl.trim()
-          }
-          if (currentFormData.tags && currentFormData.tags.trim()) {
-            payload.tags = currentFormData.tags.trim()
-          }
-          if (currentFormData.traffic && currentFormData.traffic.trim()) {
-            payload.traffic = currentFormData.traffic
-          }
-          if (currentFormData.revenue && currentFormData.revenue.trim()) {
-            payload.revenue = currentFormData.revenue
-          }
-          if (currentFormData.rating && currentFormData.rating.trim()) {
-            const ratingNum = parseFloat(currentFormData.rating)
-            if (!isNaN(ratingNum) && ratingNum >= 0 && ratingNum <= 5) {
-              payload.rating = ratingNum
-            }
-          }
-          if (currentFormData.estimatedVisits && currentFormData.estimatedVisits.trim()) {
-            const visitsNum = parseInt(currentFormData.estimatedVisits)
-            if (!isNaN(visitsNum) && visitsNum > 0) {
-              payload.estimatedVisits = visitsNum
-            }
-          }
-
-          console.log('Auto-submitting payload:', payload)
-
-          // Clear countdown
-          if (countdownInterval) {
-            clearInterval(countdownInterval)
-            setCountdownInterval(null)
-          }
-          setCountdown(null)
-          
-          // Submit directly to API
-          setSubmitting(true)
-          setIsProcessing(true)
-          try {
-            const response = await fetch('/api/tools', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload),
-            })
-
-            if (!response.ok) {
-              const errorData = await response.json().catch(() => ({}))
-              // Handle duplicate URL error (409 status)
-              if (response.status === 409) {
-                const errorMessage = errorData.message || 'A tool with this URL already exists'
-                alert(`❌ ${errorMessage}\n\nPlease use a different URL or edit the existing tool.`)
-                setSubmitting(false)
-                return
-              }
-              const errorMessage = errorData.details || errorData.error || errorData.message || `HTTP error! status: ${response.status}`
-              console.error('API Error:', errorData)
-              throw new Error(errorMessage)
-            }
-
-            const result = await response.json()
-            console.log('Tool saved successfully:', result)
-
-            // Wait a bit for the database to update
-            await new Promise(resolve => setTimeout(resolve, 500))
-            
-            resetForm()
-            await fetchTools()
-            
-            // Reset processing state after everything is done
-            setIsProcessing(false)
-            // No success popup - only show errors
-          } catch (error) {
-            console.error('Error saving tool:', error)
-            const errorMessage = error instanceof Error 
-              ? error.message 
-              : 'Unknown error occurred. Check console for details.'
-            alert(`Failed to save tool: ${errorMessage}`)
-            setIsProcessing(false)
-          } finally {
-            setSubmitting(false)
-          }
-        }
-      }, 3000)
-      
-      setAutoSubmitTimer(timer)
     } catch (error) {
       console.error('Error analyzing URL:', error)
       const errorMessage = error instanceof Error ? error.message : 'Unknown error'
@@ -484,20 +389,113 @@ export default function AdminPage() {
     }
   }
 
+  const handleBulkAdd = async () => {
+    const urls = bulkUrls
+      .split('\n')
+      .map(url => url.trim())
+      .filter(url => url.length > 0 && (url.startsWith('http://') || url.startsWith('https://')))
+    
+    if (urls.length === 0) {
+      alert('Please enter at least one valid URL (one per line)')
+      return
+    }
+
+    setBulkProcessing(true)
+    setBulkProgress({ current: 0, total: urls.length, currentUrl: '' })
+
+    let successCount = 0
+    let errorCount = 0
+    const errors: string[] = []
+
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i]
+      setBulkProgress({ current: i + 1, total: urls.length, currentUrl: url })
+
+      try {
+        setAnalyzing(true)
+        const response = await fetch('/api/tools/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url }),
+        })
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}))
+          const errorMessage = errorData.error || errorData.message || `HTTP ${response.status}`
+          
+          if (response.status === 429) {
+            errors.push(`${url}: Rate limit reached. Please wait and try again later.`)
+            errorCount++
+            // Wait 2 seconds before continuing to next URL
+            await new Promise(resolve => setTimeout(resolve, 2000))
+            continue
+          }
+          
+          errors.push(`${url}: ${errorMessage}`)
+          errorCount++
+          continue
+        }
+
+        const data = await response.json()
+
+        // Submit the tool
+        const payload: any = {
+          name: data.name || '',
+          description: data.description || '',
+          url: data.url || url,
+          category: data.category || 'Other',
+        }
+
+        if (data.logoUrl) payload.logoUrl = data.logoUrl
+        if (data.tags) payload.tags = data.tags
+        if (data.traffic) payload.traffic = data.traffic
+        if (data.revenue) payload.revenue = data.revenue
+        if (data.rating !== null && data.rating !== undefined) payload.rating = data.rating
+        if (data.estimatedVisits !== null && data.estimatedVisits !== undefined) payload.estimatedVisits = data.estimatedVisits
+
+        const submitResponse = await fetch('/api/tools', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+
+        if (submitResponse.ok) {
+          successCount++
+        } else {
+          const errorData = await submitResponse.json().catch(() => ({}))
+          const errorMessage = errorData.message || errorData.error || `HTTP ${submitResponse.status}`
+          errors.push(`${url}: ${errorMessage}`)
+          errorCount++
+        }
+
+        // Small delay between requests to avoid rate limits
+        if (i < urls.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500))
+        }
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+        errors.push(`${url}: ${errorMessage}`)
+        errorCount++
+      } finally {
+        setAnalyzing(false)
+      }
+    }
+
+    await fetchTools()
+    setBulkUrls('')
+    setBulkProcessing(false)
+    setBulkProgress({ current: 0, total: 0, currentUrl: '' })
+
+    // Show summary
+    const summary = `Bulk add complete!\n\n✅ Success: ${successCount}\n❌ Errors: ${errorCount}`
+    if (errors.length > 0) {
+      alert(`${summary}\n\nErrors:\n${errors.slice(0, 10).join('\n')}${errors.length > 10 ? `\n... and ${errors.length - 10} more` : ''}`)
+    } else {
+      alert(summary)
+    }
+  }
+
   const resetForm = () => {
-    // Clear auto-submit timer if it exists
-    if (autoSubmitTimer) {
-      clearTimeout(autoSubmitTimer)
-      setAutoSubmitTimer(null)
-    }
-    
-    // Clear countdown
-    if (countdownInterval) {
-      clearInterval(countdownInterval)
-      setCountdownInterval(null)
-    }
-    setCountdown(null)
-    
     setFormData({
       name: '',
       description: '',
@@ -514,18 +512,6 @@ export default function AdminPage() {
     setQuickAddUrl('')
     setIsProcessing(false)
   }
-  
-  // Cleanup timers on unmount
-  useEffect(() => {
-    return () => {
-      if (autoSubmitTimer) {
-        clearTimeout(autoSubmitTimer)
-      }
-      if (countdownInterval) {
-        clearInterval(countdownInterval)
-      }
-    }
-  }, [autoSubmitTimer, countdownInterval])
 
   if (authLoading || loading) {
     return (
@@ -565,56 +551,99 @@ export default function AdminPage() {
           </CardHeader>
           <CardContent>
             {!editingId && (
-              <div className="mb-6 p-4 rounded-lg border bg-gradient-to-r from-indigo-50 to-purple-50 dark:from-indigo-950/20 dark:to-purple-950/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <Sparkles className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
-                  <Label className="font-semibold">Quick Add by URL</Label>
+              <div className="mb-6 space-y-4">
+                <div className="p-4 rounded-lg border bg-gradient-to-r from-indigo-50 to-purple-50 dark:from-indigo-950/20 dark:to-purple-950/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Sparkles className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
+                    <Label className="font-semibold">Quick Add by URL</Label>
+                  </div>
+                  <p className="text-sm text-muted-foreground mb-3">
+                    Paste a website URL and let AI analyze it to auto-fill the form
+                  </p>
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="https://example.com"
+                      value={quickAddUrl}
+                      onChange={(e) => setQuickAddUrl(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !analyzing && !isProcessing) {
+                          e.preventDefault()
+                          handleQuickAdd()
+                        }
+                      }}
+                      disabled={analyzing || isProcessing || bulkProcessing}
+                      className="flex-1"
+                    />
+                    <Button
+                      type="button"
+                      onClick={handleQuickAdd}
+                      disabled={analyzing || isProcessing || bulkProcessing || !quickAddUrl.trim()}
+                      variant="default"
+                    >
+                      {analyzing ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Analyzing...
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="mr-2 h-4 w-4" />
+                          Analyze
+                        </>
+                      )}
+                    </Button>
+                  </div>
                 </div>
-                <p className="text-sm text-muted-foreground mb-3">
-                  Paste a website URL and let AI analyze it to auto-fill the form
-                </p>
-                <div className="flex gap-2">
-                  <Input
-                    placeholder="https://example.com"
-                    value={quickAddUrl}
-                    onChange={(e) => setQuickAddUrl(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !analyzing && !isProcessing) {
-                        e.preventDefault()
-                        handleQuickAdd()
-                      }
-                    }}
-                    disabled={analyzing || isProcessing}
-                    className="flex-1"
+
+                <div className="p-4 rounded-lg border bg-gradient-to-r from-green-50 to-blue-50 dark:from-green-950/20 dark:to-blue-950/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Plus className="h-4 w-4 text-green-600 dark:text-green-400" />
+                    <Label className="font-semibold">Bulk Add URLs</Label>
+                  </div>
+                  <p className="text-sm text-muted-foreground mb-3">
+                    Add multiple tools at once. Enter one URL per line.
+                  </p>
+                  <textarea
+                    placeholder="https://example1.com&#10;https://example2.com&#10;https://example3.com"
+                    value={bulkUrls}
+                    onChange={(e) => setBulkUrls(e.target.value)}
+                    disabled={analyzing || isProcessing || bulkProcessing}
+                    className="flex min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 mb-3 font-mono text-xs"
                   />
+                  {bulkProcessing && (
+                    <div className="mb-3 p-2 rounded-md bg-green-100 dark:bg-green-900/30 border border-green-200 dark:border-green-800">
+                      <p className="text-sm text-green-700 dark:text-green-300 flex items-center gap-2">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        Processing {bulkProgress.current} of {bulkProgress.total}...
+                        {bulkProgress.currentUrl && (
+                          <span className="text-xs ml-2 truncate max-w-md">
+                            {bulkProgress.currentUrl}
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  )}
                   <Button
                     type="button"
-                    onClick={handleQuickAdd}
-                    disabled={analyzing || isProcessing || !quickAddUrl.trim()}
+                    onClick={handleBulkAdd}
+                    disabled={analyzing || isProcessing || bulkProcessing || !bulkUrls.trim()}
                     variant="default"
+                    className="w-full"
                   >
-                    {analyzing ? (
+                    {bulkProcessing ? (
                       <>
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Analyzing...
+                        Processing...
                       </>
                     ) : (
                       <>
-                        <Sparkles className="mr-2 h-4 w-4" />
-                        Analyze
+                        <Plus className="mr-2 h-4 w-4" />
+                        Bulk Add ({bulkUrls.split('\n').filter(url => url.trim().startsWith('http')).length} URLs)
                       </>
                     )}
                   </Button>
                 </div>
-                {countdown !== null && countdown > 0 && (
-                  <div className="mt-3 p-2 rounded-md bg-indigo-100 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-800">
-                    <p className="text-sm text-indigo-700 dark:text-indigo-300 flex items-center gap-2">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      Auto-submitting in <span className="font-bold text-indigo-900 dark:text-indigo-100">{countdown}</span> second{countdown !== 1 ? 's' : ''}...
-                    </p>
-                  </div>
-                )}
-                <p className="text-xs text-muted-foreground mt-2">
+                <p className="text-xs text-muted-foreground">
                   💡 AI analysis available. Add OPENAI_API_KEY to .env for enhanced results.
                 </p>
               </div>
