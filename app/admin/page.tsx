@@ -83,6 +83,7 @@ export default function AdminPage() {
 
     checkAuth()
     fetchTools()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router])
 
   const fetchTools = async () => {
@@ -357,19 +358,21 @@ export default function AdminPage() {
         // Try to get detailed error from response
         let errorMessage = lastError || `HTTP ${response?.status || 'Unknown'}`
         
-        try {
-          const errorData = await response.json()
-          if (errorData.error) {
-            errorMessage = errorData.error
-          } else if (errorData.message) {
-            errorMessage = errorData.message
-          } else if (errorData.details) {
-            errorMessage = `${errorData.error || 'Error'}: ${JSON.stringify(errorData.details)}`
-          }
-        } catch (e) {
-          // Response might not be JSON, use status text
-          if (response?.statusText) {
-            errorMessage = `${response.status}: ${response.statusText}`
+        if (response) {
+          try {
+            const errorData = await response.json()
+            if (errorData.error) {
+              errorMessage = errorData.error
+            } else if (errorData.message) {
+              errorMessage = errorData.message
+            } else if (errorData.details) {
+              errorMessage = `${errorData.error || 'Error'}: ${JSON.stringify(errorData.details)}`
+            }
+          } catch (e) {
+            // Response might not be JSON, use status text
+            if (response.statusText) {
+              errorMessage = `${response.status}: ${response.statusText}`
+            }
           }
         }
         
