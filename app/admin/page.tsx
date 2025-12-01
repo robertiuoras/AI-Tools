@@ -377,13 +377,28 @@ export default function AdminPage() {
   }
 
   const handleBulkAdd = async () => {
+    // Parse URLs - normalize them (add https:// if missing)
     const urls = bulkUrls
       .split('\n')
-      .map(url => url.trim())
-      .filter(url => url.length > 0 && (url.startsWith('http://') || url.startsWith('https://')))
+      .map(url => {
+        url = url.trim()
+        if (!url) return null
+        // Add https:// if no protocol
+        if (!url.startsWith('http://') && !url.startsWith('https://')) {
+          url = `https://${url}`
+        }
+        // Basic URL validation
+        try {
+          new URL(url)
+          return url
+        } catch {
+          return null
+        }
+      })
+      .filter((url): url is string => url !== null)
     
     if (urls.length === 0) {
-      alert('Please enter at least one valid URL (one per line)')
+      alert('Please enter at least one valid URL (one per line). URLs can be with or without https://')
       return
     }
 
@@ -400,24 +415,49 @@ export default function AdminPage() {
 
       try {
         setAnalyzing(true)
-        const response = await fetch('/api/tools/analyze', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url }),
-        })
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}))
-          const errorMessage = errorData.error || errorData.message || `HTTP ${response.status}`
-          
-          if (response.status === 429) {
-            errors.push(`${url}: Rate limit reached. Please wait and try again later.`)
-            errorCount++
-            // Wait 2 seconds before continuing to next URL
-            await new Promise(resolve => setTimeout(resolve, 2000))
-            continue
+        
+        // Retry logic for rate limits
+        let retries = 3
+        let response: Response | null = null
+        let lastError: string | null = null
+        
+        while (retries > 0) {
+          try {
+            response = await fetch('/api/tools/analyze', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ url }),
+            })
+            
+            if (response.ok) {
+              break // Success, exit retry loop
+            }
+            
+            const errorData = await response.json().catch(() => ({}))
+            lastError = errorData.error || errorData.message || `HTTP ${response.status}`
+            
+            if (response.status === 429) {
+              // Rate limited - wait with exponential backoff
+              const waitTime = Math.pow(2, 3 - retries) * 2000 // 2s, 4s, 8s
+              console.log(`Rate limited for ${url}, waiting ${waitTime}ms before retry ${4 - retries}/3`)
+              await new Promise(resolve => setTimeout(resolve, waitTime))
+              retries--
+              continue
+            } else {
+              // Other error, don't retry
+              break
+            }
+          } catch (fetchError) {
+            lastError = fetchError instanceof Error ? fetchError.message : 'Network error'
+            retries--
+            if (retries > 0) {
+              await new Promise(resolve => setTimeout(resolve, 1000))
+            }
           }
-          
+        }
+        
+        if (!response || !response.ok) {
+          const errorMessage = lastError || `HTTP ${response?.status || 'Unknown'}`
           errors.push(`${url}: ${errorMessage}`)
           errorCount++
           continue
@@ -457,7 +497,7 @@ export default function AdminPage() {
 
         // Small delay between requests to avoid rate limits
         if (i < urls.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 500))
+          await new Promise(resolve => setTimeout(resolve, 1000))
         }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error'
@@ -591,7 +631,7 @@ export default function AdminPage() {
                     Add multiple tools at once. Enter one URL per line.
                   </p>
                   <textarea
-                    placeholder="https://example1.com&#10;https://example2.com&#10;https://example3.com"
+                    placeholder="https://example1.com&#10;example2.com&#10;https://example3.com"
                     value={bulkUrls}
                     onChange={(e) => setBulkUrls(e.target.value)}
                     disabled={analyzing || isProcessing || bulkProcessing}
@@ -625,7 +665,7 @@ export default function AdminPage() {
                     ) : (
                       <>
                         <Plus className="mr-2 h-4 w-4" />
-                        Bulk Add ({bulkUrls.split('\n').filter(url => url.trim().startsWith('http')).length} URLs)
+                        Bulk Add ({bulkUrls.split('\n').filter(url => url.trim().length > 0).length} URLs)
                       </>
                     )}
                   </Button>
