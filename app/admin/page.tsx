@@ -239,16 +239,56 @@ export default function AdminPage() {
     setAnalyzing(true)
     setIsProcessing(true)
     try {
-      const response = await fetch('/api/tools/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: quickAddUrl }),
-      })
+      // Normalize URL (add https:// if missing)
+      let urlToAnalyze = quickAddUrl.trim()
+      if (!urlToAnalyze.startsWith('http://') && !urlToAnalyze.startsWith('https://')) {
+        urlToAnalyze = `https://${urlToAnalyze}`
+      }
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        const errorMessage = errorData.details || errorData.error || errorData.suggestion || 'Failed to analyze URL'
-        console.error('❌ Analysis error:', errorData)
+      // Retry logic for rate limits
+      let retries = 3
+      let response: Response | null = null
+      let lastError: string | null = null
+      
+      while (retries > 0) {
+        try {
+          response = await fetch('/api/tools/analyze', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: urlToAnalyze }),
+          })
+          
+          if (response.ok) {
+            break // Success, exit retry loop
+          }
+          
+          const errorData = await response.json().catch(() => ({}))
+          lastError = errorData.details || errorData.error || errorData.suggestion || `HTTP ${response.status}`
+          
+          if (response.status === 429) {
+            // Rate limited - wait with exponential backoff
+            const waitTime = Math.pow(2, 3 - retries) * 2000 // 2s, 4s, 8s
+            console.log(`Rate limited for ${urlToAnalyze}, waiting ${waitTime}ms before retry ${4 - retries}/3`)
+            setAnalyzing(true) // Keep showing analyzing state
+            await new Promise(resolve => setTimeout(resolve, waitTime))
+            retries--
+            continue
+          } else {
+            // Other error, don't retry
+            break
+          }
+        } catch (fetchError) {
+          lastError = fetchError instanceof Error ? fetchError.message : 'Network error'
+          retries--
+          if (retries > 0) {
+            await new Promise(resolve => setTimeout(resolve, 1000))
+          }
+        }
+      }
+      
+      if (!response || !response.ok) {
+        const errorMessage = lastError || `HTTP ${response?.status || 'Unknown'}`
+        console.error('❌ Analysis error:', errorMessage)
         throw new Error(errorMessage)
       }
 
@@ -361,8 +401,8 @@ export default function AdminPage() {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error'
       
       // Show user-friendly error messages
-      if (errorMessage.includes('Rate Limit') || errorMessage.includes('rate limit')) {
-        alert(`⚠️ OpenAI Rate Limit Reached\n\n${errorMessage}\n\nPlease wait a few minutes or add a payment method to increase your limits.\n\nYou can still fill the form manually.`)
+      if (errorMessage.includes('429') || errorMessage.includes('Rate Limit') || errorMessage.includes('rate limit') || errorMessage.includes('Too Many Requests')) {
+        alert(`⚠️ Rate Limit Reached\n\n${errorMessage}\n\nI've already retried 3 times with increasing delays.\n\nPlease wait a few minutes before trying again, or:\n- Add a payment method to increase your OpenAI limits\n- Fill in the form manually\n- Try using the bulk add feature (it has better rate limit handling)`)
       } else if (errorMessage.includes('API key')) {
         alert(`⚠️ OpenAI API Key Issue\n\n${errorMessage}\n\nPlease check your OPENAI_API_KEY in Vercel environment variables.`)
       } else {
@@ -372,7 +412,6 @@ export default function AdminPage() {
       setIsProcessing(false)
     } finally {
       setAnalyzing(false)
-      // Keep isProcessing true until auto-submit completes
     }
   }
 
