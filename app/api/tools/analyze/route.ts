@@ -398,13 +398,19 @@ Rules:
       if (response.status === 429) {
         const rateLimitError = errorDetails?.error || {}
         const message = rateLimitError.message || errorText
-        const retryAfter = message.match(/try again in ([\d\w\s]+)/i)?.[1] || 'a few minutes'
+        const retryAfter = message.match(/try again in ([\d\w\s]+)/i)?.[1] || null
         
         console.error('❌ [OpenAI] Rate limit exceeded!')
-        console.error('❌ [OpenAI] Retry after:', retryAfter)
+        console.error('❌ [OpenAI] Retry after:', retryAfter || 'unknown')
         console.error('❌ [OpenAI] Full message:', message)
+        console.error('❌ [OpenAI] This is likely an RPM (Requests Per Minute) limit, not TPM (Tokens Per Minute)')
+        console.error('❌ [OpenAI] Check your tier and limits at: https://platform.openai.com/account/limits')
         
-        throw new Error(`OpenAI Rate Limit: ${message}. Please wait ${retryAfter} or add a payment method to increase limits at https://platform.openai.com/account/billing`)
+        const errorMsg = retryAfter 
+          ? `OpenAI Rate Limit (RPM): ${message}. Please wait ${retryAfter} before trying again. Check your tier at https://platform.openai.com/account/limits`
+          : `OpenAI Rate Limit (RPM): ${message}. This is a requests-per-minute limit, not tokens. Check your tier at https://platform.openai.com/account/limits`
+        
+        throw new Error(errorMsg)
       }
       
       throw new Error(`OpenAI API error: ${response.status} - ${errorText}`)

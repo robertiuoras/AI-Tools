@@ -249,7 +249,9 @@ export default function AdminPage() {
   }
 
   // Cooldown system - enforce minimum delay between requests
-  const MIN_REQUEST_DELAY = 20000 // 20 seconds between requests (for free tier)
+  // Reduced for paid accounts - if you have balance, you likely have higher limits
+  // Free tier: ~3 RPM = 20s delay, Paid tier: 500+ RPM = 3s delay
+  const MIN_REQUEST_DELAY = 3000 // 3 seconds between requests (conservative for paid accounts)
   
   useEffect(() => {
     if (cooldownRemaining > 0) {
@@ -285,18 +287,20 @@ export default function AdminPage() {
       return
     }
 
-    // Check cooldown
-    const timeSinceLastRequest = Date.now() - lastRequestTime
-    if (timeSinceLastRequest < MIN_REQUEST_DELAY) {
-      const remaining = Math.ceil((MIN_REQUEST_DELAY - timeSinceLastRequest) / 1000)
-      setCooldownRemaining(remaining)
-      addToast({
-        variant: 'warning',
-        title: 'Rate Limit Protection',
-        description: `Please wait ${remaining} second${remaining !== 1 ? 's' : ''} before making another request. This prevents hitting OpenAI rate limits.`,
-        duration: 5000,
-      })
-      return
+    // Check cooldown (only if we have a recent request)
+    if (lastRequestTime > 0) {
+      const timeSinceLastRequest = Date.now() - lastRequestTime
+      if (timeSinceLastRequest < MIN_REQUEST_DELAY) {
+        const remaining = Math.ceil((MIN_REQUEST_DELAY - timeSinceLastRequest) / 1000)
+        setCooldownRemaining(remaining)
+        addToast({
+          variant: 'info',
+          title: 'Rate Limit Protection',
+          description: `Please wait ${remaining} second${remaining !== 1 ? 's' : ''} before making another request.`,
+          duration: 3000,
+        })
+        return
+      }
     }
 
     setAnalyzing(true)
@@ -479,18 +483,31 @@ export default function AdminPage() {
       if (errorMessage.includes('429') || errorMessage.includes('Rate Limit') || errorMessage.includes('rate limit') || errorMessage.includes('Too Many Requests')) {
         // Extract retry time if available
         const retryMatch = errorMessage.match(/try again in ([\d\w\s]+)/i)
-        const retryTime = retryMatch ? retryMatch[1] : '5-10 minutes'
+        const retryTime = retryMatch ? retryMatch[1] : null
+        
+        // Parse retry time to seconds
+        let retrySeconds = 60 // Default 1 minute
+        if (retryTime) {
+          const minutesMatch = retryTime.match(/(\d+)\s*m/i)
+          const secondsMatch = retryTime.match(/(\d+)\s*s/i)
+          if (minutesMatch) {
+            retrySeconds = parseInt(minutesMatch[1]) * 60
+          } else if (secondsMatch) {
+            retrySeconds = parseInt(secondsMatch[1])
+          }
+        }
         
         addToast({
           variant: 'error',
           title: 'OpenAI Rate Limit Reached',
-          description: `You've hit OpenAI's rate limit. ${retryMatch ? `Wait ${retryTime}` : 'Wait 5-10 minutes'} before trying again.\n\nRate Limits:\n• Free tier: ~3 requests/minute\n• Paid tier: 500+ requests/minute\n\nTo increase limits: Add payment method at platform.openai.com/account/billing`,
+          description: `You've hit OpenAI's RPM (Requests Per Minute) limit, not token limit. ${retryTime ? `Wait ${retryTime}` : 'Wait 1-2 minutes'} before trying again.\n\nThis is likely an RPM limit. Check your tier at platform.openai.com/account/limits`,
           duration: 10000,
         })
         
-        // Set a longer cooldown after rate limit
+        // Set cooldown based on retry time, but cap at 2 minutes
+        const cooldownSeconds = Math.min(retrySeconds, 120)
         setLastRequestTime(Date.now())
-        setCooldownRemaining(300) // 5 minutes
+        setCooldownRemaining(cooldownSeconds)
       } else if (errorMessage.includes('API key')) {
         addToast({
           variant: 'error',
@@ -653,9 +670,10 @@ export default function AdminPage() {
         // Update last request time for cooldown tracking
         setLastRequestTime(Date.now())
         
-        // Longer delay between bulk requests to avoid rate limits
+        // Delay between bulk requests to avoid rate limits
+        // Reduced to 5 seconds for paid accounts (if you have balance, you likely have higher limits)
         if (i < urls.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 25000)) // 25 seconds between bulk requests
+          await new Promise(resolve => setTimeout(resolve, 5000)) // 5 seconds between bulk requests
         }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error'
@@ -853,8 +871,8 @@ export default function AdminPage() {
                 </div>
                   <div className="text-xs text-muted-foreground space-y-1">
                     <p>💡 AI analysis available. Add OPENAI_API_KEY to .env for enhanced results.</p>
-                    <p className="text-yellow-600 dark:text-yellow-400">
-                      ⚠️ Rate Limits: Free tier ~3/min, Paid tier 500+/min. 20s cooldown between requests to prevent limits.
+                    <p className="text-blue-600 dark:text-blue-400">
+                      ℹ️ Rate Limits: You have 2 types of limits - RPM (requests/min) and TPM (tokens/min). Even with balance, low-tier accounts have low RPM limits. Check your tier at platform.openai.com/account/limits
                     </p>
                   </div>
               </div>
