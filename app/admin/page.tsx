@@ -35,6 +35,8 @@ export default function AdminPage() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [isProcessing, setIsProcessing] = useState(false)
+  const [lastRequestTime, setLastRequestTime] = useState<number>(0)
+  const [cooldownRemaining, setCooldownRemaining] = useState<number>(0)
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -246,6 +248,23 @@ export default function AdminPage() {
     }
   }
 
+  // Cooldown system - enforce minimum delay between requests
+  const MIN_REQUEST_DELAY = 20000 // 20 seconds between requests (for free tier)
+  
+  useEffect(() => {
+    if (cooldownRemaining > 0) {
+      const interval = setInterval(() => {
+        setCooldownRemaining((prev) => {
+          if (prev <= 1) {
+            return 0
+          }
+          return prev - 1
+        })
+      }, 1000)
+      return () => clearInterval(interval)
+    }
+  }, [cooldownRemaining])
+
   const handleQuickAdd = async () => {
     if (!quickAddUrl.trim()) {
       addToast({
@@ -258,7 +277,25 @@ export default function AdminPage() {
 
     // Prevent multiple simultaneous analyses
     if (analyzing || isProcessing) {
-      console.log('Already processing, please wait...')
+      addToast({
+        variant: 'info',
+        title: 'Already Processing',
+        description: 'Please wait for the current request to complete.',
+      })
+      return
+    }
+
+    // Check cooldown
+    const timeSinceLastRequest = Date.now() - lastRequestTime
+    if (timeSinceLastRequest < MIN_REQUEST_DELAY) {
+      const remaining = Math.ceil((MIN_REQUEST_DELAY - timeSinceLastRequest) / 1000)
+      setCooldownRemaining(remaining)
+      addToast({
+        variant: 'warning',
+        title: 'Rate Limit Protection',
+        description: `Please wait ${remaining} second${remaining !== 1 ? 's' : ''} before making another request. This prevents hitting OpenAI rate limits.`,
+        duration: 5000,
+      })
       return
     }
 
@@ -319,6 +356,10 @@ export default function AdminPage() {
       }
 
       const data = await response.json()
+      
+      // Update last request time and set cooldown
+      setLastRequestTime(Date.now())
+      setCooldownRemaining(Math.ceil(MIN_REQUEST_DELAY / 1000))
       
       console.log('Analysis result:', data)
       
@@ -436,12 +477,20 @@ export default function AdminPage() {
       
       // Show user-friendly error messages
       if (errorMessage.includes('429') || errorMessage.includes('Rate Limit') || errorMessage.includes('rate limit') || errorMessage.includes('Too Many Requests')) {
+        // Extract retry time if available
+        const retryMatch = errorMessage.match(/try again in ([\d\w\s]+)/i)
+        const retryTime = retryMatch ? retryMatch[1] : '5-10 minutes'
+        
         addToast({
           variant: 'error',
-          title: 'Rate Limit Reached',
-          description: `${errorMessage}. I've already retried 3 times. Please wait a few minutes, add payment to increase limits, or fill the form manually.`,
-          duration: 8000,
+          title: 'OpenAI Rate Limit Reached',
+          description: `You've hit OpenAI's rate limit. ${retryMatch ? `Wait ${retryTime}` : 'Wait 5-10 minutes'} before trying again.\n\nRate Limits:\n• Free tier: ~3 requests/minute\n• Paid tier: 500+ requests/minute\n\nTo increase limits: Add payment method at platform.openai.com/account/billing`,
+          duration: 10000,
         })
+        
+        // Set a longer cooldown after rate limit
+        setLastRequestTime(Date.now())
+        setCooldownRemaining(300) // 5 minutes
       } else if (errorMessage.includes('API key')) {
         addToast({
           variant: 'error',
@@ -601,9 +650,12 @@ export default function AdminPage() {
           errorCount++
         }
 
-        // Small delay between requests to avoid rate limits
+        // Update last request time for cooldown tracking
+        setLastRequestTime(Date.now())
+        
+        // Longer delay between bulk requests to avoid rate limits
         if (i < urls.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 1000))
+          await new Promise(resolve => setTimeout(resolve, 25000)) // 25 seconds between bulk requests
         }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error'
@@ -709,6 +761,13 @@ export default function AdminPage() {
                   <p className="text-sm text-muted-foreground mb-3">
                     Paste a website URL and let AI analyze it to auto-fill the form
                   </p>
+                  {cooldownRemaining > 0 && (
+                    <div className="mb-3 p-2 rounded-md bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-200 dark:border-yellow-800">
+                      <p className="text-sm text-yellow-700 dark:text-yellow-300">
+                        ⏱️ Cooldown: {cooldownRemaining} second{cooldownRemaining !== 1 ? 's' : ''} remaining before next request
+                      </p>
+                    </div>
+                  )}
                   <div className="flex gap-2">
                     <Input
                       placeholder="https://example.com"
@@ -726,7 +785,7 @@ export default function AdminPage() {
                     <Button
                       type="button"
                       onClick={handleQuickAdd}
-                      disabled={analyzing || isProcessing || bulkProcessing || !quickAddUrl.trim()}
+                      disabled={analyzing || isProcessing || bulkProcessing || !quickAddUrl.trim() || cooldownRemaining > 0}
                       variant="default"
                     >
                       {analyzing ? (
@@ -792,9 +851,12 @@ export default function AdminPage() {
                     )}
                   </Button>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  💡 AI analysis available. Add OPENAI_API_KEY to .env for enhanced results.
-                </p>
+                  <div className="text-xs text-muted-foreground space-y-1">
+                    <p>💡 AI analysis available. Add OPENAI_API_KEY to .env for enhanced results.</p>
+                    <p className="text-yellow-600 dark:text-yellow-400">
+                      ⚠️ Rate Limits: Free tier ~3/min, Paid tier 500+/min. 20s cooldown between requests to prevent limits.
+                    </p>
+                  </div>
               </div>
             )}
             <form onSubmit={handleSubmit} className="space-y-4">
