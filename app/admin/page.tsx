@@ -196,19 +196,6 @@ export default function AdminPage() {
   }
 
   const handleEdit = (tool: Tool) => {
-    // Clear auto-submit timer when editing
-    if (autoSubmitTimer) {
-      clearTimeout(autoSubmitTimer)
-      setAutoSubmitTimer(null)
-    }
-    
-    // Clear countdown
-    if (countdownInterval) {
-      clearInterval(countdownInterval)
-      setCountdownInterval(null)
-    }
-    setCountdown(null)
-    
     setEditingId(tool.id)
     setFormData({
       name: tool.name,
