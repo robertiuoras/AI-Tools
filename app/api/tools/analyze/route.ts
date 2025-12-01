@@ -385,35 +385,59 @@ Rules:
       console.error('❌ [OpenAI] API error response:', errorText)
       console.error('❌ [OpenAI] Status:', response.status)
       console.error('❌ [OpenAI] Status text:', response.statusText)
+      console.error('❌ [OpenAI] Response headers:', Object.fromEntries(response.headers.entries()))
       
       // Parse error for better handling
       let errorDetails: any = {}
       try {
         errorDetails = JSON.parse(errorText)
+        console.error('❌ [OpenAI] Parsed error details:', JSON.stringify(errorDetails, null, 2))
       } catch (e) {
-        // Not JSON, use raw text
+        console.error('❌ [OpenAI] Error response is not JSON:', errorText)
       }
       
       // Handle rate limit errors specifically
       if (response.status === 429) {
-        const rateLimitError = errorDetails?.error || {}
-        const message = rateLimitError.message || errorText
-        const retryAfter = message.match(/try again in ([\d\w\s]+)/i)?.[1] || null
+        // Check for retry-after header
+        const retryAfterHeader = response.headers.get('retry-after')
+        const rateLimitError = errorDetails?.error || errorDetails
+        const message = rateLimitError?.message || errorText || 'Rate limit exceeded'
+        const retryAfter = retryAfterHeader || message.match(/try again in ([\d\w\s]+)/i)?.[1] || null
         
-        console.error('❌ [OpenAI] Rate limit exceeded!')
-        console.error('❌ [OpenAI] Retry after:', retryAfter || 'unknown')
-        console.error('❌ [OpenAI] Full message:', message)
-        console.error('❌ [OpenAI] This is likely an RPM (Requests Per Minute) limit, not TPM (Tokens Per Minute)')
+        console.error('❌ [OpenAI] ==========================================')
+        console.error('❌ [OpenAI] RATE LIMIT EXCEEDED!')
+        console.error('❌ [OpenAI] Retry-After header:', retryAfterHeader || 'not provided')
+        console.error('❌ [OpenAI] Retry after from message:', retryAfter)
+        console.error('❌ [OpenAI] Full error message:', message)
+        console.error('❌ [OpenAI] Full error object:', JSON.stringify(errorDetails, null, 2))
+        console.error('❌ [OpenAI] This is likely an RPM (Requests Per Minute) limit')
         console.error('❌ [OpenAI] Check your tier and limits at: https://platform.openai.com/account/limits')
+        console.error('❌ [OpenAI] Check your usage at: https://platform.openai.com/usage')
+        console.error('❌ [OpenAI] ==========================================')
         
-        const errorMsg = retryAfter 
-          ? `OpenAI Rate Limit (RPM): ${message}. Please wait ${retryAfter} before trying again. Check your tier at https://platform.openai.com/account/limits`
-          : `OpenAI Rate Limit (RPM): ${message}. This is a requests-per-minute limit, not tokens. Check your tier at https://platform.openai.com/account/limits`
+        // More detailed error message
+        let errorMsg = `OpenAI Rate Limit (429): ${message}`
+        if (retryAfterHeader) {
+          errorMsg += `. Retry after ${retryAfterHeader} seconds.`
+        } else if (retryAfter) {
+          errorMsg += `. Retry after ${retryAfter}.`
+        }
+        errorMsg += ` Check your limits at https://platform.openai.com/account/limits`
         
-        throw new Error(errorMsg)
+        return NextResponse.json({
+          error: errorMsg,
+          details: errorDetails,
+          retryAfter: retryAfterHeader || retryAfter,
+          suggestion: 'This is an RPM (requests per minute) limit. Even with balance, low-tier accounts have low RPM limits. Check your tier at platform.openai.com/account/limits'
+        }, { status: 429 })
       }
       
-      throw new Error(`OpenAI API error: ${response.status} - ${errorText}`)
+      // For other errors, return the actual OpenAI error
+      return NextResponse.json({
+        error: `OpenAI API error: ${response.status}`,
+        details: errorDetails,
+        message: errorText
+      }, { status: response.status })
     }
 
     const data = await response.json()

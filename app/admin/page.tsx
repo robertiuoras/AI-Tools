@@ -354,8 +354,29 @@ export default function AdminPage() {
       }
       
       if (!response || !response.ok) {
-        const errorMessage = lastError || `HTTP ${response?.status || 'Unknown'}`
+        // Try to get detailed error from response
+        let errorMessage = lastError || `HTTP ${response?.status || 'Unknown'}`
+        
+        try {
+          const errorData = await response.json()
+          if (errorData.error) {
+            errorMessage = errorData.error
+          } else if (errorData.message) {
+            errorMessage = errorData.message
+          } else if (errorData.details) {
+            errorMessage = `${errorData.error || 'Error'}: ${JSON.stringify(errorData.details)}`
+          }
+        } catch (e) {
+          // Response might not be JSON, use status text
+          if (response?.statusText) {
+            errorMessage = `${response.status}: ${response.statusText}`
+          }
+        }
+        
         console.error('❌ Analysis error:', errorMessage)
+        console.error('❌ Response status:', response?.status)
+        console.error('❌ Full response:', response)
+        
         throw new Error(errorMessage)
       }
 
@@ -874,6 +895,40 @@ export default function AdminPage() {
                     <p className="text-blue-600 dark:text-blue-400">
                       ℹ️ Rate Limits: You have 2 types of limits - RPM (requests/min) and TPM (tokens/min). Even with balance, low-tier accounts have low RPM limits. Check your tier at platform.openai.com/account/limits
                     </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="mt-2"
+                      onClick={async () => {
+                        try {
+                          const response = await fetch('/api/openai/test')
+                          const data = await response.json()
+                          if (data.success) {
+                            addToast({
+                              variant: 'success',
+                              title: 'API Key Valid',
+                              description: `Your API key is working. ${data.modelsAvailable} models available.`,
+                            })
+                          } else {
+                            addToast({
+                              variant: 'error',
+                              title: 'API Key Issue',
+                              description: `${data.error}: ${data.suggestion || data.details || ''}`,
+                              duration: 8000,
+                            })
+                          }
+                        } catch (error: any) {
+                          addToast({
+                            variant: 'error',
+                            title: 'Test Failed',
+                            description: error.message || 'Could not test API key',
+                          })
+                        }
+                      }}
+                    >
+                      Test API Key
+                    </Button>
                   </div>
               </div>
             )}
