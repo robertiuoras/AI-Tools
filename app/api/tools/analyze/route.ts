@@ -828,7 +828,9 @@ export async function POST(request: NextRequest) {
       estimatedVisits: analysis.estimatedVisits ?? null,
       logoUrl: analysis.logoUrl || scraped.logoUrl || null,
       _debug: {
-        ...analysis._debug,
+        usedOpenAI: analysis._debug?.usedOpenAI ?? true,
+        apiKeyFound: analysis._debug?.apiKeyFound ?? true,
+        error: analysis._debug?.error,
         scrapingFailed: scrapingFailed,
         scrapingError: scrapingFailed ? (scrapingError instanceof Error ? scrapingError.message : String(scrapingError)) : undefined,
       },
