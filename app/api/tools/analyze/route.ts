@@ -104,7 +104,28 @@ async function scrapeWebsiteInfo(url: string): Promise<{
     if (!response.ok) {
       console.error('❌ [Scrape] HTTP error:', response.status, response.statusText)
       console.error('❌ [Scrape] Response headers:', Object.fromEntries(response.headers.entries()))
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      
+      // Create error with context
+      const error = new Error(`HTTP ${response.status}: ${response.statusText}`) as Error & {
+        statusCode?: number
+        errorType?: string
+        isWebsiteError?: boolean
+      }
+      error.statusCode = response.status
+      error.isWebsiteError = true
+      
+      // Categorize error
+      if (response.status === 429) {
+        error.errorType = 'website_rate_limit'
+      } else if (response.status === 403) {
+        error.errorType = 'website_blocked'
+      } else if (response.status >= 500) {
+        error.errorType = 'website_server_error'
+      } else {
+        error.errorType = 'website_error'
+      }
+      
+      throw error
     }
     
     const html = await response.text()
@@ -642,12 +663,26 @@ export async function POST(request: NextRequest) {
     } catch (error) {
       console.error('❌ [Analyze] Error scraping website:', error)
       const errorMessage = error instanceof Error ? error.message : String(error)
+      const statusCode = (error as any)?.statusCode || 500
+      const errorType = (error as any)?.errorType || 'website_error'
+      const isWebsiteError = (error as any)?.isWebsiteError || false
+      
+      // Handle website rate limits specifically
+      if (errorType === 'website_rate_limit' || (statusCode === 429 && isWebsiteError)) {
+        return NextResponse.json({
+          error: `Website rate limit: ${errorMessage}. The website (${validUrl.hostname}) is rate limiting our requests, not OpenAI.`,
+          details: errorMessage,
+          errorType: 'website_rate_limit',
+          suggestion: 'The website itself is blocking too many requests. Wait a few minutes and try again, or fill in the form manually.'
+        }, { status: 429 })
+      }
       
       // Provide helpful error message
       if (errorMessage.includes('timeout') || errorMessage.includes('aborted')) {
         return NextResponse.json({
           error: 'Website request timed out. The website may be slow or unreachable.',
           details: errorMessage,
+          errorType: 'timeout',
           suggestion: 'Try again later or fill in the form manually.'
         }, { status: 408 })
       }
@@ -656,15 +691,17 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({
           error: 'Could not reach the website. The URL may be invalid or the site may be down.',
           details: errorMessage,
+          errorType: 'network_error',
           suggestion: 'Check the URL and try again, or fill in the form manually.'
         }, { status: 503 })
       }
       
       // For CORS or blocking errors, provide more context
-      if (errorMessage.includes('CORS') || errorMessage.includes('blocked')) {
+      if (errorType === 'website_blocked' || errorMessage.includes('CORS') || errorMessage.includes('blocked')) {
         return NextResponse.json({
           error: 'Website is blocking automated requests. This is common for some sites.',
           details: errorMessage,
+          errorType: 'website_blocked',
           suggestion: 'Please fill in the form manually with the tool information.'
         }, { status: 403 })
       }
@@ -672,8 +709,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         error: 'Could not access website content. The site may require authentication or block automated requests.',
         details: errorMessage,
+        errorType: errorType,
         suggestion: 'Please fill in the form manually with the tool information.'
-      }, { status: 500 })
+      }, { status: statusCode })
     }
 
     // Analyze with OpenAI (required - no fallback)

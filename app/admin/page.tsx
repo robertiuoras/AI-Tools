@@ -370,11 +370,24 @@ export default function AdminPage() {
             } else if (errorData.details) {
               errorMessage = `${errorData.error || 'Error'}: ${JSON.stringify(errorData.details)}`
             }
+            // Get error type from response
             errorType = errorData.errorType || 'unknown'
+            
+            // If error message contains clues, update error type
+            if (errorMessage.includes('Website rate limit') || errorMessage.includes('website') && errorMessage.includes('rate limit')) {
+              errorType = 'website_rate_limit'
+            } else if (errorType === 'unknown' && response.status === 429 && !errorMessage.includes('OpenAI')) {
+              // 429 but not explicitly OpenAI - likely website
+              errorType = 'website_rate_limit'
+            }
           } catch (e) {
             // Response might not be JSON, use status text
             if (response.statusText) {
               errorMessage = `${response.status}: ${response.statusText}`
+            }
+            // If 429 and we can't parse JSON, assume website rate limit
+            if (response.status === 429) {
+              errorType = 'website_rate_limit'
             }
           }
         }
@@ -383,6 +396,7 @@ export default function AdminPage() {
         console.error('❌ Error type:', errorType)
         console.error('❌ Response status:', response?.status)
         console.error('❌ Full response:', response)
+        console.error('❌ Error data:', errorData)
         
         // Create error with type information
         const error = new Error(errorMessage) as Error & { errorType?: string; errorData?: any }
@@ -514,7 +528,15 @@ export default function AdminPage() {
       const errorData = (error as any)?.errorData || {}
       
       // Show user-friendly error messages based on error type
-      if (errorType === 'billing' || errorMessage.includes('Billing') || errorMessage.includes('insufficient_quota')) {
+      if (errorType === 'website_rate_limit') {
+        addToast({
+          variant: 'warning',
+          title: 'Website Rate Limit (Not OpenAI)',
+          description: `The website itself is rate limiting our requests, not OpenAI. ${errorMessage}\n\nWait a few minutes and try again, or fill in the form manually.`,
+          duration: 10000,
+        })
+        // Don't set cooldown for website rate limits - it's not our API
+      } else if (errorType === 'billing' || errorMessage.includes('Billing') || errorMessage.includes('insufficient_quota')) {
         addToast({
           variant: 'error',
           title: 'OpenAI Billing/Quota Issue',
@@ -528,7 +550,7 @@ export default function AdminPage() {
           description: `This is an organization-level limit, not a rate limit. ${errorMessage}\n\nCheck your organization settings at platform.openai.com/org-settings`,
           duration: 12000,
         })
-      } else if (errorType === 'rate_limit' || errorMessage.includes('429') || errorMessage.includes('Rate Limit') || errorMessage.includes('rate limit') || errorMessage.includes('Too Many Requests')) {
+      } else if (errorType === 'rate_limit' || (errorMessage.includes('429') && !errorMessage.includes('Website')) || errorMessage.includes('Rate Limit') || errorMessage.includes('rate limit') || errorMessage.includes('Too Many Requests')) {
         // Extract retry time if available
         const retryMatch = errorMessage.match(/try again in ([\d\w\s]+)/i)
         const retryTime = retryMatch ? retryMatch[1] : null
