@@ -317,6 +317,8 @@ export default function AdminPage() {
       let retries = 3
       let response: Response | null = null
       let lastError: string | null = null
+      let errorData: any = {} // Store error data from first read
+      let errorType = 'unknown'
       
       while (retries > 0) {
         try {
@@ -330,10 +332,25 @@ export default function AdminPage() {
             break // Success, exit retry loop
           }
           
-          const errorData = await response.json().catch(() => ({}))
-          lastError = errorData.details || errorData.error || errorData.suggestion || `HTTP ${response.status}`
+          // Parse error data ONCE and store it
+          try {
+            errorData = await response.json()
+            errorType = errorData.errorType || 'unknown'
+            lastError = errorData.error || errorData.details || errorData.suggestion || `HTTP ${response.status}`
+          } catch (e) {
+            // Response might not be JSON
+            lastError = `HTTP ${response.status}: ${response.statusText || 'Unknown error'}`
+            if (response.status === 429) {
+              errorType = 'website_rate_limit' // Default assumption for 429
+            }
+          }
           
           if (response.status === 429) {
+            // Only retry for OpenAI rate limits, not website rate limits
+            if (errorType === 'website_rate_limit') {
+              // Website rate limit - don't retry
+              break
+            }
             // Rate limited - wait with exponential backoff
             const waitTime = Math.pow(2, 3 - retries) * 2000 // 2s, 4s, 8s
             console.log(`Rate limited for ${urlToAnalyze}, waiting ${waitTime}ms before retry ${4 - retries}/3`)
@@ -355,47 +372,29 @@ export default function AdminPage() {
       }
       
       if (!response || !response.ok) {
-        // Try to get detailed error from response
-        let errorMessage = lastError || `HTTP ${response?.status || 'Unknown'}`
-        let errorData: any = {}
-        let errorType = 'unknown'
+        // Use stored error data (already parsed)
+        let errorMessage = lastError || errorData.error || `HTTP ${response?.status || 'Unknown'}`
         
-        if (response) {
-          try {
-            errorData = await response.json()
-            if (errorData.error) {
-              errorMessage = errorData.error
-            } else if (errorData.message) {
-              errorMessage = errorData.message
-            } else if (errorData.details) {
-              errorMessage = `${errorData.error || 'Error'}: ${JSON.stringify(errorData.details)}`
-            }
-            // Get error type from response
-            errorType = errorData.errorType || 'unknown'
-            
-            // If error message contains clues, update error type
-            if (errorMessage.includes('Website rate limit') || errorMessage.includes('website') && errorMessage.includes('rate limit')) {
-              errorType = 'website_rate_limit'
-            } else if (errorType === 'unknown' && response.status === 429 && !errorMessage.includes('OpenAI')) {
-              // 429 but not explicitly OpenAI - likely website
-              errorType = 'website_rate_limit'
-            }
-          } catch (e) {
-            // Response might not be JSON, use status text
-            if (response.statusText) {
-              errorMessage = `${response.status}: ${response.statusText}`
-            }
-            // If 429 and we can't parse JSON, assume website rate limit
-            if (response.status === 429) {
-              errorType = 'website_rate_limit'
-            }
+        // Refine error type based on error message if needed
+        if (errorType === 'unknown') {
+          if (errorMessage.includes('Website rate limit') || (errorMessage.includes('website') && errorMessage.includes('rate limit'))) {
+            errorType = 'website_rate_limit'
+          } else if (response?.status === 429 && !errorMessage.includes('OpenAI')) {
+            // 429 but not explicitly OpenAI - likely website
+            errorType = 'website_rate_limit'
+          } else if (errorMessage.includes('OpenAI')) {
+            errorType = 'rate_limit'
           }
+        }
+        
+        // Use error message from errorData if available
+        if (errorData.error && !errorMessage.includes(errorData.error)) {
+          errorMessage = errorData.error
         }
         
         console.error('❌ Analysis error:', errorMessage)
         console.error('❌ Error type:', errorType)
         console.error('❌ Response status:', response?.status)
-        console.error('❌ Full response:', response)
         console.error('❌ Error data:', errorData)
         
         // Create error with type information
