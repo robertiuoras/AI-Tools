@@ -199,13 +199,13 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
                 </div>
               )}
               <div className="flex-1 min-w-0">
-                <h3 className="font-semibold text-lg leading-tight text-foreground truncate mb-1">
+                <h3 className="font-semibold text-lg leading-tight text-foreground truncate mb-1.5">
                   {tool.name}
                 </h3>
-                <div className="flex items-center">
+                <div className="flex items-center h-5">
                   <Badge
                     variant="outline"
-                    className={`text-xs ${
+                    className={`text-xs inline-flex items-center ${
                       categoryColors[tool.category] || categoryColors.Other
                     }`}
                   >
@@ -227,7 +227,7 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
             </Button>
           </div>
 
-          <div className="mb-4 flex-1">
+          <div className="mb-4 flex-1 min-h-[60px]">
             <p className="text-sm text-muted-foreground whitespace-pre-wrap break-words">
               {displayDescription}
             </p>
@@ -241,21 +241,21 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
             )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 min-h-[32px]">
             <Button
               variant="ghost"
               size="sm"
               onClick={handleUpvote}
               disabled={upvoting || !user}
-              className={`h-8 gap-1.5 ${userUpvoted ? "text-primary" : ""}`}
+              className={`h-8 gap-1.5 flex-shrink-0 ${userUpvoted ? "text-primary" : ""}`}
             >
               <ThumbsUp
                 className={`h-4 w-4 ${userUpvoted ? "fill-current" : ""}`}
               />
               <span className="text-sm font-medium">{upvoteCount}</span>
             </Button>
-            {tool.rating && (
-              <div className="flex items-center gap-1.5">
+            {tool.rating ? (
+              <div className="flex items-center gap-1.5 flex-shrink-0">
                 <div className="flex items-center gap-0.5">
                   {[1, 2, 3, 4, 5].map((star) => {
                     const rating = tool.rating!;
@@ -290,6 +290,8 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
                   {tool.rating.toFixed(1)}
                 </span>
               </div>
+            ) : (
+              <div className="h-8 w-0"></div> // Placeholder to maintain consistent height
             )}
             {tool.traffic && tool.traffic !== "unknown" && (
               <div className="flex items-center gap-1 text-sm text-muted-foreground">

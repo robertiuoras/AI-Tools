@@ -167,11 +167,16 @@ function HomePageContent() {
     sort,
     sortOrder,
     favoritesOnly,
-    user,
+    // Removed user from dependencies - it causes unnecessary refetches
   ]);
 
+  // Debounce search to avoid too many requests
   useEffect(() => {
-    fetchTools();
+    const timeoutId = setTimeout(() => {
+      fetchTools();
+    }, search ? 300 : 0); // 300ms debounce for search, immediate for other filters
+
+    return () => clearTimeout(timeoutId);
   }, [fetchTools]);
 
   return (

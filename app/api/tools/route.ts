@@ -143,60 +143,74 @@ export async function GET(request: NextRequest) {
     )
       .toISOString()
       .split("T")[0];
-    const processedTools = await Promise.all(
-      filteredTools.map(async (tool: any) => {
-        // Get upvote count (only from current month)
-        const { count } = await admin
-          .from("upvote")
-          .select("*", { count: "exact", head: true })
-          .eq("toolId", tool.id)
-          .gte("monthlyResetDate", monthStart);
+    
+    // Get user if authenticated (once, not per tool)
+    let userId: string | null = null;
+    if (authHeader) {
+      const token = authHeader.replace("Bearer ", "");
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+      const userClient = createClient(supabaseUrl, supabaseAnonKey, {
+        global: { headers: { Authorization: `Bearer ${token}` } },
+      });
+      const {
+        data: { user },
+      } = await userClient.auth.getUser();
+      if (user) {
+        userId = user.id;
+      }
+    }
 
-        // Check if current user has upvoted today (for userUpvoted status)
-        let userUpvotedToday = false;
-        let userFavorited = false;
-        if (authHeader) {
-          const token = authHeader.replace("Bearer ", "");
-          const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-          const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-          const userClient = createClient(supabaseUrl, supabaseAnonKey, {
-            global: { headers: { Authorization: `Bearer ${token}` } },
-          });
-          const {
-            data: { user },
-          } = await userClient.auth.getUser();
+    // Batch fetch all upvote counts at once
+    const toolIds = filteredTools.map((t: any) => t.id);
+    const { data: upvoteCounts } = await admin
+      .from("upvote")
+      .select("toolId")
+      .in("toolId", toolIds)
+      .gte("monthlyResetDate", monthStart);
 
-          if (user) {
-            const today = new Date().toISOString().split("T")[0];
-            const { count: userUpvoteCount } = await admin
-              .from("upvote")
-              .select("*", { count: "exact", head: true })
-              .eq("userId", user.id)
-              .eq("toolId", tool.id)
-              .gte("upvotedAt", `${today}T00:00:00.000Z`)
-              .lt("upvotedAt", `${today}T23:59:59.999Z`);
-            userUpvotedToday = (userUpvoteCount || 0) > 0;
-            
-            // Check if user has favorited this tool
-            const { data: favorite } = await admin
-              .from("favorite")
-              .select("id")
-              .eq("userId", user.id)
-              .eq("toolId", tool.id)
-              .single();
-            
-            userFavorited = !!favorite;
-          }
-        }
+    // Count upvotes per tool
+    const upvoteCountMap = new Map<string, number>();
+    (upvoteCounts || []).forEach((upvote: any) => {
+      upvoteCountMap.set(upvote.toolId, (upvoteCountMap.get(upvote.toolId) || 0) + 1);
+    });
 
-        return {
-          ...tool,
-          upvoteCount: count || 0,
-          userUpvoted: userUpvotedToday,
-          userFavorited: userFavorited,
-        };
-      })
-    );
+    // Batch fetch user upvotes if authenticated
+    let userUpvoteSet = new Set<string>();
+    let userFavoriteSet = new Set<string>();
+    if (userId) {
+      const today = new Date().toISOString().split("T")[0];
+      const { data: userUpvotes } = await admin
+        .from("upvote")
+        .select("toolId")
+        .eq("userId", userId)
+        .in("toolId", toolIds)
+        .gte("upvotedAt", `${today}T00:00:00.000Z`)
+        .lt("upvotedAt", `${today}T23:59:59.999Z`);
+      
+      (userUpvotes || []).forEach((upvote: any) => {
+        userUpvoteSet.add(upvote.toolId);
+      });
+
+      // Batch fetch user favorites
+      const { data: userFavorites } = await admin
+        .from("favorite")
+        .select("toolId")
+        .eq("userId", userId)
+        .in("toolId", toolIds);
+      
+      (userFavorites || []).forEach((favorite: any) => {
+        userFavoriteSet.add(favorite.toolId);
+      });
+    }
+
+    // Map results to tools
+    const processedTools = filteredTools.map((tool: any) => ({
+      ...tool,
+      upvoteCount: upvoteCountMap.get(tool.id) || 0,
+      userUpvoted: userUpvoteSet.has(tool.id),
+      userFavorited: userFavoriteSet.has(tool.id),
+    }));
 
     // Sort by upvotes if requested
     if (sort === "upvotes") {
