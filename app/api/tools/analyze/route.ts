@@ -15,6 +15,8 @@ interface AnalysisResult {
     usedOpenAI: boolean
     apiKeyFound: boolean
     error?: string
+    scrapingFailed?: boolean
+    scrapingError?: string
   }
 }
 
@@ -651,6 +653,9 @@ export async function POST(request: NextRequest) {
     // Scrape basic info (including pricing page)
     console.log('🔍 [Analyze] Scraping website info...')
     let scraped
+    let scrapingFailed = false
+    let scrapingError: any = null
+    
     try {
       scraped = await scrapeWebsiteInfo(validUrl.toString())
       console.log('✅ [Analyze] Scraped info:', {
@@ -662,56 +667,59 @@ export async function POST(request: NextRequest) {
       })
     } catch (error) {
       console.error('❌ [Analyze] Error scraping website:', error)
+      scrapingFailed = true
+      scrapingError = error
+      
       const errorMessage = error instanceof Error ? error.message : String(error)
       const statusCode = (error as any)?.statusCode || 500
       const errorType = (error as any)?.errorType || 'website_error'
       const isWebsiteError = (error as any)?.isWebsiteError || false
       
-      // Handle website rate limits specifically
-      if (errorType === 'website_rate_limit' || (statusCode === 429 && isWebsiteError)) {
-        return NextResponse.json({
-          error: `Website rate limit: ${errorMessage}. The website (${validUrl.hostname}) is rate limiting our requests, not OpenAI.`,
-          details: errorMessage,
-          errorType: 'website_rate_limit',
-          suggestion: 'The website itself is blocking too many requests. Wait a few minutes and try again, or fill in the form manually.'
-        }, { status: 429 })
-      }
+      // For website rate limits and blocking, we'll still try OpenAI with just the URL
+      // But for other errors, we might want to fail fast
+      const canStillUseOpenAI = errorType === 'website_rate_limit' || 
+                                 errorType === 'website_blocked' ||
+                                 (statusCode === 429 && isWebsiteError) ||
+                                 errorMessage.includes('CORS') ||
+                                 errorMessage.includes('blocked')
       
-      // Provide helpful error message
-      if (errorMessage.includes('timeout') || errorMessage.includes('aborted')) {
+      if (!canStillUseOpenAI) {
+        // For timeouts, network errors, etc., return error immediately
+        if (errorMessage.includes('timeout') || errorMessage.includes('aborted')) {
+          return NextResponse.json({
+            error: 'Website request timed out. The website may be slow or unreachable.',
+            details: errorMessage,
+            errorType: 'timeout',
+            suggestion: 'Try again later or fill in the form manually.'
+          }, { status: 408 })
+        }
+        
+        if (errorMessage.includes('Failed to fetch') || errorMessage.includes('network') || errorMessage.includes('ECONNREFUSED') || errorMessage.includes('ENOTFOUND')) {
+          return NextResponse.json({
+            error: 'Could not reach the website. The URL may be invalid or the site may be down.',
+            details: errorMessage,
+            errorType: 'network_error',
+            suggestion: 'Check the URL and try again, or fill in the form manually.'
+          }, { status: 503 })
+        }
+        
         return NextResponse.json({
-          error: 'Website request timed out. The website may be slow or unreachable.',
+          error: 'Could not access website content. The site may require authentication or block automated requests.',
           details: errorMessage,
-          errorType: 'timeout',
-          suggestion: 'Try again later or fill in the form manually.'
-        }, { status: 408 })
-      }
-      
-      if (errorMessage.includes('Failed to fetch') || errorMessage.includes('network') || errorMessage.includes('ECONNREFUSED') || errorMessage.includes('ENOTFOUND')) {
-        return NextResponse.json({
-          error: 'Could not reach the website. The URL may be invalid or the site may be down.',
-          details: errorMessage,
-          errorType: 'network_error',
-          suggestion: 'Check the URL and try again, or fill in the form manually.'
-        }, { status: 503 })
-      }
-      
-      // For CORS or blocking errors, provide more context
-      if (errorType === 'website_blocked' || errorMessage.includes('CORS') || errorMessage.includes('blocked')) {
-        return NextResponse.json({
-          error: 'Website is blocking automated requests. This is common for some sites.',
-          details: errorMessage,
-          errorType: 'website_blocked',
+          errorType: errorType,
           suggestion: 'Please fill in the form manually with the tool information.'
-        }, { status: 403 })
+        }, { status: statusCode })
       }
       
-      return NextResponse.json({
-        error: 'Could not access website content. The site may require authentication or block automated requests.',
-        details: errorMessage,
-        errorType: errorType,
-        suggestion: 'Please fill in the form manually with the tool information.'
-      }, { status: statusCode })
+      // For rate limits and blocking, create minimal scraped data and continue
+      console.log('⚠️ [Analyze] Scraping failed, but will attempt OpenAI analysis with URL only')
+      scraped = {
+        title: validUrl.hostname.replace('www.', '').replace('.com', '').replace('.ai', ''),
+        description: '',
+        logoUrl: null,
+        pricingContent: '',
+        pageContent: '',
+      }
     }
 
     // Analyze with OpenAI (required - no fallback)
@@ -721,6 +729,7 @@ export async function POST(request: NextRequest) {
       hasDescription: !!scraped.description,
       hasPricingContent: scraped.pricingContent.length > 0,
       hasPageContent: scraped.pageContent.length > 0,
+      scrapingFailed: scrapingFailed,
     })
     
     let analysis
@@ -741,30 +750,46 @@ export async function POST(request: NextRequest) {
       const retryAfter = (error as any)?.retryAfter
       const errorType = (error as any)?.errorType || 'unknown'
       
+      // If scraping also failed, include that info
+      let combinedError = errorMessage
+      if (scrapingFailed && scrapingError) {
+        const scrapingErrorMsg = scrapingError instanceof Error ? scrapingError.message : String(scrapingError)
+        const scrapingErrorType = (scrapingError as any)?.errorType || 'website_error'
+        
+        if (scrapingErrorType === 'website_rate_limit') {
+          combinedError = `Website rate limit prevented scraping, and ${errorMessage.toLowerCase()}`
+        } else if (scrapingErrorType === 'website_blocked') {
+          combinedError = `Website blocked scraping, and ${errorMessage.toLowerCase()}`
+        }
+      }
+      
       // Handle different error types with specific messages
       if (errorType === 'billing') {
         return NextResponse.json({
-          error: errorMessage,
+          error: combinedError,
           details: errorDetails,
           errorType: 'billing',
+          scrapingFailed: scrapingFailed,
           suggestion: 'This is a billing/quota issue, NOT a rate limit. Check your billing and usage at https://platform.openai.com/account/billing'
         }, { status: statusCode })
       }
       
       if (errorType === 'organization_limit') {
         return NextResponse.json({
-          error: errorMessage,
+          error: combinedError,
           details: errorDetails,
           errorType: 'organization_limit',
+          scrapingFailed: scrapingFailed,
           suggestion: 'This is an organization-level limit. Check your organization settings at https://platform.openai.com/org-settings'
         }, { status: statusCode })
       }
       
       if (errorType === 'authentication') {
         return NextResponse.json({
-          error: errorMessage,
+          error: combinedError,
           details: errorDetails,
           errorType: 'authentication',
+          scrapingFailed: scrapingFailed,
           suggestion: 'Check your API key at https://platform.openai.com/api-keys'
         }, { status: statusCode })
       }
@@ -772,10 +797,11 @@ export async function POST(request: NextRequest) {
       // Handle rate limit errors specifically
       if (statusCode === 429 || errorType === 'rate_limit') {
         return NextResponse.json({
-          error: errorMessage,
+          error: combinedError,
           details: errorDetails,
           retryAfter: retryAfter,
           errorType: 'rate_limit',
+          scrapingFailed: scrapingFailed,
           suggestion: 'This is an RPM (requests per minute) limit. Even with balance, low-tier accounts have low RPM limits. Check your tier at platform.openai.com/account/limits'
         }, { status: 429 })
       }
@@ -784,6 +810,7 @@ export async function POST(request: NextRequest) {
         error: 'Failed to analyze with OpenAI',
         details: errorDetails || errorMessage,
         errorType: errorType,
+        scrapingFailed: scrapingFailed,
         suggestion: errorMessage.includes('API key') 
           ? 'Please check your OPENAI_API_KEY environment variable'
           : `OpenAI API error (${statusCode}). Check the details above or try again later.`
@@ -800,7 +827,11 @@ export async function POST(request: NextRequest) {
       rating: analysis.rating ?? null,
       estimatedVisits: analysis.estimatedVisits ?? null,
       logoUrl: analysis.logoUrl || scraped.logoUrl || null,
-      _debug: analysis._debug,
+      _debug: {
+        ...analysis._debug,
+        scrapingFailed: scrapingFailed,
+        scrapingError: scrapingFailed ? (scrapingError instanceof Error ? scrapingError.message : String(scrapingError)) : undefined,
+      },
     }
 
     console.log('📊 [Analyze] Final result:', JSON.stringify(result, null, 2))

@@ -416,6 +416,15 @@ export default function AdminPage() {
       if (data._debug) {
         if (data._debug.usedOpenAI) {
           console.log('✅ OpenAI was used for analysis!')
+          if (data._debug.scrapingFailed) {
+            console.warn('⚠️ Website scraping failed, but OpenAI analysis succeeded with URL only')
+            addToast({
+              variant: 'info',
+              title: 'Analysis Complete (Limited Data)',
+              description: 'The website blocked our scraping, but we analyzed it using AI with just the URL. Please review and fill in any missing details manually.',
+              duration: 8000,
+            })
+          }
         } else {
           console.warn('⚠️ OpenAI was NOT used. Reason:', data._debug.error || 'Unknown')
           console.warn('⚠️ Using basic analysis instead.')
@@ -528,12 +537,24 @@ export default function AdminPage() {
       
       // Show user-friendly error messages based on error type
       if (errorType === 'website_rate_limit') {
-        addToast({
-          variant: 'warning',
-          title: 'Website Rate Limit (Not OpenAI)',
-          description: `The website itself is rate limiting our requests, not OpenAI. ${errorMessage}\n\nWait a few minutes and try again, or fill in the form manually.`,
-          duration: 10000,
-        })
+        // Check if OpenAI analysis still succeeded despite scraping failure
+        const scrapingFailed = errorData.scrapingFailed || false
+        
+        if (scrapingFailed) {
+          addToast({
+            variant: 'warning',
+            title: 'Website Rate Limited - Using AI Analysis',
+            description: `The website is rate limiting our scraping, but we're still trying to analyze it with AI using just the URL. If the analysis is incomplete, you can fill in the form manually.`,
+            duration: 8000,
+          })
+        } else {
+          addToast({
+            variant: 'warning',
+            title: 'Website Rate Limit (Not OpenAI)',
+            description: `The website itself is rate limiting our requests, not OpenAI. ${errorMessage}\n\nWait a few minutes and try again, or fill in the form manually.`,
+            duration: 10000,
+          })
+        }
         // Don't set cooldown for website rate limits - it's not our API
       } else if (errorType === 'billing' || errorMessage.includes('Billing') || errorMessage.includes('insufficient_quota')) {
         addToast({
