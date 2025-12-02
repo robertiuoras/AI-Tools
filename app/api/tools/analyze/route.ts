@@ -424,20 +424,26 @@ Rules:
         }
         errorMsg += ` Check your limits at https://platform.openai.com/account/limits`
         
-        return NextResponse.json({
-          error: errorMsg,
-          details: errorDetails,
-          retryAfter: retryAfterHeader || retryAfter,
-          suggestion: 'This is an RPM (requests per minute) limit. Even with balance, low-tier accounts have low RPM limits. Check your tier at platform.openai.com/account/limits'
-        }, { status: 429 })
+        // Throw error with additional context that will be caught by the POST handler
+        const error = new Error(errorMsg) as Error & { 
+          statusCode?: number
+          details?: any
+          retryAfter?: string | null
+        }
+        error.statusCode = 429
+        error.details = errorDetails
+        error.retryAfter = retryAfterHeader || retryAfter
+        throw error
       }
       
-      // For other errors, return the actual OpenAI error
-      return NextResponse.json({
-        error: `OpenAI API error: ${response.status}`,
-        details: errorDetails,
-        message: errorText
-      }, { status: response.status })
+      // For other errors, throw with context
+      const error = new Error(`OpenAI API error: ${response.status} - ${errorText}`) as Error & {
+        statusCode?: number
+        details?: any
+      }
+      error.statusCode = response.status
+      error.details = errorDetails
+      throw error
     }
 
     const data = await response.json()
@@ -587,13 +593,27 @@ export async function POST(request: NextRequest) {
     } catch (error) {
       console.error('❌ [Analyze] OpenAI analysis failed:', error)
       const errorMessage = error instanceof Error ? error.message : String(error)
+      const statusCode = (error as any)?.statusCode || 500
+      const errorDetails = (error as any)?.details
+      const retryAfter = (error as any)?.retryAfter
+      
+      // Handle rate limit errors specifically
+      if (statusCode === 429) {
+        return NextResponse.json({
+          error: errorMessage,
+          details: errorDetails,
+          retryAfter: retryAfter,
+          suggestion: 'This is an RPM (requests per minute) limit. Even with balance, low-tier accounts have low RPM limits. Check your tier at platform.openai.com/account/limits'
+        }, { status: 429 })
+      }
+      
       return NextResponse.json({
         error: 'Failed to analyze with OpenAI',
-        details: errorMessage,
+        details: errorDetails || errorMessage,
         suggestion: errorMessage.includes('API key') 
           ? 'Please check your OPENAI_API_KEY environment variable'
           : 'OpenAI API error. Please try again or fill the form manually.'
-      }, { status: 500 })
+      }, { status: statusCode })
     }
 
     const result: AnalysisResult = {
