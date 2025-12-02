@@ -394,21 +394,44 @@ Rules:
         console.error('❌ [OpenAI] Parsed error details:', JSON.stringify(errorDetails, null, 2))
       } catch (e) {
         console.error('❌ [OpenAI] Error response is not JSON:', errorText)
+        errorDetails = { raw: errorText }
       }
       
-      // Handle rate limit errors specifically
-      if (response.status === 429) {
+      // Extract error message and type
+      const rateLimitError = errorDetails?.error || errorDetails
+      const message = rateLimitError?.message || errorText || 'Unknown error'
+      const errorType = errorDetails?.error?.type || errorDetails?.type || 'unknown'
+      const errorCode = errorDetails?.error?.code || errorDetails?.code
+      
+      // Check for different types of errors
+      const isBillingError = message.includes('billing') || 
+                            message.includes('payment') || 
+                            message.includes('insufficient_quota') ||
+                            errorCode === 'insufficient_quota' ||
+                            response.status === 402
+      
+      const isOrgLimitError = message.includes('organization') ||
+                             message.includes('org') ||
+                             errorType === 'organization_quota_exceeded'
+      
+      const isAuthError = response.status === 401 || 
+                         message.includes('invalid_api_key') ||
+                         message.includes('authentication') ||
+                         errorCode === 'invalid_api_key'
+      
+      // Handle rate limit errors specifically (429)
+      if (response.status === 429 && !isBillingError && !isOrgLimitError) {
         // Check for retry-after header
         const retryAfterHeader = response.headers.get('retry-after')
-        const rateLimitError = errorDetails?.error || errorDetails
-        const message = rateLimitError?.message || errorText || 'Rate limit exceeded'
         const retryAfter = retryAfterHeader || message.match(/try again in ([\d\w\s]+)/i)?.[1] || null
         
         console.error('❌ [OpenAI] ==========================================')
-        console.error('❌ [OpenAI] RATE LIMIT EXCEEDED!')
+        console.error('❌ [OpenAI] RATE LIMIT EXCEEDED (429)!')
         console.error('❌ [OpenAI] Retry-After header:', retryAfterHeader || 'not provided')
         console.error('❌ [OpenAI] Retry after from message:', retryAfter)
         console.error('❌ [OpenAI] Full error message:', message)
+        console.error('❌ [OpenAI] Error type:', errorType)
+        console.error('❌ [OpenAI] Error code:', errorCode)
         console.error('❌ [OpenAI] Full error object:', JSON.stringify(errorDetails, null, 2))
         console.error('❌ [OpenAI] This is likely an RPM (Requests Per Minute) limit')
         console.error('❌ [OpenAI] Check your tier and limits at: https://platform.openai.com/account/limits')
@@ -429,20 +452,102 @@ Rules:
           statusCode?: number
           details?: any
           retryAfter?: string | null
+          errorType?: string
         }
         error.statusCode = 429
         error.details = errorDetails
         error.retryAfter = retryAfterHeader || retryAfter
+        error.errorType = 'rate_limit'
+        throw error
+      }
+      
+      // Handle billing/quota errors
+      if (isBillingError || response.status === 402) {
+        console.error('❌ [OpenAI] ==========================================')
+        console.error('❌ [OpenAI] BILLING/QUOTA ERROR!')
+        console.error('❌ [OpenAI] This is NOT a rate limit - it\'s a billing issue')
+        console.error('❌ [OpenAI] Error message:', message)
+        console.error('❌ [OpenAI] Error type:', errorType)
+        console.error('❌ [OpenAI] Error code:', errorCode)
+        console.error('❌ [OpenAI] Full error object:', JSON.stringify(errorDetails, null, 2))
+        console.error('❌ [OpenAI] Check your billing at: https://platform.openai.com/account/billing')
+        console.error('❌ [OpenAI] Check your usage at: https://platform.openai.com/usage')
+        console.error('❌ [OpenAI] ==========================================')
+        
+        const error = new Error(`OpenAI Billing/Quota Error: ${message}. This is NOT a rate limit. Check your billing and usage limits at https://platform.openai.com/account/billing`) as Error & {
+          statusCode?: number
+          details?: any
+          errorType?: string
+        }
+        error.statusCode = response.status
+        error.details = errorDetails
+        error.errorType = 'billing'
+        throw error
+      }
+      
+      // Handle organization limit errors
+      if (isOrgLimitError) {
+        console.error('❌ [OpenAI] ==========================================')
+        console.error('❌ [OpenAI] ORGANIZATION LIMIT ERROR!')
+        console.error('❌ [OpenAI] This is an organization-level limit, not a rate limit')
+        console.error('❌ [OpenAI] Error message:', message)
+        console.error('❌ [OpenAI] Error type:', errorType)
+        console.error('❌ [OpenAI] Error code:', errorCode)
+        console.error('❌ [OpenAI] Full error object:', JSON.stringify(errorDetails, null, 2))
+        console.error('❌ [OpenAI] Check your organization settings at: https://platform.openai.com/org-settings')
+        console.error('❌ [OpenAI] ==========================================')
+        
+        const error = new Error(`OpenAI Organization Limit: ${message}. Check your organization settings at https://platform.openai.com/org-settings`) as Error & {
+          statusCode?: number
+          details?: any
+          errorType?: string
+        }
+        error.statusCode = response.status
+        error.details = errorDetails
+        error.errorType = 'organization_limit'
+        throw error
+      }
+      
+      // Handle auth errors
+      if (isAuthError) {
+        console.error('❌ [OpenAI] ==========================================')
+        console.error('❌ [OpenAI] AUTHENTICATION ERROR!')
+        console.error('❌ [OpenAI] Error message:', message)
+        console.error('❌ [OpenAI] Error type:', errorType)
+        console.error('❌ [OpenAI] Error code:', errorCode)
+        console.error('❌ [OpenAI] Full error object:', JSON.stringify(errorDetails, null, 2))
+        console.error('❌ [OpenAI] Check your API key at: https://platform.openai.com/api-keys')
+        console.error('❌ [OpenAI] ==========================================')
+        
+        const error = new Error(`OpenAI Authentication Error: ${message}. Check your API key at https://platform.openai.com/api-keys`) as Error & {
+          statusCode?: number
+          details?: any
+          errorType?: string
+        }
+        error.statusCode = response.status
+        error.details = errorDetails
+        error.errorType = 'authentication'
         throw error
       }
       
       // For other errors, throw with context
-      const error = new Error(`OpenAI API error: ${response.status} - ${errorText}`) as Error & {
+      console.error('❌ [OpenAI] ==========================================')
+      console.error('❌ [OpenAI] UNKNOWN ERROR!')
+      console.error('❌ [OpenAI] Status:', response.status)
+      console.error('❌ [OpenAI] Error message:', message)
+      console.error('❌ [OpenAI] Error type:', errorType)
+      console.error('❌ [OpenAI] Error code:', errorCode)
+      console.error('❌ [OpenAI] Full error object:', JSON.stringify(errorDetails, null, 2))
+      console.error('❌ [OpenAI] ==========================================')
+      
+      const error = new Error(`OpenAI API error (${response.status}): ${message}. Full details: ${JSON.stringify(errorDetails)}`) as Error & {
         statusCode?: number
         details?: any
+        errorType?: string
       }
       error.statusCode = response.status
       error.details = errorDetails
+      error.errorType = 'unknown'
       throw error
     }
 
@@ -596,13 +701,43 @@ export async function POST(request: NextRequest) {
       const statusCode = (error as any)?.statusCode || 500
       const errorDetails = (error as any)?.details
       const retryAfter = (error as any)?.retryAfter
+      const errorType = (error as any)?.errorType || 'unknown'
+      
+      // Handle different error types with specific messages
+      if (errorType === 'billing') {
+        return NextResponse.json({
+          error: errorMessage,
+          details: errorDetails,
+          errorType: 'billing',
+          suggestion: 'This is a billing/quota issue, NOT a rate limit. Check your billing and usage at https://platform.openai.com/account/billing'
+        }, { status: statusCode })
+      }
+      
+      if (errorType === 'organization_limit') {
+        return NextResponse.json({
+          error: errorMessage,
+          details: errorDetails,
+          errorType: 'organization_limit',
+          suggestion: 'This is an organization-level limit. Check your organization settings at https://platform.openai.com/org-settings'
+        }, { status: statusCode })
+      }
+      
+      if (errorType === 'authentication') {
+        return NextResponse.json({
+          error: errorMessage,
+          details: errorDetails,
+          errorType: 'authentication',
+          suggestion: 'Check your API key at https://platform.openai.com/api-keys'
+        }, { status: statusCode })
+      }
       
       // Handle rate limit errors specifically
-      if (statusCode === 429) {
+      if (statusCode === 429 || errorType === 'rate_limit') {
         return NextResponse.json({
           error: errorMessage,
           details: errorDetails,
           retryAfter: retryAfter,
+          errorType: 'rate_limit',
           suggestion: 'This is an RPM (requests per minute) limit. Even with balance, low-tier accounts have low RPM limits. Check your tier at platform.openai.com/account/limits'
         }, { status: 429 })
       }
@@ -610,9 +745,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         error: 'Failed to analyze with OpenAI',
         details: errorDetails || errorMessage,
+        errorType: errorType,
         suggestion: errorMessage.includes('API key') 
           ? 'Please check your OPENAI_API_KEY environment variable'
-          : 'OpenAI API error. Please try again or fill the form manually.'
+          : `OpenAI API error (${statusCode}). Check the details above or try again later.`
       }, { status: statusCode })
     }
 

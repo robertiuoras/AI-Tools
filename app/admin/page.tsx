@@ -357,10 +357,12 @@ export default function AdminPage() {
       if (!response || !response.ok) {
         // Try to get detailed error from response
         let errorMessage = lastError || `HTTP ${response?.status || 'Unknown'}`
+        let errorData: any = {}
+        let errorType = 'unknown'
         
         if (response) {
           try {
-            const errorData = await response.json()
+            errorData = await response.json()
             if (errorData.error) {
               errorMessage = errorData.error
             } else if (errorData.message) {
@@ -368,6 +370,7 @@ export default function AdminPage() {
             } else if (errorData.details) {
               errorMessage = `${errorData.error || 'Error'}: ${JSON.stringify(errorData.details)}`
             }
+            errorType = errorData.errorType || 'unknown'
           } catch (e) {
             // Response might not be JSON, use status text
             if (response.statusText) {
@@ -377,10 +380,15 @@ export default function AdminPage() {
         }
         
         console.error('❌ Analysis error:', errorMessage)
+        console.error('❌ Error type:', errorType)
         console.error('❌ Response status:', response?.status)
         console.error('❌ Full response:', response)
         
-        throw new Error(errorMessage)
+        // Create error with type information
+        const error = new Error(errorMessage) as Error & { errorType?: string; errorData?: any }
+        error.errorType = errorType
+        error.errorData = errorData
+        throw error
       }
 
       const data = await response.json()
@@ -502,9 +510,25 @@ export default function AdminPage() {
     } catch (error) {
       console.error('Error analyzing URL:', error)
       const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      const errorType = (error as any)?.errorType || 'unknown'
+      const errorData = (error as any)?.errorData || {}
       
-      // Show user-friendly error messages
-      if (errorMessage.includes('429') || errorMessage.includes('Rate Limit') || errorMessage.includes('rate limit') || errorMessage.includes('Too Many Requests')) {
+      // Show user-friendly error messages based on error type
+      if (errorType === 'billing' || errorMessage.includes('Billing') || errorMessage.includes('insufficient_quota')) {
+        addToast({
+          variant: 'error',
+          title: 'OpenAI Billing/Quota Issue',
+          description: `This is NOT a rate limit - it's a billing or quota issue. ${errorMessage}\n\nCheck your billing and usage at platform.openai.com/account/billing`,
+          duration: 12000,
+        })
+      } else if (errorType === 'organization_limit') {
+        addToast({
+          variant: 'error',
+          title: 'OpenAI Organization Limit',
+          description: `This is an organization-level limit, not a rate limit. ${errorMessage}\n\nCheck your organization settings at platform.openai.com/org-settings`,
+          duration: 12000,
+        })
+      } else if (errorType === 'rate_limit' || errorMessage.includes('429') || errorMessage.includes('Rate Limit') || errorMessage.includes('rate limit') || errorMessage.includes('Too Many Requests')) {
         // Extract retry time if available
         const retryMatch = errorMessage.match(/try again in ([\d\w\s]+)/i)
         const retryTime = retryMatch ? retryMatch[1] : null
