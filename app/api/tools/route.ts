@@ -15,13 +15,8 @@ export async function GET(request: NextRequest) {
     const order = searchParams.get("order") || "asc";
     const favoritesOnly = searchParams.get("favoritesOnly") === "true";
 
-    // Get current user if authenticated
+    // Get authorization header (used later for user authentication)
     const authHeader = request.headers.get("authorization");
-    let userId: string | null = null;
-    if (authHeader) {
-      // In a real app, you'd verify the token here
-      // For now, we'll get user from session in the frontend
-    }
 
     // Type assertion to work around Proxy type issues
     const admin = supabaseAdmin as any;
