@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import Image from "next/image";
 import Link from "next/link";
-import { ExternalLink, Star, TrendingUp, ThumbsUp } from "lucide-react";
+import { ExternalLink, Star, TrendingUp, ThumbsUp, Heart } from "lucide-react";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -43,6 +43,9 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
   const [upvoteCount, setUpvoteCount] = useState(tool.upvoteCount || 0);
   const [userUpvoted, setUserUpvoted] = useState(tool.userUpvoted || false);
   const [upvoting, setUpvoting] = useState(false);
+  const [userFavorited, setUserFavorited] = useState(tool.userFavorited || false);
+  const [favoriting, setFavoriting] = useState(false);
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -57,6 +60,30 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
 
     return () => subscription.unsubscribe();
   }, []);
+
+  // Load favorite status on mount
+  useEffect(() => {
+    if (user && tool.id) {
+      const loadFavoriteStatus = async () => {
+        try {
+          const session = await supabase.auth.getSession();
+          const token = (await session).data.session?.access_token;
+          const response = await fetch(`/api/tools/${tool.id}/favorite`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          });
+          if (response.ok) {
+            const data = await response.json();
+            setUserFavorited(data.favorited);
+          }
+        } catch (error) {
+          console.error("Error loading favorite status:", error);
+        }
+      };
+      loadFavoriteStatus();
+    }
+  }, [user, tool.id]);
 
   const handleUpvote = async () => {
     if (!user) {
@@ -95,6 +122,48 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
     }
   };
 
+  const handleFavorite = async () => {
+    if (!user) {
+      alert("Please log in to favorite tools");
+      return;
+    }
+
+    setFavoriting(true);
+    try {
+      const session = await supabase.auth.getSession();
+      const token = (await session).data.session?.access_token;
+
+      const response = await fetch(`/api/tools/${tool.id}/favorite`, {
+        method: userFavorited ? "DELETE" : "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(
+          errorData.message || errorData.error || "Failed to favorite"
+        );
+      }
+
+      const data = await response.json();
+      setUserFavorited(data.favorited);
+    } catch (error: any) {
+      console.error("Error favoriting:", error);
+      alert(error.message || "Failed to favorite. Please try again.");
+    } finally {
+      setFavoriting(false);
+    }
+  };
+
+  const maxDescriptionLength = 120;
+  const shouldTruncate = tool.description.length > maxDescriptionLength;
+  const displayDescription = descriptionExpanded || !shouldTruncate
+    ? tool.description
+    : tool.description.substring(0, maxDescriptionLength) + "...";
+
   const formatVisits = (visits?: number | null) => {
     if (!visits) return null;
     if (visits >= 1000000) return `${(visits / 1000000).toFixed(1)}M`;
@@ -111,9 +180,9 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
       <Card className="group relative flex h-full flex-col overflow-hidden border-border/50 bg-card transition-all duration-300 hover:border-primary/50 hover:shadow-lg hover:shadow-primary/10 dark:hover:shadow-primary/20">
         <CardContent className="flex flex-1 flex-col p-6">
           <div className="mb-4 flex items-start justify-between">
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-1">
               {tool.logoUrl ? (
-                <div className="relative h-12 w-12 overflow-hidden rounded-lg border border-border bg-background">
+                <div className="relative h-12 w-12 overflow-hidden rounded-lg border border-border bg-background flex-shrink-0">
                   <Image
                     src={tool.logoUrl}
                     alt={tool.name}
@@ -123,13 +192,13 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
                   />
                 </div>
               ) : (
-                <div className="flex h-12 w-12 items-center justify-center rounded-lg border border-border bg-gradient-to-br from-primary/20 to-secondary/20">
+                <div className="flex h-12 w-12 items-center justify-center rounded-lg border border-border bg-gradient-to-br from-primary/20 to-secondary/20 flex-shrink-0">
                   <span className="text-xl font-bold text-primary">
                     {tool.name.charAt(0).toUpperCase()}
                   </span>
                 </div>
               )}
-              <div className="flex-1">
+              <div className="flex-1 min-w-0">
                 <h3 className="font-semibold text-lg leading-tight text-foreground">
                   {tool.name}
                 </h3>
@@ -143,11 +212,32 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
                 </Badge>
               </div>
             </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleFavorite}
+              disabled={favoriting || !user}
+              className={`h-8 w-8 p-0 flex-shrink-0 ${userFavorited ? "text-red-500" : ""}`}
+            >
+              <Heart
+                className={`h-4 w-4 ${userFavorited ? "fill-current" : ""}`}
+              />
+            </Button>
           </div>
 
-          <p className="mb-4 flex-1 line-clamp-2 text-sm text-muted-foreground">
-            {tool.description}
-          </p>
+          <div className="mb-4 flex-1">
+            <p className="text-sm text-muted-foreground whitespace-pre-wrap break-words">
+              {displayDescription}
+            </p>
+            {shouldTruncate && (
+              <button
+                onClick={() => setDescriptionExpanded(!descriptionExpanded)}
+                className="mt-1 text-xs text-primary hover:underline"
+              >
+                {descriptionExpanded ? "Show less" : "Show more..."}
+              </button>
+            )}
+          </div>
 
           <div className="flex flex-wrap items-center gap-2">
             <Button

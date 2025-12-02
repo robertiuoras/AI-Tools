@@ -14,10 +14,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { Heart } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import type { Tool } from "@/lib/supabase";
 
-type SortOption = "alphabetical" | "newest" | "popular" | "traffic" | "upvotes";
+type SortOption = "alphabetical" | "newest" | "popular" | "traffic" | "traffic-low" | "upvotes";
 type SortOrder = "asc" | "desc";
 
 function HomePageContent() {
@@ -30,6 +32,23 @@ function HomePageContent() {
   const [selectedRevenue, setSelectedRevenue] = useState<string[]>([]);
   const [sort, setSort] = useState<SortOption>("alphabetical");
   const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [user, setUser] = useState<any>(null);
+
+  // Get user session
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
 
   // Handle OAuth callback if tokens are in the hash
   useEffect(() => {
@@ -103,8 +122,21 @@ function HomePageContent() {
       if (search) params.append("search", search);
       params.append("sort", sort);
       params.append("order", sortOrder);
+      if (favoritesOnly) params.append("favoritesOnly", "true");
 
-      const response = await fetch(`/api/tools?${params.toString()}`);
+      const session = await supabase.auth.getSession();
+      const token = (await session).data.session?.access_token;
+
+      const headers: HeadersInit = {
+        "Content-Type": "application/json",
+      };
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+
+      const response = await fetch(`/api/tools?${params.toString()}`, {
+        headers,
+      });
 
       if (!response.ok) {
         console.error("Failed to fetch tools:", response.statusText);
@@ -134,6 +166,8 @@ function HomePageContent() {
     search,
     sort,
     sortOrder,
+    favoritesOnly,
+    user,
   ]);
 
   useEffect(() => {
@@ -163,6 +197,17 @@ function HomePageContent() {
               </div>
               <UpvoteTimer />
               <div className="flex items-center gap-2">
+                {user && (
+                  <Button
+                    variant={favoritesOnly ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setFavoritesOnly(!favoritesOnly)}
+                    className="gap-2"
+                  >
+                    <Heart className={`h-4 w-4 ${favoritesOnly ? "fill-current" : ""}`} />
+                    Favorites
+                  </Button>
+                )}
                 <Select
                   value={sort}
                   onValueChange={(v) => setSort(v as SortOption)}
@@ -171,10 +216,11 @@ function HomePageContent() {
                     <SelectValue placeholder="Sort by" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="popular">Most Popular</SelectItem>
                     <SelectItem value="alphabetical">Alphabetical</SelectItem>
                     <SelectItem value="newest">Newest</SelectItem>
-                    <SelectItem value="popular">Most Popular</SelectItem>
                     <SelectItem value="traffic">Highest Traffic</SelectItem>
+                    <SelectItem value="traffic-low">Lowest Traffic</SelectItem>
                     <SelectItem value="upvotes">Most Upvoted</SelectItem>
                   </SelectContent>
                 </Select>

@@ -131,6 +131,40 @@ CREATE TRIGGER update_user_updated_at BEFORE UPDATE ON "user"
 CREATE TRIGGER update_comment_updated_at BEFORE UPDATE ON "comment"
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+-- 11. Create Favorites table
+CREATE TABLE IF NOT EXISTS "favorite" (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "userId" UUID NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  "toolId" TEXT NOT NULL REFERENCES "tool"(id) ON DELETE CASCADE,
+  "createdAt" TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  UNIQUE("userId", "toolId")
+);
+
+-- Create indexes for Favorites table
+CREATE INDEX IF NOT EXISTS "favorite_toolId_idx" ON "favorite"("toolId");
+CREATE INDEX IF NOT EXISTS "favorite_userId_idx" ON "favorite"("userId");
+
+-- 12. Enable RLS on Favorites table
+ALTER TABLE "favorite" ENABLE ROW LEVEL SECURITY;
+
+-- 13. Create RLS policies for Favorites table
+-- Drop existing policies if they exist
+DROP POLICY IF EXISTS "Anyone can read favorites" ON "favorite";
+DROP POLICY IF EXISTS "Users can create own favorites" ON "favorite";
+DROP POLICY IF EXISTS "Users can delete own favorites" ON "favorite";
+
+-- Anyone can read favorites
+CREATE POLICY "Anyone can read favorites" ON "favorite"
+  FOR SELECT USING (true);
+
+-- Users can create their own favorites
+CREATE POLICY "Users can create own favorites" ON "favorite"
+  FOR INSERT WITH CHECK (auth.uid() = "userId");
+
+-- Users can delete their own favorites
+CREATE POLICY "Users can delete own favorites" ON "favorite"
+  FOR DELETE USING (auth.uid() = "userId");
+
 -- Note: Make sure your Tool table has the correct structure
 -- It should have: id, name, description, url, logoUrl, category, tags, traffic, revenue, rating, estimatedVisits, createdAt, updatedAt
 

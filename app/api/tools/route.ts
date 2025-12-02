@@ -13,6 +13,7 @@ export async function GET(request: NextRequest) {
     const search = searchParams.get("search");
     const sort = searchParams.get("sort") || "alphabetical";
     const order = searchParams.get("order") || "asc";
+    const favoritesOnly = searchParams.get("favoritesOnly") === "true";
 
     // Get current user if authenticated
     const authHeader = request.headers.get("authorization");
@@ -60,9 +61,16 @@ export async function GET(request: NextRequest) {
         nullsFirst: false,
       });
     } else if (sort === "traffic") {
+      // Highest traffic = highest visits = descending order
       query = query.order("estimatedVisits", {
-        ascending: order === "asc",
+        ascending: false, // false = descending = highest first
         nullsFirst: false,
+      });
+    } else if (sort === "traffic-low") {
+      // Lowest traffic = lowest visits = ascending order
+      query = query.order("estimatedVisits", {
+        ascending: true, // true = ascending = lowest first
+        nullsFirst: true, // nulls first for lowest traffic
       });
     } else if (sort === "upvotes") {
       // For upvotes, we'll sort in memory after getting the data
@@ -87,6 +95,45 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    // Filter by favorites if requested
+    if (favoritesOnly) {
+      const authHeader = request.headers.get("authorization");
+      if (authHeader) {
+        const token = authHeader.replace("Bearer ", "");
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+        const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+        const userClient = createClient(supabaseUrl, supabaseAnonKey, {
+          global: { headers: { Authorization: `Bearer ${token}` } },
+        });
+        const {
+          data: { user },
+        } = await userClient.auth.getUser();
+
+        if (user) {
+          // Get user's favorite tool IDs
+          const { data: favorites } = await admin
+            .from("favorite")
+            .select("toolId")
+            .eq("userId", user.id);
+
+          const favoriteToolIds = new Set(
+            (favorites || []).map((f: any) => f.toolId)
+          );
+
+          // Filter tools to only show favorites
+          filteredTools = filteredTools.filter((tool: any) =>
+            favoriteToolIds.has(tool.id)
+          );
+        } else {
+          // No user, return empty array
+          filteredTools = [];
+        }
+      } else {
+        // No auth header, return empty array
+        filteredTools = [];
+      }
+    }
+
     // Process tools to add upvote counts and user upvote status
     // Only count upvotes from current month
     const monthStart = new Date(
@@ -107,6 +154,7 @@ export async function GET(request: NextRequest) {
 
         // Check if current user has upvoted today (for userUpvoted status)
         let userUpvotedToday = false;
+        let userFavorited = false;
         if (authHeader) {
           const token = authHeader.replace("Bearer ", "");
           const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -128,6 +176,16 @@ export async function GET(request: NextRequest) {
               .gte("upvotedAt", `${today}T00:00:00.000Z`)
               .lt("upvotedAt", `${today}T23:59:59.999Z`);
             userUpvotedToday = (userUpvoteCount || 0) > 0;
+            
+            // Check if user has favorited this tool
+            const { data: favorite } = await admin
+              .from("favorite")
+              .select("id")
+              .eq("userId", user.id)
+              .eq("toolId", tool.id)
+              .single();
+            
+            userFavorited = !!favorite;
           }
         }
 
@@ -135,6 +193,7 @@ export async function GET(request: NextRequest) {
           ...tool,
           upvoteCount: count || 0,
           userUpvoted: userUpvotedToday,
+          userFavorited: userFavorited,
         };
       })
     );

@@ -74,6 +74,7 @@ export interface Tool {
   updatedAt: string;
   upvoteCount?: number; // Added for upvote count
   userUpvoted?: boolean; // Added to check if current user upvoted
+  userFavorited?: boolean; // Added to check if current user favorited
 }
 
 export interface User {

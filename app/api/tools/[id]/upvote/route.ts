@@ -7,13 +7,18 @@ function getSupabaseClient(request: NextRequest) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
-  // Get auth token from Authorization header or cookie
+  // Get auth token from Authorization header
   const authHeader = request.headers.get("authorization");
   const token = authHeader?.replace("Bearer ", "");
 
+  // If we have a token, use it; otherwise try to get from cookies
   const client = createClient(supabaseUrl, supabaseAnonKey, {
     global: {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
+    },
+    auth: {
+      persistSession: false, // Don't persist session in server context
+      autoRefreshToken: false,
     },
   });
 
@@ -25,18 +30,31 @@ export async function POST(
   { params }: { params: { id: string } }
 ) {
   try {
-    // Get user from session
+    // Get user from token
     const client = getSupabaseClient(request);
-    const {
-      data: { session },
-      error: sessionError,
-    } = await client.auth.getSession();
-
-    if (sessionError || !session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const authHeader = request.headers.get("authorization");
+    
+    let userId: string | null = null;
+    
+    if (authHeader) {
+      const token = authHeader.replace("Bearer ", "");
+      const { data: { user }, error: userError } = await client.auth.getUser(token);
+      if (!userError && user) {
+        userId = user.id;
+      }
+    }
+    
+    // Fallback to getUser() without token (tries cookies)
+    if (!userId) {
+      const { data: { user }, error: userError } = await client.auth.getUser();
+      if (!userError && user) {
+        userId = user.id;
+      }
     }
 
-    const userId = session.user.id;
+    if (!userId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const toolId = params.id;
 
     // Type assertion to work around Proxy type issues
@@ -128,18 +146,31 @@ export async function DELETE(
   { params }: { params: { id: string } }
 ) {
   try {
-    // Get user from session
+    // Get user from token
     const client = getSupabaseClient(request);
-    const {
-      data: { session },
-      error: sessionError,
-    } = await client.auth.getSession();
-
-    if (sessionError || !session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const authHeader = request.headers.get("authorization");
+    
+    let userId: string | null = null;
+    
+    if (authHeader) {
+      const token = authHeader.replace("Bearer ", "");
+      const { data: { user }, error: userError } = await client.auth.getUser(token);
+      if (!userError && user) {
+        userId = user.id;
+      }
+    }
+    
+    // Fallback to getUser() without token (tries cookies)
+    if (!userId) {
+      const { data: { user }, error: userError } = await client.auth.getUser();
+      if (!userError && user) {
+        userId = user.id;
+      }
     }
 
-    const userId = session.user.id;
+    if (!userId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const toolId = params.id;
 
     // Type assertion to work around Proxy type issues
