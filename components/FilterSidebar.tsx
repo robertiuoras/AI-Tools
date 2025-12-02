@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { X } from 'lucide-react'
+import { X, Heart } from 'lucide-react'
 import {
   Accordion,
   AccordionContent,
@@ -22,6 +22,9 @@ interface FilterSidebarProps {
   onTrafficChange: (traffic: string[]) => void
   selectedRevenue: string[]
   onRevenueChange: (revenue: string[]) => void
+  favoritesOnly: boolean
+  onFavoritesToggle: () => void
+  user: any
   className?: string
 }
 
@@ -35,6 +38,9 @@ export function FilterSidebar({
   onTrafficChange,
   selectedRevenue,
   onRevenueChange,
+  favoritesOnly,
+  onFavoritesToggle,
+  user,
   className,
 }: FilterSidebarProps) {
   const [isOpen, setIsOpen] = useState(false)
@@ -116,7 +122,21 @@ export function FilterSidebar({
             </div>
           </div>
 
-          <Accordion type="multiple" defaultValue={['category', 'traffic', 'revenue']}>
+          {user && (
+            <div className="mb-6">
+              <Button
+                variant={favoritesOnly ? "default" : "outline"}
+                size="sm"
+                onClick={onFavoritesToggle}
+                className="w-full gap-2"
+              >
+                <Heart className={`h-4 w-4 ${favoritesOnly ? "fill-current" : ""}`} />
+                {favoritesOnly ? "Showing Favorites" : "Show Favorites"}
+              </Button>
+            </div>
+          )}
+
+          <Accordion type="multiple" defaultValue={['category', 'revenue', 'traffic']}>
             <AccordionItem value="category">
               <AccordionTrigger>Category</AccordionTrigger>
               <AccordionContent>
@@ -154,26 +174,6 @@ export function FilterSidebar({
               </AccordionContent>
             </AccordionItem>
 
-            <AccordionItem value="traffic">
-              <AccordionTrigger>Traffic</AccordionTrigger>
-              <AccordionContent>
-                <div className="space-y-3">
-                  {trafficOptions.map((traffic) => (
-                    <Label
-                      key={traffic}
-                      className="flex items-center space-x-2 cursor-pointer rounded-md p-2 hover:bg-accent"
-                    >
-                      <Checkbox
-                        checked={selectedTraffic.includes(traffic)}
-                        onCheckedChange={() => handleTrafficToggle(traffic)}
-                      />
-                      <span className="capitalize">{traffic}</span>
-                    </Label>
-                  ))}
-                </div>
-              </AccordionContent>
-            </AccordionItem>
-
             <AccordionItem value="revenue">
               <AccordionTrigger>Revenue Model</AccordionTrigger>
               <AccordionContent>
@@ -188,6 +188,26 @@ export function FilterSidebar({
                         onCheckedChange={() => handleRevenueToggle(revenue)}
                       />
                       <span className="capitalize">{revenue}</span>
+                    </Label>
+                  ))}
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+
+            <AccordionItem value="traffic">
+              <AccordionTrigger>Traffic</AccordionTrigger>
+              <AccordionContent>
+                <div className="space-y-3">
+                  {trafficOptions.map((traffic) => (
+                    <Label
+                      key={traffic}
+                      className="flex items-center space-x-2 cursor-pointer rounded-md p-2 hover:bg-accent"
+                    >
+                      <Checkbox
+                        checked={selectedTraffic.includes(traffic)}
+                        onCheckedChange={() => handleTrafficToggle(traffic)}
+                      />
+                      <span className="capitalize">{traffic}</span>
                     </Label>
                   ))}
                 </div>

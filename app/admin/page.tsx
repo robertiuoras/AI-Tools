@@ -17,7 +17,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { useToast } from '@/components/ui/toaster'
 import { categories } from '@/lib/schemas'
 import type { Tool } from '@/lib/supabase'
-import { Loader2, Plus, Trash2, Edit2, Sparkles } from 'lucide-react'
+import { Loader2, Plus, Trash2, Edit2, Sparkles, RefreshCw, Star } from 'lucide-react'
 
 export default function AdminPage() {
   const router = useRouter()
@@ -997,6 +997,82 @@ export default function AdminPage() {
                       }}
                     >
                       Test API Key
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        try {
+                          const session = await supabase.auth.getSession()
+                          const token = (await session).data.session?.access_token
+                          const response = await fetch('/api/admin/reset-monthly-upvotes', {
+                            method: 'POST',
+                            headers: {
+                              'Content-Type': 'application/json',
+                              Authorization: `Bearer ${token}`,
+                            },
+                          })
+                          const data = await response.json()
+                          if (response.ok) {
+                            addToast({
+                              variant: 'success',
+                              title: 'Monthly Reset Complete',
+                              description: 'All upvotes from previous months have been reset.',
+                            })
+                          } else {
+                            throw new Error(data.error || 'Failed to reset')
+                          }
+                        } catch (error: any) {
+                          addToast({
+                            variant: 'error',
+                            title: 'Reset Failed',
+                            description: error.message || 'Could not reset monthly upvotes',
+                          })
+                        }
+                      }}
+                      className="gap-2"
+                    >
+                      <RefreshCw className="h-4 w-4" />
+                      Reset Monthly Upvotes
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        try {
+                          const session = await supabase.auth.getSession()
+                          const token = (await session).data.session?.access_token
+                          const response = await fetch('/api/admin/add-missing-ratings', {
+                            method: 'POST',
+                            headers: {
+                              'Content-Type': 'application/json',
+                              Authorization: `Bearer ${token}`,
+                            },
+                          })
+                          const data = await response.json()
+                          if (response.ok) {
+                            addToast({
+                              variant: 'success',
+                              title: 'Ratings Added',
+                              description: `Processed ${data.processed} tools. ${data.successCount} ratings added, ${data.errorCount} errors.`,
+                              duration: 8000,
+                            })
+                            fetchTools() // Refresh tools list
+                          } else {
+                            throw new Error(data.error || 'Failed to add ratings')
+                          }
+                        } catch (error: any) {
+                          addToast({
+                            variant: 'error',
+                            title: 'Add Ratings Failed',
+                            description: error.message || 'Could not add missing ratings',
+                          })
+                        }
+                      }}
+                      className="gap-2"
+                    >
+                      <Star className="h-4 w-4" />
+                      Add Missing Ratings
                     </Button>
                   </div>
               </div>

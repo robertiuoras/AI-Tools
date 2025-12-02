@@ -187,6 +187,9 @@ function HomePageContent() {
               onTrafficChange={setSelectedTraffic}
               selectedRevenue={selectedRevenue}
               onRevenueChange={setSelectedRevenue}
+              favoritesOnly={favoritesOnly}
+              onFavoritesToggle={() => setFavoritesOnly(!favoritesOnly)}
+              user={user}
             />
           </div>
 
@@ -197,17 +200,6 @@ function HomePageContent() {
               </div>
               <UpvoteTimer />
               <div className="flex items-center gap-2">
-                {user && (
-                  <Button
-                    variant={favoritesOnly ? "default" : "outline"}
-                    size="sm"
-                    onClick={() => setFavoritesOnly(!favoritesOnly)}
-                    className="gap-2"
-                  >
-                    <Heart className={`h-4 w-4 ${favoritesOnly ? "fill-current" : ""}`} />
-                    Favorites
-                  </Button>
-                )}
                 <Select
                   value={sort}
                   onValueChange={(v) => setSort(v as SortOption)}

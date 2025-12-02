@@ -179,8 +179,8 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
     >
       <Card className="group relative flex h-full flex-col overflow-hidden border-border/50 bg-card transition-all duration-300 hover:border-primary/50 hover:shadow-lg hover:shadow-primary/10 dark:hover:shadow-primary/20">
         <CardContent className="flex flex-1 flex-col p-6">
-          <div className="mb-4 flex items-start justify-between">
-            <div className="flex items-center gap-3 flex-1">
+          <div className="mb-4 flex items-start justify-between gap-2">
+            <div className="flex items-center gap-3 flex-1 min-w-0">
               {tool.logoUrl ? (
                 <div className="relative h-12 w-12 overflow-hidden rounded-lg border border-border bg-background flex-shrink-0">
                   <Image
@@ -199,17 +199,19 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
                 </div>
               )}
               <div className="flex-1 min-w-0">
-                <h3 className="font-semibold text-lg leading-tight text-foreground">
+                <h3 className="font-semibold text-lg leading-tight text-foreground truncate mb-1">
                   {tool.name}
                 </h3>
-                <Badge
-                  variant="outline"
-                  className={`mt-1 text-xs ${
-                    categoryColors[tool.category] || categoryColors.Other
-                  }`}
-                >
-                  {tool.category}
-                </Badge>
+                <div className="flex items-center">
+                  <Badge
+                    variant="outline"
+                    className={`text-xs ${
+                      categoryColors[tool.category] || categoryColors.Other
+                    }`}
+                  >
+                    {tool.category}
+                  </Badge>
+                </div>
               </div>
             </div>
             <Button
