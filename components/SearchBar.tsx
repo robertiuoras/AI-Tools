@@ -56,16 +56,6 @@ export function SearchBar({
             }
           }
         }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            const trimmed = value.trim()
-            if (trimmed) {
-              e.preventDefault()
-              // Delegate to parent for handling chips / filters
-              ;(typeof (onSelectSuggestion) === 'function' ? null : null)
-            }
-          }
-        }}
         onFocus={() => setOpen(true)}
         onBlur={() => setTimeout(() => setOpen(false), 100)}
         className="w-full rounded-full border border-border/70 bg-background/80 pl-10 pr-9 text-sm shadow-sm transition-all focus:border-rose-400 focus:ring-2 focus:ring-rose-200 dark:focus:ring-rose-900/60"
