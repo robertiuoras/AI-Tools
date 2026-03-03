@@ -112,7 +112,7 @@ async function fetchWithYouTubeApi(videoId: string) {
   if (!channelRes.ok) return null
   const channelData = (await channelRes.json()) as {
     items?: Array<{
-      statistics?: { subscriberCount?: string }
+      statistics?: { subscriberCount?: string; videoCount?: string }
       snippet?: { thumbnails?: { default?: { url?: string }; medium?: { url?: string }; high?: { url?: string } } }
     }>
   }
