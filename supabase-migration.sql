@@ -165,6 +165,36 @@ CREATE POLICY "Users can create own favorites" ON "favorite"
 CREATE POLICY "Users can delete own favorites" ON "favorite"
   FOR DELETE USING (auth.uid() = "userId");
 
+-- 14. Create Video table for /videos page
+CREATE TABLE IF NOT EXISTS "video" (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  url TEXT NOT NULL,
+  category TEXT NOT NULL,
+  "youtuberName" TEXT,
+  "subscriberCount" BIGINT,
+  tags TEXT,
+  description TEXT,
+  "createdAt" TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  "updatedAt" TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+-- Enable RLS on Video table (read-only for public)
+ALTER TABLE "video" ENABLE ROW LEVEL SECURITY;
+
+-- Drop existing policies if they exist
+DROP POLICY IF EXISTS "Anyone can read videos" ON "video";
+
+-- Anyone can read videos
+CREATE POLICY "Anyone can read videos" ON "video"
+  FOR SELECT USING (true);
+
+-- Reuse updatedAt trigger for video table
+DROP TRIGGER IF EXISTS update_video_updated_at ON "video";
+
+CREATE TRIGGER update_video_updated_at BEFORE UPDATE ON "video"
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
 -- Note: Make sure your Tool table has the correct structure
 -- It should have: id, name, description, url, logoUrl, category, tags, traffic, revenue, rating, estimatedVisits, createdAt, updatedAt
 

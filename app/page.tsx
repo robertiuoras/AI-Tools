@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, Suspense } from "react";
+import { useState, useEffect, useCallback, useMemo, Suspense } from "react";
 import { useRouter } from "next/navigation";
 import { Hero } from "@/components/Hero";
 import { ToolCard } from "@/components/ToolCard";
@@ -34,6 +34,13 @@ function HomePageContent() {
   const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [user, setUser] = useState<any>(null);
+
+  const searchSuggestions = useMemo(() => {
+    if (!tools || tools.length === 0) return [];
+    const names = tools.map((t) => t.name);
+    const cats = tools.map((t) => t.category);
+    return Array.from(new Set([...names, ...cats]));
+  }, [tools]);
 
   // Get user session
   useEffect(() => {
@@ -201,7 +208,11 @@ function HomePageContent() {
           <div className="flex-1 space-y-6">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex-1 max-w-2xl">
-                <SearchBar value={search} onChange={setSearch} />
+                <SearchBar
+                  value={search}
+                  onChange={setSearch}
+                  suggestions={searchSuggestions}
+                />
               </div>
               <UpvoteTimer />
               <div className="flex items-center gap-2">

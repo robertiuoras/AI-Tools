@@ -27,9 +27,10 @@ function getSupabaseClient(request: NextRequest) {
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id: toolId } = await params;
     // Get user from token
     const client = getSupabaseClient(request);
     const authHeader = request.headers.get("authorization");
@@ -55,7 +56,6 @@ export async function POST(
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const toolId = params.id;
 
     // Type assertion to work around Proxy type issues
     const admin = supabaseAdmin as any;
@@ -143,9 +143,10 @@ export async function POST(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id: toolId } = await params;
     // Get user from token
     const client = getSupabaseClient(request);
     const authHeader = request.headers.get("authorization");
@@ -171,7 +172,6 @@ export async function DELETE(
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const toolId = params.id;
 
     // Type assertion to work around Proxy type issues
     const admin = supabaseAdmin as any;

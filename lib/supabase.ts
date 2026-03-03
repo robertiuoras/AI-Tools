@@ -1,22 +1,12 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
-// Get environment variables - these MUST be set
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-// Validate required environment variables (client-side)
-if (!supabaseUrl) {
-  throw new Error("NEXT_PUBLIC_SUPABASE_URL environment variable is not set");
-}
-
-if (!supabaseAnonKey) {
-  throw new Error(
-    "NEXT_PUBLIC_SUPABASE_ANON_KEY environment variable is not set"
-  );
-}
+// NEXT_PUBLIC_* vars are inlined at build time on Vercel. Set them in the dashboard and redeploy.
+// Use placeholders when missing so createClient() doesn't throw; requests will fail until vars are set.
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co";
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder-anon-key";
 
 // Client for client-side operations (uses anon key, respects RLS)
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase: SupabaseClient = createClient(supabaseUrl, supabaseAnonKey);
 
 // Admin client for server-side operations only (uses service role key, bypasses RLS)
 // Only create this on the server side to avoid exposing the service role key to the client
@@ -57,7 +47,7 @@ export const supabaseAdmin: ReturnType<typeof createClient> = (() => {
   return supabaseAdminInstance;
 })() as ReturnType<typeof createClient>;
 
-// Type definitions matching our Prisma schema
+// Type definitions matching our database schema
 export interface Tool {
   id: string;
   name: string;
@@ -75,6 +65,25 @@ export interface Tool {
   upvoteCount?: number; // Added for upvote count
   userUpvoted?: boolean; // Added to check if current user upvoted
   userFavorited?: boolean; // Added to check if current user favorited
+}
+
+export type VideoSource = "youtube" | "tiktok";
+
+export interface Video {
+  id: string;
+  title: string;
+  url: string;
+  category: string;
+  source?: VideoSource | null;
+  youtuberName: string | null;
+  subscriberCount: number | null;
+  channelThumbnailUrl: string | null;
+  channelVideoCount: number | null;
+  verified: boolean | null;
+  tags: string | null;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface User {

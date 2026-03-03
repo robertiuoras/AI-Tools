@@ -15,9 +15,9 @@ import {
 } from '@/components/ui/select'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useToast } from '@/components/ui/toaster'
-import { categories } from '@/lib/schemas'
-import type { Tool } from '@/lib/supabase'
-import { Loader2, Plus, Trash2, Edit2, Sparkles, RefreshCw, Star } from 'lucide-react'
+import { categories, videoCategories } from '@/lib/schemas'
+import type { Tool, Video } from '@/lib/supabase'
+import { Loader2, Plus, Trash2, Edit2, Sparkles, RefreshCw, Star, Youtube, Music2 } from 'lucide-react'
 
 export default function AdminPage() {
   const router = useRouter()
@@ -50,24 +50,49 @@ export default function AdminPage() {
     estimatedVisits: '',
   })
 
+  // Videos tab state
+  const [adminTab, setAdminTab] = useState<'tools' | 'videos'>('tools')
+  const [videos, setVideos] = useState<Video[]>([])
+  const [videosLoading, setVideosLoading] = useState(false)
+  const [videoQuickAddUrl, setVideoQuickAddUrl] = useState('')
+  const [videoAnalyzing, setVideoAnalyzing] = useState(false)
+  const [videoSubmitting, setVideoSubmitting] = useState(false)
+  const [editingVideoId, setEditingVideoId] = useState<string | null>(null)
+  const [videoSearchQuery, setVideoSearchQuery] = useState('')
+  const [videoThumbnailGenerating, setVideoThumbnailGenerating] = useState(false)
+  const [videoThumbImgError, setVideoThumbImgError] = useState(false)
+  const [videoFormData, setVideoFormData] = useState({
+    title: '',
+    url: '',
+    category: 'Other' as (typeof videoCategories)[number],
+    source: 'youtube' as 'youtube' | 'tiktok',
+    youtuberName: '',
+    subscriberCount: '',
+    channelThumbnailUrl: '',
+    channelVideoCount: '',
+    verified: false,
+    tags: '',
+    description: '',
+  })
+
   useEffect(() => {
-    // Check authentication and admin role
     const checkAuth = async () => {
       const { data: { session } } = await supabase.auth.getSession()
-      
+
       if (!session) {
+        setAuthLoading(false)
         router.push('/')
         return
       }
 
-      // Get user role
       const { data: userData, error } = await supabase
         .from('user')
         .select('role')
         .eq('id', session.user.id)
         .single()
 
-      if (error || !userData || userData.role !== 'admin') {
+      if (error || !userData || (userData?.role !== 'admin')) {
+        setAuthLoading(false)
         addToast({
           variant: 'error',
           title: 'Access Denied',
@@ -83,6 +108,7 @@ export default function AdminPage() {
 
     checkAuth()
     fetchTools()
+    fetchVideos()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router])
 
@@ -95,6 +121,20 @@ export default function AdminPage() {
       console.error('Error fetching tools:', error)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const fetchVideos = async () => {
+    setVideosLoading(true)
+    try {
+      const response = await fetch('/api/videos')
+      const data = await response.json()
+      setVideos(Array.isArray(data) ? data : [])
+    } catch (error) {
+      console.error('Error fetching videos:', error)
+      setVideos([])
+    } finally {
+      setVideosLoading(false)
     }
   }
 
@@ -244,6 +284,230 @@ export default function AdminPage() {
       addToast({
         variant: 'error',
         title: 'Failed to Delete Tool',
+        description: 'Please try again.',
+      })
+    }
+  }
+
+  const handleVideoAnalyze = async () => {
+    if (!videoQuickAddUrl.trim()) {
+      addToast({ variant: 'warning', title: 'URL Required', description: 'Paste a YouTube or TikTok video URL.' })
+      return
+    }
+    setVideoAnalyzing(true)
+    try {
+      let urlToFetch = videoQuickAddUrl.trim()
+      if (!urlToFetch.startsWith('http://') && !urlToFetch.startsWith('https://')) {
+        urlToFetch = `https://${urlToFetch}`
+      }
+      const res = await fetch('/api/videos/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: urlToFetch }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        addToast({
+          variant: 'error',
+          title: 'Could not fetch video',
+          description: data.error || res.statusText,
+        })
+        return
+      }
+      setVideoFormData((prev) => ({
+        ...prev,
+        url: data.url || urlToFetch,
+        title: data.title || '',
+        source: data.source === 'tiktok' ? 'tiktok' : 'youtube',
+        youtuberName: data.youtuberName || '',
+        subscriberCount: data.subscriberCount != null ? String(data.subscriberCount) : '',
+        description: data.description || '',
+        channelThumbnailUrl: data.channelThumbnailUrl || '',
+        channelVideoCount: data.channelVideoCount != null ? String(data.channelVideoCount) : prev.channelVideoCount,
+        verified: data.verified === true,
+        category: data.suggestedCategory && videoCategories.includes(data.suggestedCategory as any)
+          ? (data.suggestedCategory as (typeof videoCategories)[number])
+          : prev.category,
+        tags: data.suggestedTags ?? prev.tags,
+      }))
+      setVideoQuickAddUrl('')
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    } catch (e) {
+      addToast({
+        variant: 'error',
+        title: 'Failed to fetch video info',
+        description: e instanceof Error ? e.message : 'Please try again.',
+      })
+    } finally {
+      setVideoAnalyzing(false)
+    }
+  }
+
+  const resetVideoForm = () => {
+    setVideoThumbImgError(false)
+    setVideoFormData({
+      title: '',
+      url: '',
+      category: 'Other',
+      source: 'youtube',
+      youtuberName: '',
+      subscriberCount: '',
+      channelThumbnailUrl: '',
+      channelVideoCount: '',
+      verified: false,
+      tags: '',
+      description: '',
+    })
+    setEditingVideoId(null)
+  }
+
+  const handleVideoSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!videoFormData.title.trim() || !videoFormData.url.trim() || !videoFormData.category) {
+      addToast({
+        variant: 'warning',
+        title: 'Missing fields',
+        description: 'Title, URL, and Category are required.',
+      })
+      return
+    }
+    setVideoSubmitting(true)
+    try {
+      const payload: Record<string, unknown> = {
+        title: videoFormData.title.trim(),
+        url: videoFormData.url.trim(),
+        category: videoFormData.category,
+        source: videoFormData.source,
+        youtuberName: videoFormData.youtuberName.trim() || null,
+        subscriberCount: videoFormData.subscriberCount.trim()
+          ? parseInt(videoFormData.subscriberCount, 10)
+          : null,
+        channelThumbnailUrl: videoFormData.channelThumbnailUrl?.trim() || null,
+        channelVideoCount: videoFormData.channelVideoCount.trim()
+          ? parseInt(videoFormData.channelVideoCount, 10)
+          : null,
+        verified: videoFormData.verified || null,
+        tags: videoFormData.tags.trim() || null,
+        description: videoFormData.description.trim() || null,
+      }
+      const url = editingVideoId ? `/api/videos/${editingVideoId}` : '/api/videos'
+      const method = editingVideoId ? 'PUT' : 'POST'
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        if (res.status === 409) {
+          addToast({ variant: 'error', title: 'Duplicate URL', description: data.message || 'This video URL already exists.' })
+          return
+        }
+        throw new Error(data.message || data.error || data.details || 'Failed to save video')
+      }
+      resetVideoForm()
+      await fetchVideos()
+    } catch (err) {
+      addToast({
+        variant: 'error',
+        title: 'Failed to save video',
+        description: err instanceof Error ? err.message : 'Please try again.',
+      })
+    } finally {
+      setVideoSubmitting(false)
+    }
+  }
+
+  const handleEditVideo = (video: Video) => {
+    setEditingVideoId(video.id)
+    setVideoThumbImgError(false)
+    setVideoFormData({
+      title: video.title,
+      url: video.url,
+      category: video.category as (typeof videoCategories)[number],
+      source: (video as { source?: 'youtube' | 'tiktok' }).source === 'tiktok' ? 'tiktok' : 'youtube',
+      youtuberName: video.youtuberName || '',
+      subscriberCount: video.subscriberCount != null ? String(video.subscriberCount) : '',
+      channelThumbnailUrl: (video as { channelThumbnailUrl?: string | null }).channelThumbnailUrl || '',
+      channelVideoCount:
+        (video as { channelVideoCount?: number | null }).channelVideoCount != null
+          ? String((video as { channelVideoCount?: number | null }).channelVideoCount)
+          : '',
+      verified: (video as { verified?: boolean | null }).verified === true,
+      tags: video.tags || '',
+      description: video.description || '',
+    })
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  /** Extract YouTube video ID for fallback thumbnail */
+  const getYouTubeVideoIdFromUrl = (url: string): string | null => {
+    try {
+      const u = new URL(url.trim())
+      if (u.hostname.includes('youtube.com')) {
+        const v = u.searchParams.get('v')
+        if (v) return v
+        const parts = u.pathname.split('/').filter(Boolean)
+        const id = parts[parts.length - 1]
+        return id && id !== 'watch' ? id : null
+      }
+      if (u.hostname === 'youtu.be') return u.pathname.replace(/^\//, '') || null
+      return null
+    } catch {
+      return null
+    }
+  }
+
+  const handleGenerateChannelThumbnail = async () => {
+    const url = videoFormData.url?.trim()
+    if (!url) {
+      addToast({ variant: 'warning', title: 'Video URL required', description: 'Enter the video URL above first, then click Generate.' })
+      return
+    }
+    setVideoThumbnailGenerating(true)
+    try {
+      let urlToFetch = url
+      if (!urlToFetch.startsWith('http://') && !urlToFetch.startsWith('https://')) urlToFetch = `https://${urlToFetch}`
+      const res = await fetch('/api/videos/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: urlToFetch }),
+      })
+      const data = await res.json()
+      let thumb = data.channelThumbnailUrl || null
+      if (!thumb && (urlToFetch.includes('youtube.com') || urlToFetch.includes('youtu.be'))) {
+        const videoId = getYouTubeVideoIdFromUrl(urlToFetch)
+        if (videoId) thumb = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
+      }
+      if (thumb) {
+        setVideoThumbImgError(false)
+        setVideoFormData((prev) => ({ ...prev, channelThumbnailUrl: thumb }))
+        addToast({ variant: 'success', title: 'Profile picture set', description: 'Channel thumbnail has been filled in.' })
+      } else {
+        addToast({ variant: 'warning', title: 'No thumbnail found', description: 'Using video thumbnail as fallback for YouTube if available.' })
+        const videoId = getYouTubeVideoIdFromUrl(urlToFetch)
+        if (videoId) {
+          setVideoThumbImgError(false)
+          setVideoFormData((prev) => ({ ...prev, channelThumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` }))
+        }
+      }
+    } catch (e) {
+      addToast({ variant: 'error', title: 'Failed to fetch', description: e instanceof Error ? e.message : 'Could not fetch thumbnail.' })
+    } finally {
+      setVideoThumbnailGenerating(false)
+    }
+  }
+
+  const handleDeleteVideo = async (id: string) => {
+    if (!confirm('Delete this video?')) return
+    try {
+      await fetch(`/api/videos/${id}`, { method: 'DELETE' })
+      await fetchVideos()
+      if (editingVideoId === id) resetVideoForm()
+    } catch (error) {
+      addToast({
+        variant: 'error',
+        title: 'Failed to delete video',
         description: 'Please try again.',
       })
     }
@@ -840,18 +1104,41 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="container mx-auto px-4 py-8 max-w-7xl">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">Admin Dashboard</h1>
-        <p className="text-muted-foreground">
-          Add, edit, or remove AI tools from the directory
-        </p>
-      </div>
+    <div className="min-h-screen bg-gradient-to-b from-muted/30 via-background to-muted/20">
+      <div className="container mx-auto px-4 py-8 max-w-7xl">
+        <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 className="text-3xl font-bold mb-2 tracking-tight">
+              <span className="bg-gradient-to-r from-violet-600 to-fuchsia-600 dark:from-violet-400 dark:to-fuchsia-400 bg-clip-text text-transparent">Admin Dashboard</span>
+            </h1>
+            <p className="text-muted-foreground text-sm sm:text-base">
+              Add, edit, or remove AI tools and videos from the directory
+            </p>
+          </div>
+          <div className="flex rounded-xl border border-border/80 bg-card/80 shadow-sm p-1">
+            <button
+              type="button"
+              onClick={() => setAdminTab('tools')}
+              className={`rounded-lg px-5 py-2.5 text-sm font-semibold transition-all flex items-center gap-2 ${adminTab === 'tools' ? 'bg-gradient-to-r from-violet-500/90 to-fuchsia-500/90 text-white shadow-md' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'}`}
+            >
+              Tools
+            </button>
+            <button
+              type="button"
+              onClick={() => setAdminTab('videos')}
+              className={`rounded-lg px-5 py-2.5 text-sm font-semibold transition-all flex items-center gap-2 ${adminTab === 'videos' ? 'bg-gradient-to-r from-violet-500/90 to-fuchsia-500/90 text-white shadow-md' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'}`}
+            >
+              <Youtube className="h-4 w-4" />
+              Videos
+            </button>
+          </div>
+        </div>
 
+      {adminTab === 'tools' && (
       <div className="grid gap-8 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>{editingId ? 'Edit Tool' : 'Add New Tool'}</CardTitle>
+        <Card className="border-border/60 shadow-lg shadow-black/5 dark:shadow-black/20 bg-card/95">
+          <CardHeader className="pb-4">
+            <CardTitle className="text-xl">{editingId ? 'Edit Tool' : 'Add New Tool'}</CardTitle>
             <CardDescription>
               {editingId
                 ? 'Update the tool information below'
@@ -1252,9 +1539,9 @@ export default function AdminPage() {
           </CardContent>
         </Card>
 
-        <Card className="flex flex-col h-full">
+        <Card className="flex flex-col h-full border-border/60 shadow-lg shadow-black/5 dark:shadow-black/20 bg-card/95">
           <CardHeader className="flex-shrink-0">
-            <CardTitle>All Tools ({tools.length})</CardTitle>
+            <CardTitle className="text-xl">All Tools ({tools.length})</CardTitle>
             <CardDescription>Manage existing tools in the directory</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col flex-1 min-h-0 p-6">
@@ -1292,7 +1579,7 @@ export default function AdminPage() {
                     .map((tool) => (
                   <div
                     key={tool.id}
-                    className="flex items-start justify-between rounded-lg border p-4 hover:bg-accent/50 transition-colors min-h-[80px]"
+                    className="flex items-start justify-between rounded-xl border border-border/60 p-4 hover:bg-muted/40 hover:border-violet-200 dark:hover:border-violet-800/50 transition-all min-h-[80px]"
                   >
                     <div className="flex-1 min-w-0 pr-4">
                       <h3 className="font-semibold truncate">{tool.name}</h3>
@@ -1355,6 +1642,307 @@ export default function AdminPage() {
             )}
           </CardContent>
         </Card>
+      </div>
+      )}
+
+      {adminTab === 'videos' && (
+      <div className="grid gap-8 lg:grid-cols-2">
+        <Card className="border-border/60 shadow-lg shadow-black/5 dark:shadow-black/20 bg-card/95">
+          <CardHeader className="pb-4">
+            <CardTitle className="text-xl">{editingVideoId ? 'Edit Video' : 'Add Video'}</CardTitle>
+            <CardDescription>
+              {editingVideoId ? 'Update the video below' : 'Paste a YouTube or TikTok URL to fetch title and channel, then add to the directory'}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {!editingVideoId && (
+              <div className="mb-6 p-4 rounded-lg border bg-gradient-to-r from-red-50 to-orange-50 dark:from-red-950/20 dark:to-orange-950/20">
+                <div className="flex items-center gap-2 mb-2">
+                  <Youtube className="h-4 w-4 text-red-600 dark:text-red-400" />
+                  <Music2 className="h-4 w-4 text-pink-600 dark:text-pink-400" />
+                  <Label className="font-semibold">Add Video by URL</Label>
+                </div>
+                <p className="text-sm text-muted-foreground mb-3">
+                  Paste a YouTube or TikTok video URL to auto-fill title, creator, thumbnail, description, and suggested category (YouTube: YOUTUBE_API_KEY; TikTok: oEmbed; optional OPENAI_API_KEY for category)
+                </p>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="YouTube or TikTok URL (e.g. youtube.com/watch?v=... or tiktok.com/...)"
+                    value={videoQuickAddUrl}
+                    onChange={(e) => setVideoQuickAddUrl(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleVideoAnalyze())}
+                    disabled={videoAnalyzing || videoSubmitting}
+                    className="flex-1"
+                  />
+                  <Button
+                    type="button"
+                    onClick={handleVideoAnalyze}
+                    disabled={videoAnalyzing || videoSubmitting || !videoQuickAddUrl.trim()}
+                    variant="default"
+                  >
+                    {videoAnalyzing ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Fetch
+                      </>
+                    ) : (
+                      'Fetch info'
+                    )}
+                  </Button>
+                </div>
+              </div>
+            )}
+            <form onSubmit={handleVideoSubmit} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="video-title">Title *</Label>
+                <Input
+                  id="video-title"
+                  value={videoFormData.title}
+                  onChange={(e) => setVideoFormData({ ...videoFormData, title: e.target.value })}
+                  placeholder="Video title"
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="video-url">Video URL * (YouTube or TikTok)</Label>
+                <Input
+                  id="video-url"
+                  type="url"
+                  value={videoFormData.url}
+                  onChange={(e) => setVideoFormData({ ...videoFormData, url: e.target.value })}
+                  placeholder="https://www.youtube.com/watch?v=... or https://www.tiktok.com/..."
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="video-source">Source</Label>
+                <Select
+                  value={videoFormData.source}
+                  onValueChange={(v) => setVideoFormData({ ...videoFormData, source: v as 'youtube' | 'tiktok' })}
+                >
+                  <SelectTrigger id="video-source">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="youtube">YouTube</SelectItem>
+                    <SelectItem value="tiktok">TikTok</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="video-category">Category *</Label>
+                <Select
+                  value={videoFormData.category}
+                  onValueChange={(v) => setVideoFormData({ ...videoFormData, category: v as (typeof videoCategories)[number] })}
+                >
+                  <SelectTrigger id="video-category">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {videoCategories.map((cat) => (
+                      <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="video-youtuber">Channel / Creator name</Label>
+                <Input
+                  id="video-youtuber"
+                  value={videoFormData.youtuberName}
+                  onChange={(e) => setVideoFormData({ ...videoFormData, youtuberName: e.target.value })}
+                  placeholder="Channel name"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="video-subs">Subscribers / followers</Label>
+                <Input
+                  id="video-subs"
+                  type="number"
+                  min={0}
+                  value={videoFormData.subscriberCount}
+                  onChange={(e) => setVideoFormData({ ...videoFormData, subscriberCount: e.target.value })}
+                  placeholder="e.g. 1000000"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="video-channel-thumb">Channel profile picture URL</Label>
+                <div className="flex flex-wrap gap-2 items-start">
+                  <Input
+                    id="video-channel-thumb"
+                    type="url"
+                    value={videoFormData.channelThumbnailUrl}
+                    onChange={(e) => { setVideoThumbImgError(false); setVideoFormData({ ...videoFormData, channelThumbnailUrl: e.target.value }) }}
+                    placeholder="https://yt3.ggpht.com/... or use Generate"
+                    className="flex-1 min-w-[200px]"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleGenerateChannelThumbnail}
+                    disabled={videoThumbnailGenerating || !videoFormData.url?.trim()}
+                    className="shrink-0"
+                  >
+                    {videoThumbnailGenerating ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      'Generate'
+                    )}
+                  </Button>
+                  <div className="h-12 w-12 rounded-full overflow-hidden border-2 border-border flex-shrink-0 bg-muted flex items-center justify-center text-muted-foreground text-xs">
+                    {videoFormData.channelThumbnailUrl && !videoThumbImgError ? (
+                      <img
+                        src={videoFormData.channelThumbnailUrl}
+                        alt="Channel"
+                        className="h-full w-full object-cover"
+                        onError={() => setVideoThumbImgError(true)}
+                      />
+                    ) : (
+                      <span>?</span>
+                    )}
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">Missing profile pic? Paste the video URL above and click Generate to fetch channel thumbnail or use video frame.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="video-verified"
+                  checked={videoFormData.verified}
+                  onChange={(e) => setVideoFormData({ ...videoFormData, verified: e.target.checked })}
+                  className="h-4 w-4 rounded border-border"
+                />
+                <Label htmlFor="video-verified" className="cursor-pointer">Verified (manual)</Label>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="video-tags">Tags (comma-separated)</Label>
+                <Input
+                  id="video-tags"
+                  value={videoFormData.tags}
+                  onChange={(e) => setVideoFormData({ ...videoFormData, tags: e.target.value })}
+                  placeholder="motivation, success, ..."
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="video-desc">Short description (one line, max 200 chars)</Label>
+                <Input
+                  id="video-desc"
+                  value={videoFormData.description}
+                  onChange={(e) => setVideoFormData({ ...videoFormData, description: e.target.value })}
+                  placeholder="AI-generated or manual one-line summary"
+                  maxLength={200}
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button type="submit" disabled={videoSubmitting}>
+                  {videoSubmitting ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Saving...
+                    </>
+                  ) : editingVideoId ? (
+                    'Update Video'
+                  ) : (
+                    <>
+                      <Plus className="mr-2 h-4 w-4" />
+                      Add Video
+                    </>
+                  )}
+                </Button>
+                {editingVideoId && (
+                  <Button type="button" variant="outline" onClick={resetVideoForm}>
+                    Cancel
+                  </Button>
+                )}
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+
+        <Card className="flex flex-col h-full border-border/60 shadow-lg shadow-black/5 dark:shadow-black/20 bg-card/95">
+          <CardHeader className="flex-shrink-0">
+            <CardTitle className="text-xl">All Videos ({videos.length})</CardTitle>
+            <CardDescription>Manage videos shown on /videos</CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col flex-1 min-h-0 p-6">
+            {videosLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-6 w-6 animate-spin" />
+              </div>
+            ) : videos.length === 0 ? (
+              <p className="text-center text-muted-foreground py-8">
+                No videos yet. Add one via the form.
+              </p>
+            ) : (
+              <>
+                <div className="mb-4 flex-shrink-0">
+                  <Input
+                    placeholder="Search videos..."
+                    value={videoSearchQuery}
+                    onChange={(e) => setVideoSearchQuery(e.target.value)}
+                    className="w-full"
+                  />
+                </div>
+                <div className="flex-1 overflow-y-auto pr-2 space-y-2" style={{ maxHeight: 'calc(9 * (80px + 8px))' }}>
+                  {videos
+                    .filter((v) => {
+                      if (!videoSearchQuery.trim()) return true
+                      const q = videoSearchQuery.toLowerCase()
+                      return (
+                        v.title.toLowerCase().includes(q) ||
+                        (v.description && v.description.toLowerCase().includes(q)) ||
+                        (v.youtuberName && v.youtuberName.toLowerCase().includes(q)) ||
+                        v.url.toLowerCase().includes(q)
+                      )
+                    })
+                    .map((video) => (
+                      <div
+                        key={video.id}
+                        className="flex items-start justify-between rounded-xl border border-border/60 p-4 hover:bg-muted/40 hover:border-violet-200 dark:hover:border-violet-800/50 transition-all min-h-[80px]"
+                      >
+                        <div className="flex-1 min-w-0 pr-4">
+                          <h3 className="font-semibold truncate">{video.title}</h3>
+                          <p className="text-sm text-muted-foreground line-clamp-2 mt-1">
+                            {video.description || video.url}
+                          </p>
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            <span className="text-xs text-muted-foreground">{video.category}</span>
+                            <span className="text-xs text-muted-foreground capitalize">
+                              {(video as { source?: string }).source === 'tiktok' ? 'TikTok' : 'YouTube'}
+                            </span>
+                            {video.youtuberName && (
+                              <span className="text-xs text-muted-foreground">{video.youtuberName}</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex gap-2 flex-shrink-0">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleEditVideo(video)}
+                            title="Edit video"
+                          >
+                            <Edit2 className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDeleteVideo(video.id)}
+                            title="Delete video"
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+      )}
       </div>
     </div>
   )

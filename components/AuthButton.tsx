@@ -239,14 +239,6 @@ export function AuthButton() {
   if (user) {
     return (
       <div className="flex items-center gap-2">
-        {isAdmin && (
-          <Button variant="ghost" size="sm" asChild>
-            <Link href="/admin">
-              <Shield className="h-4 w-4 mr-2" />
-              Admin
-            </Link>
-          </Button>
-        )}
         <span className="text-sm text-muted-foreground hidden sm:inline">
           {user.email}
         </span>

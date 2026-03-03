@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase";
 import { createClient } from "@supabase/supabase-js";
+import { supabaseAdmin } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
-// Helper to get authenticated user
 function getSupabaseClient(request: NextRequest) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -30,22 +29,28 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id: toolId } = await params;
+    const { id: videoId } = await params;
     const client = getSupabaseClient(request);
     const authHeader = request.headers.get("authorization");
-    
+
     let userId: string | null = null;
-    
+
     if (authHeader) {
       const token = authHeader.replace("Bearer ", "");
-      const { data: { user }, error: userError } = await client.auth.getUser(token);
+      const {
+        data: { user },
+        error: userError,
+      } = await client.auth.getUser(token);
       if (!userError && user) {
         userId = user.id;
       }
     }
-    
+
     if (!userId) {
-      const { data: { user }, error: userError } = await client.auth.getUser();
+      const {
+        data: { user },
+        error: userError,
+      } = await client.auth.getUser();
       if (!userError && user) {
         userId = user.id;
       }
@@ -54,36 +59,39 @@ export async function POST(
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
     const admin = supabaseAdmin as any;
 
-    // Check if already favorited
+    // Idempotent: if already watched, just return watched: true
     const { data: existing } = await admin
-      .from("favorite")
+      .from("video_watch")
       .select("id")
       .eq("userId", userId)
-      .eq("toolId", toolId)
-      .single();
+      .eq("videoId", videoId)
+      .maybeSingle();
 
     if (existing) {
-      return NextResponse.json({ favorited: true });
+      return NextResponse.json({ watched: true });
     }
 
-    // Create favorite
-    const { error: insertError } = await admin.from("favorite").insert([
+    const { error: insertError } = await admin.from("video_watch").insert([
       {
         userId,
-        toolId,
+        videoId,
       },
     ]);
 
     if (insertError) {
-      console.error("Error creating favorite:", insertError);
-      return NextResponse.json({ error: "Failed to favorite" }, { status: 500 });
+      console.error("Error marking watched:", insertError);
+      return NextResponse.json(
+        { error: "Failed to mark watched" },
+        { status: 500 }
+      );
     }
 
-    return NextResponse.json({ favorited: true });
+    return NextResponse.json({ watched: true });
   } catch (error: any) {
-    console.error("Error in POST favorite:", error);
+    console.error("Error in POST watched:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }
@@ -96,22 +104,28 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id: toolId } = await params;
+    const { id: videoId } = await params;
     const client = getSupabaseClient(request);
     const authHeader = request.headers.get("authorization");
-    
+
     let userId: string | null = null;
-    
+
     if (authHeader) {
       const token = authHeader.replace("Bearer ", "");
-      const { data: { user }, error: userError } = await client.auth.getUser(token);
+      const {
+        data: { user },
+        error: userError,
+      } = await client.auth.getUser(token);
       if (!userError && user) {
         userId = user.id;
       }
     }
-    
+
     if (!userId) {
-      const { data: { user }, error: userError } = await client.auth.getUser();
+      const {
+        data: { user },
+        error: userError,
+      } = await client.auth.getUser();
       if (!userError && user) {
         userId = user.id;
       }
@@ -120,26 +134,26 @@ export async function DELETE(
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
     const admin = supabaseAdmin as any;
 
-    // Delete favorite
     const { error: deleteError } = await admin
-      .from("favorite")
+      .from("video_watch")
       .delete()
       .eq("userId", userId)
-      .eq("toolId", toolId);
+      .eq("videoId", videoId);
 
     if (deleteError) {
-      console.error("Error deleting favorite:", deleteError);
+      console.error("Error clearing watched:", deleteError);
       return NextResponse.json(
-        { error: "Failed to unfavorite" },
+        { error: "Failed to clear watched" },
         { status: 500 }
       );
     }
 
-    return NextResponse.json({ favorited: false });
+    return NextResponse.json({ watched: false });
   } catch (error: any) {
-    console.error("Error in DELETE favorite:", error);
+    console.error("Error in DELETE watched:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }
@@ -152,44 +166,50 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id: toolId } = await params;
+    const { id: videoId } = await params;
     const client = getSupabaseClient(request);
     const authHeader = request.headers.get("authorization");
-    
+
     let userId: string | null = null;
-    
+
     if (authHeader) {
       const token = authHeader.replace("Bearer ", "");
-      const { data: { user }, error: userError } = await client.auth.getUser(token);
-      if (!userError && user) {
-        userId = user.id;
-      }
-    }
-    
-    if (!userId) {
-      const { data: { user }, error: userError } = await client.auth.getUser();
+      const {
+        data: { user },
+        error: userError,
+      } = await client.auth.getUser(token);
       if (!userError && user) {
         userId = user.id;
       }
     }
 
     if (!userId) {
-      return NextResponse.json({ favorited: false });
+      const {
+        data: { user },
+        error: userError,
+      } = await client.auth.getUser();
+      if (!userError && user) {
+        userId = user.id;
+      }
     }
+
+    if (!userId) {
+      return NextResponse.json({ watched: false });
+    }
+
     const admin = supabaseAdmin as any;
 
-    // Check if favorited
     const { data: existing } = await admin
-      .from("favorite")
+      .from("video_watch")
       .select("id")
       .eq("userId", userId)
-      .eq("toolId", toolId)
-      .single();
+      .eq("videoId", videoId)
+      .maybeSingle();
 
-    return NextResponse.json({ favorited: !!existing });
+    return NextResponse.json({ watched: !!existing });
   } catch (error: any) {
-    console.error("Error in GET favorite:", error);
-    return NextResponse.json({ favorited: false });
+    console.error("Error in GET watched:", error);
+    return NextResponse.json({ watched: false });
   }
 }
 

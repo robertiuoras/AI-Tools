@@ -189,6 +189,7 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
                     fill
                     className="object-cover"
                     sizes="48px"
+                    unoptimized
                   />
                 </div>
               ) : (
@@ -199,7 +200,10 @@ export function ToolCard({ tool, index = 0 }: ToolCardProps) {
                 </div>
               )}
               <div className="flex-1 min-w-0">
-                <h3 className="font-semibold text-lg leading-tight text-foreground truncate mb-1.5">
+                <h3
+                  className="font-semibold text-lg leading-tight text-foreground line-clamp-2 mb-1.5 break-words"
+                  title={tool.name}
+                >
                   {tool.name}
                 </h3>
                 <div className="flex items-center h-5">

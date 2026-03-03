@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import { Suspense } from 'react'
 import { Inter } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/react'
 import { SpeedInsights } from '@vercel/speed-insights/next'
@@ -6,7 +7,8 @@ import './globals.css'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { AuthButton } from '@/components/AuthButton'
 import { ToastProvider } from '@/components/ui/toaster'
-import Link from 'next/link'
+import { NavLinks } from '@/components/NavLinks'
+import { AdminNavLink } from '@/components/AdminNavLink'
 
 const inter = Inter({ subsets: ['latin'] })
 
@@ -22,17 +24,16 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={inter.className}>
+      <body className={inter.className} suppressHydrationWarning>
         <ToastProvider>
           <div className="min-h-screen bg-background">
             <nav className="sticky top-0 z-40 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
               <div className="container flex h-16 items-center justify-between px-4">
-                <Link href="/" className="flex items-center space-x-2">
-                  <span className="text-xl font-bold bg-gradient-to-r from-indigo-600 to-pink-600 bg-clip-text text-transparent">
-                    AI Tools
-                  </span>
-                </Link>
+                <Suspense fallback={<div className="flex items-center gap-1 rounded-lg bg-muted/50 p-1 px-4 py-2 text-sm text-muted-foreground">AI Tools | Videos | Creators</div>}>
+                  <NavLinks />
+                </Suspense>
                 <div className="flex items-center gap-4">
+                  <AdminNavLink />
                   <AuthButton />
                   <ThemeToggle />
                 </div>
