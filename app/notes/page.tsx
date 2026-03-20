@@ -227,8 +227,8 @@ export default function NotesPage() {
       {loading ? (
         <div className="text-muted-foreground">Loading notes...</div>
       ) : (
-        <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 overflow-x-hidden">
-          <section className="rounded-xl border bg-card p-3 space-y-3">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,280px)_minmax(0,320px)_minmax(0,1fr)] lg:items-start">
+          <section className="min-w-0 rounded-xl border bg-card p-3 space-y-3">
             <Label className="text-xs text-muted-foreground">Pages</Label>
             <div className="flex gap-2">
               <Input
@@ -293,7 +293,7 @@ export default function NotesPage() {
             </div>
           </section>
 
-          <section className="rounded-xl border bg-card p-3 space-y-3">
+          <section className="min-w-0 rounded-xl border bg-card p-3 space-y-3">
             <Label className="text-xs text-muted-foreground">Notes</Label>
             <div className="flex gap-2">
               <Input
@@ -361,10 +361,10 @@ export default function NotesPage() {
             </div>
           </section>
 
-          <section className="rounded-xl border bg-card p-4 min-w-0">
+          <section className="min-w-0 overflow-hidden rounded-xl border bg-card p-4">
             {selectedNote ? (
-              <div className="flex min-w-0 flex-col gap-4">
-                <div className="flex flex-wrap items-center gap-2">
+              <div className="flex min-w-0 max-w-full flex-col gap-4">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
                   <Input
                     className="min-w-0 flex-1"
@@ -441,8 +441,8 @@ export default function NotesPage() {
                     {saving ? "Saving..." : saved ? "Saved" : "Save"}
                   </Button>
                 </div>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 space-y-2">
+                  <div className="flex min-w-0 items-center justify-between gap-2">
                     <Label className="text-xs text-muted-foreground">
                       Editor
                     </Label>
@@ -473,7 +473,7 @@ export default function NotesPage() {
                     </Button>
                   </div>
                   <textarea
-                    className="min-h-[50vh] w-full max-w-full resize-y rounded-lg border bg-background px-3 py-2 text-sm sm:min-h-[28rem]"
+                    className="min-h-[280px] w-full min-w-0 max-w-full resize-y break-words rounded-lg border bg-background px-3 py-2 text-sm [overflow-wrap:anywhere] sm:min-h-[22rem]"
                     value={selectedNote.content}
                     onChange={(e) => {
                       const v = e.target.value;
@@ -492,12 +492,12 @@ export default function NotesPage() {
                     placeholder="Write your client notes here. Paste links — they’ll be clickable in the preview below."
                   />
                 </div>
-                <div className="space-y-2 rounded-lg border border-dashed border-border/80 bg-muted/20 p-3">
+                <div className="min-w-0 space-y-2 rounded-lg border border-dashed border-border/80 bg-muted/20 p-3">
                   <Label className="text-xs font-medium text-muted-foreground">
                     Preview — clickable links
                   </Label>
                   <div
-                    className="min-h-[100px] max-h-[min(50vh,28rem)] overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-background/80 px-3 py-2 text-sm text-foreground"
+                    className="min-h-[100px] max-h-[min(50vh,28rem)] min-w-0 overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-background/80 px-3 py-2 text-sm text-foreground [overflow-wrap:anywhere]"
                     aria-live="polite"
                   >
                     {selectedNote.content.trim() ? (
