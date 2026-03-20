@@ -216,14 +216,18 @@ export default function NotesPage() {
         <h1 className="text-3xl font-bold">Notes</h1>
         <p className="text-muted-foreground">
           Create pages, store client notes, favorite key items, and edit
-          anytime.
+          anytime. Your notes are saved to{" "}
+          <strong className="font-medium text-foreground">
+            your signed-in account only
+          </strong>{" "}
+          (e.g. Google via Supabase)—other users never see them.
         </p>
       </div>
 
       {loading ? (
         <div className="text-muted-foreground">Loading notes...</div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[280px_320px_1fr]">
+        <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 overflow-x-hidden">
           <section className="rounded-xl border bg-card p-3 space-y-3">
             <Label className="text-xs text-muted-foreground">Pages</Label>
             <div className="flex gap-2">
@@ -357,9 +361,9 @@ export default function NotesPage() {
             </div>
           </section>
 
-          <section className="rounded-xl border bg-card p-4">
+          <section className="rounded-xl border bg-card p-4 min-w-0">
             {selectedNote ? (
-              <div className="space-y-3">
+              <div className="flex min-w-0 flex-col gap-4">
                 <div className="flex flex-wrap items-center gap-2">
                   <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
                   <Input
@@ -469,7 +473,7 @@ export default function NotesPage() {
                     </Button>
                   </div>
                   <textarea
-                    className="min-h-[280px] w-full rounded-lg border bg-background px-3 py-2 text-sm"
+                    className="min-h-[50vh] w-full max-w-full resize-y rounded-lg border bg-background px-3 py-2 text-sm sm:min-h-[28rem]"
                     value={selectedNote.content}
                     onChange={(e) => {
                       const v = e.target.value;
@@ -493,7 +497,7 @@ export default function NotesPage() {
                     Preview — clickable links
                   </Label>
                   <div
-                    className="min-h-[80px] max-h-[240px] overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-background/80 px-3 py-2 text-sm text-foreground"
+                    className="min-h-[100px] max-h-[min(50vh,28rem)] overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-background/80 px-3 py-2 text-sm text-foreground"
                     aria-live="polite"
                   >
                     {selectedNote.content.trim() ? (
