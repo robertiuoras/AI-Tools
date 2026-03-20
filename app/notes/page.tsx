@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { supabase, type Note, type NotePage } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,6 +17,91 @@ import {
 import { cn } from "@/lib/utils";
 import { linkifyText } from "@/lib/linkify";
 
+const INLINE_MARKDOWN_RE = /\*\*([^*]+)\*\*|\*([^*]+)\*/g;
+const BULLET_LINE_RE = /^(\s*)([-*•])\s+/;
+
+function renderInlineMarkdown(text: string): ReactNode {
+  const nodes: ReactNode[] = [];
+  const re = new RegExp(INLINE_MARKDOWN_RE);
+
+  let lastIndex = 0;
+  let partIndex = 0;
+  let match: RegExpExecArray | null = null;
+
+  while ((match = re.exec(text))) {
+    const matchIndex = match.index ?? 0;
+
+    if (matchIndex > lastIndex) {
+      nodes.push(
+        <span key={`t-${partIndex++}`}>{linkifyText(text.slice(lastIndex, matchIndex))}</span>,
+      );
+    }
+
+    const boldText = match[1];
+    const italicText = match[2];
+
+    if (typeof boldText === "string") {
+      nodes.push(
+        <strong key={`b-${partIndex++}`}>{linkifyText(boldText)}</strong>,
+      );
+    } else if (typeof italicText === "string") {
+      nodes.push(
+        <em key={`i-${partIndex++}`}>{linkifyText(italicText)}</em>,
+      );
+    }
+
+    lastIndex = matchIndex + match[0].length;
+  }
+
+  if (lastIndex < text.length) {
+    nodes.push(<span key={`t-${partIndex++}`}>{linkifyText(text.slice(lastIndex))}</span>);
+  }
+
+  return <>{nodes}</>;
+}
+
+function renderPreviewMarkdown(text: string): ReactNode {
+  const lines = text.split(/\r?\n/);
+  const out: ReactNode[] = [];
+  let listItems: ReactNode[] = [];
+
+  const flushList = (key: number) => {
+    if (listItems.length === 0) return;
+    out.push(
+      <ul key={`ul-${key}`} className="list-disc pl-5">
+        {listItems}
+      </ul>,
+    );
+    listItems = [];
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+
+    if (BULLET_LINE_RE.test(line)) {
+      const itemText = line.replace(BULLET_LINE_RE, "");
+      listItems.push(<li key={`li-${i}`}>{renderInlineMarkdown(itemText)}</li>);
+      continue;
+    }
+
+    flushList(i);
+
+    if (line.trim().length === 0) {
+      out.push(<div key={`sp-${i}`} className="h-2" />);
+      continue;
+    }
+
+    out.push(
+      <p key={`p-${i}`} className="whitespace-pre-wrap">
+        {renderInlineMarkdown(line)}
+      </p>,
+    );
+  }
+
+  flushList(lines.length);
+  return <>{out}</>;
+}
+
 export default function NotesPage() {
   const [token, setToken] = useState<string | null>(null);
   const [pages, setPages] = useState<NotePage[]>([]);
@@ -29,6 +114,8 @@ export default function NotesPage() {
   const [newPageTitle, setNewPageTitle] = useState("");
   const [newNoteTitle, setNewNoteTitle] = useState("");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const flashCopied = useCallback((key: string) => {
     setCopiedKey(key);
@@ -177,18 +264,20 @@ export default function NotesPage() {
   const updateNote = async (
     noteId: string,
     patch: Partial<Pick<Note, "title" | "content" | "favorite">>,
+    opts?: { silent?: boolean },
   ) => {
-    setSaving(true);
+    const silent = opts?.silent ?? false;
+    if (!silent) setSaving(true);
     const res = await fetch(`/api/notes/${noteId}`, {
       method: "PUT",
       headers: authHeaders,
       body: JSON.stringify(patch),
     });
-    setSaving(false);
+    if (!silent) setSaving(false);
     if (!res.ok) return;
     const updated = (await res.json()) as Note;
     setNotes((prev) => prev.map((n) => (n.id === noteId ? updated : n)));
-    setSaved(true);
+    if (!silent) setSaved(true);
   };
 
   const deleteNote = async (noteId: string) => {
@@ -201,6 +290,123 @@ export default function NotesPage() {
     setNotes(remaining);
     if (selectedNoteId === noteId) setSelectedNoteId(remaining[0]?.id ?? null);
   };
+
+  const updateEditorContent = useCallback(
+    (noteId: string, newContent: string, selection?: { start: number; end: number }) => {
+      setSaved(false);
+      setNotes((prev) => prev.map((n) => (n.id === noteId ? { ...n, content: newContent } : n)));
+
+      requestAnimationFrame(() => {
+        const ta = textareaRef.current;
+        if (!ta) return;
+        ta.focus();
+        if (selection) ta.setSelectionRange(selection.start, selection.end);
+      });
+    },
+    [],
+  );
+
+  const applyBold = useCallback(() => {
+    if (!selectedNote) return;
+    const ta = textareaRef.current;
+    if (!ta) return;
+
+    ta.focus();
+    const start = ta.selectionStart ?? 0;
+    const end = ta.selectionEnd ?? 0;
+    const text = selectedNote.content;
+
+    const before = text.slice(0, start);
+    const sel = text.slice(start, end);
+    const after = text.slice(end);
+
+    if (start === end) {
+      const newText = before + "****" + after;
+      updateEditorContent(selectedNote.id, newText, { start: start + 2, end: start + 2 });
+      return;
+    }
+
+    const newText = before + `**${sel}**` + after;
+    updateEditorContent(selectedNote.id, newText, { start: start + 2, end: end + 2 });
+  }, [selectedNote, updateEditorContent]);
+
+  const applyItalic = useCallback(() => {
+    if (!selectedNote) return;
+    const ta = textareaRef.current;
+    if (!ta) return;
+
+    ta.focus();
+    const start = ta.selectionStart ?? 0;
+    const end = ta.selectionEnd ?? 0;
+    const text = selectedNote.content;
+
+    const before = text.slice(0, start);
+    const sel = text.slice(start, end);
+    const after = text.slice(end);
+
+    if (start === end) {
+      const newText = before + "**" + after;
+      updateEditorContent(selectedNote.id, newText, { start: start + 1, end: start + 1 });
+      return;
+    }
+
+    const newText = before + `*${sel}*` + after;
+    updateEditorContent(selectedNote.id, newText, { start: start + 1, end: end + 1 });
+  }, [selectedNote, updateEditorContent]);
+
+  const toggleBullets = useCallback(() => {
+    if (!selectedNote) return;
+    const ta = textareaRef.current;
+    if (!ta) return;
+
+    ta.focus();
+    const start = ta.selectionStart ?? 0;
+    const end = ta.selectionEnd ?? 0;
+    const text = selectedNote.content;
+
+    // No selection: add a bullet at the current line start (preserving indentation).
+    if (start === end) {
+      const lineStart = text.lastIndexOf("\n", start - 1) + 1;
+      const currentLine = text.slice(lineStart);
+      const indentMatch = currentLine.match(/^(\s*)/);
+      const indent = indentMatch?.[1] ?? "";
+      const rest = currentLine.slice(indent.length);
+
+      const newText = text.slice(0, lineStart) + indent + "- " + rest;
+      const cursor = lineStart + indent.length + 2;
+      updateEditorContent(selectedNote.id, newText, { start: cursor, end: cursor });
+      return;
+    }
+
+    const blockStart = text.lastIndexOf("\n", start - 1) + 1;
+    let blockEnd = text.indexOf("\n", end);
+    if (blockEnd === -1) blockEnd = text.length;
+
+    const block = text.slice(blockStart, blockEnd);
+    const lines = block.split("\n");
+
+    const allBulleted = lines.length > 0 && lines.every((l) => BULLET_LINE_RE.test(l));
+
+    const transformedLines = lines.map((l) => {
+      if (allBulleted) {
+        // Remove bullet marker, keep indentation.
+        return l.replace(BULLET_LINE_RE, "$1");
+      }
+
+      const indentMatch = l.match(/^(\s*)/);
+      const indent = indentMatch?.[1] ?? "";
+      const rest = l.slice(indent.length);
+      return `${indent}- ${rest}`;
+    });
+
+    const newBlock = transformedLines.join("\n");
+    const newText = text.slice(0, blockStart) + newBlock + text.slice(blockEnd);
+
+    updateEditorContent(selectedNote.id, newText, {
+      start: blockStart,
+      end: blockStart + newBlock.length,
+    });
+  }, [selectedNote, updateEditorContent]);
 
   if (!token) {
     return (
@@ -229,7 +435,9 @@ export default function NotesPage() {
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,280px)_minmax(0,320px)_minmax(0,1fr)] lg:items-start">
           <section className="min-w-0 rounded-xl border bg-card p-3 space-y-3">
-            <Label className="text-xs text-muted-foreground">Pages</Label>
+            <Label className="text-xs text-muted-foreground">
+              Pages — click a title to edit
+            </Label>
             <div className="flex gap-2">
               <Input
                 placeholder="New page title..."
@@ -245,21 +453,32 @@ export default function NotesPage() {
                 <div
                   key={p.id}
                   className={cn(
-                    "flex items-center gap-2 rounded-lg border px-2 py-1.5",
+                    "flex items-center gap-1 rounded-lg border px-1.5 py-1",
                     selectedPageId === p.id &&
                       "border-indigo-500 bg-indigo-500/10",
                   )}
                 >
-                  <button
-                    type="button"
-                    className="flex-1 text-left truncate"
-                    onClick={() => {
+                  <Input
+                    aria-label="Page title"
+                    className="h-8 min-w-0 flex-1 border-0 bg-transparent px-2 text-sm shadow-none focus-visible:ring-1 focus-visible:ring-ring"
+                    value={p.title}
+                    onFocus={() => {
                       setSelectedPageId(p.id);
                       setSelectedNoteId(null);
                     }}
-                  >
-                    {p.title}
-                  </button>
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setPages((prev) =>
+                        prev.map((x) =>
+                          x.id === p.id ? { ...x, title: v } : x,
+                        ),
+                      );
+                    }}
+                    onBlur={(e) => {
+                      const t = e.target.value.trim() || "Untitled Page";
+                      void updatePage(p.id, { title: t });
+                    }}
+                  />
                   <button
                     type="button"
                     className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -294,7 +513,9 @@ export default function NotesPage() {
           </section>
 
           <section className="min-w-0 rounded-xl border bg-card p-3 space-y-3">
-            <Label className="text-xs text-muted-foreground">Notes</Label>
+            <Label className="text-xs text-muted-foreground">
+              Notes — edit titles inline
+            </Label>
             <div className="flex gap-2">
               <Input
                 placeholder="New note title..."
@@ -316,18 +537,30 @@ export default function NotesPage() {
                 <div
                   key={n.id}
                   className={cn(
-                    "flex items-center gap-2 rounded-lg border px-2 py-1.5",
+                    "flex items-center gap-1 rounded-lg border px-1.5 py-1",
                     selectedNoteId === n.id &&
                       "border-violet-500 bg-violet-500/10",
                   )}
                 >
-                  <button
-                    type="button"
-                    className="flex-1 truncate text-left"
-                    onClick={() => setSelectedNoteId(n.id)}
-                  >
-                    {n.title}
-                  </button>
+                  <Input
+                    aria-label="Note title"
+                    className="h-8 min-w-0 flex-1 border-0 bg-transparent px-2 text-sm shadow-none focus-visible:ring-1 focus-visible:ring-ring"
+                    value={n.title}
+                    onFocus={() => setSelectedNoteId(n.id)}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setSaved(false);
+                      setNotes((prev) =>
+                        prev.map((x) =>
+                          x.id === n.id ? { ...x, title: v } : x,
+                        ),
+                      );
+                    }}
+                    onBlur={(e) => {
+                      const t = e.target.value.trim() || "Untitled Note";
+                      void updateNote(n.id, { title: t }, { silent: true });
+                    }}
+                  />
                   <button
                     type="button"
                     className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -342,7 +575,13 @@ export default function NotesPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => updateNote(n.id, { favorite: !n.favorite })}
+                    onClick={() =>
+                      void updateNote(
+                        n.id,
+                        { favorite: !n.favorite },
+                        { silent: true },
+                      )
+                    }
                   >
                     <Star
                       className={cn(
@@ -367,7 +606,9 @@ export default function NotesPage() {
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
                   <Input
-                    className="min-w-0 flex-1"
+                    aria-label="Note heading"
+                    className="min-w-0 flex-1 font-semibold"
+                    placeholder="Note title"
                     value={selectedNote.title}
                     onChange={(e) => {
                       const v = e.target.value;
@@ -378,11 +619,14 @@ export default function NotesPage() {
                         ),
                       );
                     }}
-                    onBlur={() =>
-                      void updateNote(selectedNote.id, {
-                        title: selectedNote.title,
-                      })
-                    }
+                    onBlur={(e) => {
+                      const t = e.target.value.trim() || "Untitled Note";
+                      void updateNote(
+                        selectedNote.id,
+                        { title: t },
+                        { silent: true },
+                      );
+                    }}
                   />
                   <Button
                     type="button"
@@ -430,6 +674,11 @@ export default function NotesPage() {
                   <Button
                     type="button"
                     size="sm"
+                    className={cn(
+                      saved &&
+                        !saving &&
+                        "border-transparent bg-emerald-600 text-white shadow-sm hover:bg-emerald-700 hover:text-white dark:bg-emerald-600 dark:hover:bg-emerald-500",
+                    )}
                     onClick={() =>
                       void updateNote(selectedNote.id, {
                         title: selectedNote.title,
@@ -446,34 +695,68 @@ export default function NotesPage() {
                     <Label className="text-xs text-muted-foreground">
                       Editor
                     </Label>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      className="h-7 text-xs"
-                      title="Copy note body only"
-                      onClick={() =>
-                        void copyText(
-                          selectedNote.content,
-                          `editor-body-${selectedNote.id}`,
-                        )
-                      }
-                    >
-                      {copiedKey === `editor-body-${selectedNote.id}` ? (
-                        <>
-                          <Check className="h-3.5 w-3.5 mr-1 text-emerald-500" />
-                          Copied body
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="h-3.5 w-3.5 mr-1" />
-                          Copy body
-                        </>
-                      )}
-                    </Button>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 text-xs"
+                        title="Copy note body only"
+                        onClick={() =>
+                          void copyText(
+                            selectedNote.content,
+                            `editor-body-${selectedNote.id}`,
+                          )
+                        }
+                      >
+                        {copiedKey === `editor-body-${selectedNote.id}` ? (
+                          <>
+                            <Check className="h-3.5 w-3.5 mr-1 text-emerald-500" />
+                            Copied body
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="h-3.5 w-3.5 mr-1" />
+                            Copy body
+                          </>
+                        )}
+                      </Button>
+
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-7 w-9 px-0"
+                        title="Bold (wrap selection with **)"
+                        onClick={applyBold}
+                      >
+                        <span className="font-bold">B</span>
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-7 w-9 px-0 italic"
+                        title="Italics (wrap selection with *)"
+                        onClick={applyItalic}
+                      >
+                        I
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-7 w-9 px-0"
+                        title="Bullets (prefix lines with - )"
+                        onClick={toggleBullets}
+                      >
+                        •
+                      </Button>
+                    </div>
                   </div>
                   <textarea
                     className="min-h-[280px] w-full min-w-0 max-w-full resize-y break-words rounded-lg border bg-background px-3 py-2 text-sm [overflow-wrap:anywhere] sm:min-h-[22rem]"
+                    ref={textareaRef}
                     value={selectedNote.content}
                     onChange={(e) => {
                       const v = e.target.value;
@@ -484,12 +767,14 @@ export default function NotesPage() {
                         ),
                       );
                     }}
-                    onBlur={() =>
-                      void updateNote(selectedNote.id, {
-                        content: selectedNote.content,
-                      })
+                    onBlur={(e) =>
+                      void updateNote(
+                        selectedNote.id,
+                        { content: e.target.value },
+                        { silent: true },
+                      )
                     }
-                    placeholder="Write your client notes here. Paste links — they’ll be clickable in the preview below."
+                    placeholder="Write your client notes here. Use B / I / • to format highlighted text, and paste links for clickable URLs in the preview."
                   />
                 </div>
                 <div className="min-w-0 space-y-2 rounded-lg border border-dashed border-border/80 bg-muted/20 p-3">
@@ -501,7 +786,7 @@ export default function NotesPage() {
                     aria-live="polite"
                   >
                     {selectedNote.content.trim() ? (
-                      linkifyText(selectedNote.content)
+                      renderPreviewMarkdown(selectedNote.content)
                     ) : (
                       <span className="text-muted-foreground italic">
                         Nothing to preview yet.
