@@ -9,6 +9,7 @@ export function NavLinks() {
   const searchParams = useSearchParams()
   const isToolsPage = pathname === '/'
   const isVideosPage = pathname === '/videos'
+  const isNotesPage = pathname === '/notes'
   const isCreatorsView = isVideosPage && searchParams.get('view') === 'creators'
 
   return (
@@ -68,6 +69,26 @@ export function NavLinks() {
           )}
         >
           Creators
+        </span>
+      </Link>
+      <span className="text-muted-foreground/60 px-0.5 font-light" aria-hidden>
+        |
+      </span>
+      <Link
+        href="/notes"
+        className={cn(
+          'rounded-md px-4 py-2 text-sm font-semibold transition-all',
+          isNotesPage
+            ? 'bg-background text-foreground shadow-sm ring-1 ring-border/50'
+            : 'text-muted-foreground hover:text-foreground hover:bg-background/50'
+        )}
+      >
+        <span
+          className={cn(
+            isNotesPage && 'bg-gradient-to-r from-violet-500 to-indigo-500 bg-clip-text text-transparent'
+          )}
+        >
+          Notes
         </span>
       </Link>
     </div>

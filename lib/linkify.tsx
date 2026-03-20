@@ -1,0 +1,52 @@
+import React from "react";
+
+/** Match http(s) URLs in plain text (stops at common delimiters). */
+const URL_REGEX = /https?:\/\/[^\s<>"'`)\]]+/gi;
+
+/** Strip trailing punctuation that often wraps URLs in prose. */
+function trimUrlHref(raw: string): string {
+  return raw.replace(/[.,;:!?)'"\]]+$/u, "");
+}
+
+/**
+ * Renders plain text with http(s) URLs as external links.
+ * Preserves line breaks via parent `whitespace-pre-wrap`.
+ */
+export function linkifyText(text: string): React.ReactNode {
+  if (!text) return null;
+
+  const nodes: React.ReactNode[] = [];
+  let last = 0;
+  let key = 0;
+
+  for (const match of text.matchAll(URL_REGEX)) {
+    const raw = match[0];
+    const start = match.index ?? 0;
+    if (start > last) {
+      nodes.push(text.slice(last, start));
+    }
+    const href = trimUrlHref(raw);
+    if (href.length > 0) {
+      nodes.push(
+        <a
+          key={`l-${key++}`}
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-medium text-primary underline underline-offset-2 hover:text-primary/80 break-all"
+        >
+          {raw}
+        </a>,
+      );
+    } else {
+      nodes.push(raw);
+    }
+    last = start + raw.length;
+  }
+
+  if (last < text.length) {
+    nodes.push(text.slice(last));
+  }
+
+  return <>{nodes}</>;
+}

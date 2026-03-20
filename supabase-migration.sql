@@ -198,3 +198,71 @@ CREATE TRIGGER update_video_updated_at BEFORE UPDATE ON "video"
 -- Note: Make sure your Tool table has the correct structure
 -- It should have: id, name, description, url, logoUrl, category, tags, traffic, revenue, rating, estimatedVisits, createdAt, updatedAt
 
+-- 15. Notes feature tables
+CREATE TABLE IF NOT EXISTS "note_page" (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "userId" UUID NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  favorite BOOLEAN DEFAULT false NOT NULL,
+  "createdAt" TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  "updatedAt" TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS "note" (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "userId" UUID NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  "pageId" UUID NOT NULL REFERENCES "note_page"(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  content TEXT DEFAULT '' NOT NULL,
+  favorite BOOLEAN DEFAULT false NOT NULL,
+  "createdAt" TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  "updatedAt" TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS "note_page_userId_idx" ON "note_page"("userId");
+CREATE INDEX IF NOT EXISTS "note_page_favorite_idx" ON "note_page"(favorite);
+CREATE INDEX IF NOT EXISTS "note_userId_idx" ON "note"("userId");
+CREATE INDEX IF NOT EXISTS "note_pageId_idx" ON "note"("pageId");
+CREATE INDEX IF NOT EXISTS "note_favorite_idx" ON "note"(favorite);
+
+ALTER TABLE "note_page" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "note" ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can read own note pages" ON "note_page";
+DROP POLICY IF EXISTS "Users can insert own note pages" ON "note_page";
+DROP POLICY IF EXISTS "Users can update own note pages" ON "note_page";
+DROP POLICY IF EXISTS "Users can delete own note pages" ON "note_page";
+
+CREATE POLICY "Users can read own note pages" ON "note_page"
+  FOR SELECT USING (auth.uid() = "userId");
+CREATE POLICY "Users can insert own note pages" ON "note_page"
+  FOR INSERT WITH CHECK (auth.uid() = "userId");
+CREATE POLICY "Users can update own note pages" ON "note_page"
+  FOR UPDATE USING (auth.uid() = "userId")
+  WITH CHECK (auth.uid() = "userId");
+CREATE POLICY "Users can delete own note pages" ON "note_page"
+  FOR DELETE USING (auth.uid() = "userId");
+
+DROP POLICY IF EXISTS "Users can read own notes" ON "note";
+DROP POLICY IF EXISTS "Users can insert own notes" ON "note";
+DROP POLICY IF EXISTS "Users can update own notes" ON "note";
+DROP POLICY IF EXISTS "Users can delete own notes" ON "note";
+
+CREATE POLICY "Users can read own notes" ON "note"
+  FOR SELECT USING (auth.uid() = "userId");
+CREATE POLICY "Users can insert own notes" ON "note"
+  FOR INSERT WITH CHECK (auth.uid() = "userId");
+CREATE POLICY "Users can update own notes" ON "note"
+  FOR UPDATE USING (auth.uid() = "userId")
+  WITH CHECK (auth.uid() = "userId");
+CREATE POLICY "Users can delete own notes" ON "note"
+  FOR DELETE USING (auth.uid() = "userId");
+
+DROP TRIGGER IF EXISTS update_note_page_updated_at ON "note_page";
+DROP TRIGGER IF EXISTS update_note_updated_at ON "note";
+
+CREATE TRIGGER update_note_page_updated_at BEFORE UPDATE ON "note_page"
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_note_updated_at BEFORE UPDATE ON "note"
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+

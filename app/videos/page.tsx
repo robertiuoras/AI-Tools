@@ -247,7 +247,7 @@ function VideosPageContent() {
               </span>
             </h1>
             <p className="max-w-xl text-sm text-muted-foreground sm:text-base">
-              Hand-picked YouTube and TikTok videos on motivation, money, AI, cars & more. Watch inline with a short summary below each video.
+              Hand-picked YouTube and TikTok videos on motivation, money, AI, cars & more. YouTube plays here; TikTok opens in a new tab with a short summary below each video.
             </p>
           </div>
         </div>

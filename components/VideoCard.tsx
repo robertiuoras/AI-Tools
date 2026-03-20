@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { motion } from "framer-motion";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import type { Video } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
-import { Eye, CheckCircle2 } from "lucide-react";
+import { Eye, CheckCircle2, ExternalLink } from "lucide-react";
 
 interface VideoCardProps {
   video: Video;
@@ -53,24 +53,6 @@ function getYoutubeEmbedUrl(url: string): string | null {
   }
 }
 
-/** TikTok: extract video id from @user/video/ID or return embed URL; short links (vm/vt) return null */
-function getTikTokEmbedUrl(url: string): string | null {
-  try {
-    const u = new URL(url);
-    const host = u.hostname.toLowerCase();
-    if (host !== "www.tiktok.com" && host !== "tiktok.com") return null;
-    const parts = u.pathname.split("/").filter(Boolean);
-    const videoIdx = parts.indexOf("video");
-    if (videoIdx >= 0 && parts[videoIdx + 1]) {
-      const id = parts[videoIdx + 1];
-      return `https://www.tiktok.com/embed/v2/${id}`;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
 function formatSubscribers(count: number | null): string | null {
   if (count === null || count === undefined) return null;
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
@@ -85,8 +67,8 @@ export function VideoCard({
   onToggleWatched,
 }: VideoCardProps) {
   const [channelImgError, setChannelImgError] = useState(false);
+  const [tiktokPreviewError, setTiktokPreviewError] = useState(false);
   const source = (video as { source?: string }).source ?? "youtube";
-  const [showEmbed, setShowEmbed] = useState(source !== "tiktok");
   const embedUrl = source === "youtube" ? getYoutubeEmbedUrl(video.url) : null;
   const subscriberLabel = formatSubscribers(video.subscriberCount);
   const tagsArray =
@@ -97,28 +79,6 @@ export function VideoCard({
           .filter(Boolean)
       : [];
   const categoryEmoji = CATEGORY_EMOJI[video.category] ?? "";
-
-  // Load TikTok embed script on demand when showing a TikTok embed
-  useEffect(() => {
-    if (source !== "tiktok" || !showEmbed) return;
-    if (typeof window === "undefined") return;
-
-    const existing = document.querySelector<HTMLScriptElement>(
-      'script[src="https://www.tiktok.com/embed.js"]'
-    );
-    if (existing) {
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = "https://www.tiktok.com/embed.js";
-    script.async = true;
-    document.body.appendChild(script);
-
-    return () => {
-      // keep script so multiple cards reuse it; no cleanup
-    };
-  }, [source, showEmbed]);
 
   return (
     <motion.div
@@ -209,42 +169,56 @@ export function VideoCard({
             </div>
           </div>
 
-          {source === "tiktok" && !showEmbed && (
-            <button
-              type="button"
-              onClick={() => setShowEmbed(true)}
-              className="w-full max-w-2xl mx-auto overflow-hidden rounded-lg border border-border/70 bg-gradient-to-br from-zinc-900 via-black to-zinc-900 text-left shadow-sm transition-colors hover:border-rose-500/60"
+          {/* TikTok: embeds are unreliable in browsers; open official app/site instead */}
+          {source === "tiktok" && (
+            <a
+              href={video.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group relative flex w-full max-w-2xl mx-auto overflow-hidden rounded-xl border border-border/70 bg-gradient-to-br from-zinc-950 via-black to-zinc-950 shadow-md transition-all hover:border-rose-500/45 hover:shadow-lg hover:shadow-rose-500/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/50"
             >
-              <div className="relative w-full" style={{ paddingTop: "177.78%" }}>
-                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
-                  <span className="inline-flex items-center rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-medium text-white border border-white/20">
-                    TikTok · Click to play
+              <div className="relative min-h-[160px] flex-1 sm:min-h-[180px]">
+                {video.channelThumbnailUrl && !tiktokPreviewError ? (
+                  <>
+                    <img
+                      src={video.channelThumbnailUrl}
+                      alt=""
+                      className="absolute inset-0 h-full w-full object-cover opacity-35 transition-opacity group-hover:opacity-45"
+                      loading="lazy"
+                      decoding="async"
+                      onError={() => setTiktokPreviewError(true)}
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-r from-black/90 via-black/75 to-black/50" />
+                  </>
+                ) : (
+                  <div className="absolute inset-0 bg-gradient-to-br from-rose-950/40 via-black to-cyan-950/30" />
+                )}
+                <div className="relative flex h-full min-h-[160px] flex-col items-center justify-center gap-3 px-6 py-8 text-center sm:flex-row sm:text-left sm:justify-between sm:px-8">
+                  <div className="space-y-1">
+                    <Badge
+                      variant="outline"
+                      className="border-white/25 bg-white/10 text-white backdrop-blur-sm"
+                    >
+                      TikTok
+                    </Badge>
+                    <p className="text-sm font-medium text-white">
+                      Watch on TikTok
+                    </p>
+                    <p className="text-xs text-white/65 max-w-[240px] sm:max-w-xs">
+                      Playback opens in a new tab — embeds often don&apos;t work
+                      here.
+                    </p>
+                  </div>
+                  <span className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black shadow-lg transition-transform group-hover:scale-[1.02] group-active:scale-[0.98]">
+                    <ExternalLink className="h-4 w-4" aria-hidden />
+                    Open video
                   </span>
                 </div>
               </div>
-            </button>
+            </a>
           )}
 
-          {showEmbed && source === "tiktok" && (
-            <div className="w-full overflow-hidden rounded-lg bg-background max-w-2xl mx-auto">
-              <div className="relative w-full" style={{ paddingTop: "177.78%" }}>
-                <blockquote
-                  className="tiktok-embed absolute inset-0"
-                  cite={video.url}
-                  data-video-id={undefined}
-                  style={{ maxWidth: 605, minWidth: 325, margin: 0 }}
-                >
-                  <section>
-                    <a href={video.url} target="_blank" rel="noopener noreferrer">
-                      {video.title}
-                    </a>
-                  </section>
-                </blockquote>
-              </div>
-            </div>
-          )}
-
-          {showEmbed && source === "youtube" && embedUrl && (
+          {source === "youtube" && embedUrl && (
             <div className="w-full overflow-hidden rounded-lg bg-black max-w-2xl mx-auto">
               <div
                 className="relative w-full"
@@ -259,17 +233,6 @@ export function VideoCard({
                 />
               </div>
             </div>
-          )}
-
-          {source === "tiktok" && !showEmbed && !embedUrl && (
-            <a
-              href={video.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block w-full rounded-lg border border-border bg-muted/30 p-4 text-center text-sm text-muted-foreground hover:underline"
-            >
-              Watch on TikTok →
-            </a>
           )}
 
           {video.description && (

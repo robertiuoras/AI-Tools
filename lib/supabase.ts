@@ -111,3 +111,23 @@ export interface Comment {
   updatedAt: string;
   user?: User;
 }
+
+export interface NotePage {
+  id: string;
+  userId: string;
+  title: string;
+  favorite: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Note {
+  id: string;
+  userId: string;
+  pageId: string;
+  title: string;
+  content: string;
+  favorite: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
