@@ -111,6 +111,7 @@ export default function NotesPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [isEditing, setIsEditing] = useState(true);
   const [newPageTitle, setNewPageTitle] = useState("");
   const [newNoteTitle, setNewNoteTitle] = useState("");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -202,6 +203,13 @@ export default function NotesPage() {
     void loadNotes(selectedPageId);
   }, [selectedPageId, loadNotes]);
 
+  useEffect(() => {
+    // When you switch to a different note, allow editing again.
+    if (!selectedNoteId) return;
+    setIsEditing(true);
+    setSaved(false);
+  }, [selectedNoteId]);
+
   const createPage = async () => {
     if (!token) return;
     const title = newPageTitle.trim() || "Untitled Page";
@@ -273,11 +281,17 @@ export default function NotesPage() {
       headers: authHeaders,
       body: JSON.stringify(patch),
     });
-    if (!silent) setSaving(false);
-    if (!res.ok) return;
+    if (!res.ok) {
+      if (!silent) setSaving(false);
+      return false;
+    }
     const updated = (await res.json()) as Note;
     setNotes((prev) => prev.map((n) => (n.id === noteId ? updated : n)));
-    if (!silent) setSaved(true);
+    if (!silent) {
+      setSaving(false);
+      setSaved(true);
+    }
+    return true;
   };
 
   const deleteNote = async (noteId: string) => {
@@ -372,7 +386,7 @@ export default function NotesPage() {
       const indent = indentMatch?.[1] ?? "";
       const rest = currentLine.slice(indent.length);
 
-      const newText = text.slice(0, lineStart) + indent + "- " + rest;
+      const newText = text.slice(0, lineStart) + indent + "• " + rest;
       const cursor = lineStart + indent.length + 2;
       updateEditorContent(selectedNote.id, newText, { start: cursor, end: cursor });
       return;
@@ -396,7 +410,7 @@ export default function NotesPage() {
       const indentMatch = l.match(/^(\s*)/);
       const indent = indentMatch?.[1] ?? "";
       const rest = l.slice(indent.length);
-      return `${indent}- ${rest}`;
+      return `${indent}• ${rest}`;
     });
 
     const newBlock = transformedLines.join("\n");
@@ -671,24 +685,41 @@ export default function NotesPage() {
                       </>
                     )}
                   </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    className={cn(
-                      saved &&
-                        !saving &&
-                        "border-transparent bg-emerald-600 text-white shadow-sm hover:bg-emerald-700 hover:text-white dark:bg-emerald-600 dark:hover:bg-emerald-500",
-                    )}
-                    onClick={() =>
-                      void updateNote(selectedNote.id, {
-                        title: selectedNote.title,
-                        content: selectedNote.content,
-                      })
-                    }
-                  >
-                    <Save className="h-4 w-4 mr-1" />
-                    {saving ? "Saving..." : saved ? "Saved" : "Save"}
-                  </Button>
+                  {isEditing ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      className={cn(
+                        saved &&
+                          !saving &&
+                          "border-transparent bg-emerald-600 text-white shadow-sm hover:bg-emerald-700 hover:text-white dark:bg-emerald-600 dark:hover:bg-emerald-500",
+                      )}
+                      onClick={async () => {
+                        const ok = await updateNote(selectedNote.id, {
+                          title: selectedNote.title,
+                          content: selectedNote.content,
+                        });
+                        if (ok) setIsEditing(false);
+                      }}
+                    >
+                      <Save className="h-4 w-4 mr-1" />
+                      {saving ? "Saving..." : saved ? "Saved" : "Save"}
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setIsEditing(true);
+                        setSaved(false);
+                        textareaRef.current?.focus();
+                      }}
+                    >
+                      <FileText className="h-4 w-4 mr-1" />
+                      Edit
+                    </Button>
+                  )}
                 </div>
                 <div className="min-w-0 space-y-2">
                   <div className="flex min-w-0 items-center justify-between gap-2">
@@ -722,77 +753,72 @@ export default function NotesPage() {
                         )}
                       </Button>
 
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className="h-7 w-9 px-0"
-                        title="Bold (wrap selection with **)"
-                        onClick={applyBold}
-                      >
-                        <span className="font-bold">B</span>
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className="h-7 w-9 px-0 italic"
-                        title="Italics (wrap selection with *)"
-                        onClick={applyItalic}
-                      >
-                        I
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className="h-7 w-9 px-0"
-                        title="Bullets (prefix lines with - )"
-                        onClick={toggleBullets}
-                      >
-                        •
-                      </Button>
+                      {isEditing && (
+                        <>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 w-9 px-0"
+                            title="Bold (wrap selection with **)"
+                            onClick={applyBold}
+                          >
+                            <span className="font-bold">B</span>
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 w-9 px-0 italic"
+                            title="Italics (wrap selection with *)"
+                            onClick={applyItalic}
+                          >
+                            I
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 w-9 px-0"
+                            title="Bullets (prefix lines with • )"
+                            onClick={toggleBullets}
+                          >
+                            •
+                          </Button>
+                        </>
+                      )}
                     </div>
                   </div>
-                  <textarea
-                    className="min-h-[280px] w-full min-w-0 max-w-full resize-y break-words rounded-lg border bg-background px-3 py-2 text-sm [overflow-wrap:anywhere] sm:min-h-[22rem]"
-                    ref={textareaRef}
-                    value={selectedNote.content}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setSaved(false);
-                      setNotes((prev) =>
-                        prev.map((n) =>
-                          n.id === selectedNote.id ? { ...n, content: v } : n,
-                        ),
-                      );
-                    }}
-                    onBlur={(e) =>
-                      void updateNote(
-                        selectedNote.id,
-                        { content: e.target.value },
-                        { silent: true },
-                      )
-                    }
-                    placeholder="Write your client notes here. Use B / I / • to format highlighted text, and paste links for clickable URLs in the preview."
-                  />
-                </div>
-                <div className="min-w-0 space-y-2 rounded-lg border border-dashed border-border/80 bg-muted/20 p-3">
-                  <Label className="text-xs font-medium text-muted-foreground">
-                    Preview — clickable links
-                  </Label>
-                  <div
-                    className="min-h-[100px] max-h-[min(50vh,28rem)] min-w-0 overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-background/80 px-3 py-2 text-sm text-foreground [overflow-wrap:anywhere]"
-                    aria-live="polite"
-                  >
-                    {selectedNote.content.trim() ? (
-                      renderPreviewMarkdown(selectedNote.content)
-                    ) : (
-                      <span className="text-muted-foreground italic">
-                        Nothing to preview yet.
-                      </span>
-                    )}
-                  </div>
+                  {isEditing ? (
+                    <textarea
+                      className="min-h-[280px] w-full min-w-0 max-w-full resize-y break-words rounded-lg border bg-background px-3 py-2 text-sm [overflow-wrap:anywhere] sm:min-h-[22rem]"
+                      ref={textareaRef}
+                      value={selectedNote.content}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setSaved(false);
+                        setNotes((prev) =>
+                          prev.map((n) =>
+                            n.id === selectedNote.id ? { ...n, content: v } : n,
+                          ),
+                        );
+                      }}
+                      placeholder="Write your client notes here. Use B / I / • to format highlighted text, and paste links for clickable URLs."
+                    />
+                  ) : (
+                    <div
+                      className="min-h-[280px] w-full min-w-0 max-w-full overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words rounded-lg border bg-background px-3 py-2 text-sm text-foreground [overflow-wrap:anywhere]"
+                      aria-live="polite"
+                    >
+                      {selectedNote.content.trim() ? (
+                        renderPreviewMarkdown(selectedNote.content)
+                      ) : (
+                        <span className="text-muted-foreground italic">
+                          Nothing to show yet.
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             ) : (
