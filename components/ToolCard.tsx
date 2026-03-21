@@ -19,6 +19,8 @@ import { supabase } from "@/lib/supabase";
 import type { Tool } from "@/lib/supabase";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
 import { cn } from "@/lib/utils";
+import { toolCategoryList } from "@/lib/tool-categories";
+import { toolCategoryBadgeClass } from "@/lib/tool-category-styles";
 
 export type ToolCardLayout = "grid" | "list";
 
@@ -26,32 +28,6 @@ interface ToolCardProps {
   tool: Tool;
   index?: number;
   layout?: ToolCardLayout;
-}
-
-const categoryColors: Record<string, string> = {
-  "AI Agents": "bg-violet-500/10 text-violet-700 dark:text-violet-400",
-  "AI Automation": "bg-purple-500/10 text-purple-700 dark:text-purple-400",
-  Analytics: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
-  "Code Assistants": "bg-orange-500/10 text-orange-700 dark:text-orange-400",
-  "Customer Support": "bg-sky-500/10 text-sky-700 dark:text-sky-400",
-  Design: "bg-rose-500/10 text-rose-700 dark:text-rose-400",
-  Education: "bg-teal-500/10 text-teal-700 dark:text-teal-400",
-  "Image Generation": "bg-pink-500/10 text-pink-700 dark:text-pink-400",
-  Language: "bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-400",
-  Legal: "bg-slate-500/10 text-slate-700 dark:text-slate-400",
-  Marketing: "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400",
-  "Music & Audio": "bg-amber-500/10 text-amber-700 dark:text-amber-400",
-  Other: "bg-gray-500/10 text-gray-700 dark:text-gray-400",
-  Productivity: "bg-cyan-500/10 text-cyan-700 dark:text-cyan-400",
-  Research: "bg-blue-500/10 text-blue-700 dark:text-blue-400",
-  SaaS: "bg-green-500/10 text-green-700 dark:text-green-400",
-  "Video Editing": "bg-sky-500/10 text-sky-700 dark:text-sky-400",
-  "Voice & Audio": "bg-indigo-500/10 text-indigo-700 dark:text-indigo-400",
-  Writing: "bg-lime-500/10 text-lime-800 dark:text-lime-400",
-};
-
-function categoryBadgeClass(category: string) {
-  return categoryColors[category] ?? categoryColors.Other;
 }
 
 /**
@@ -79,12 +55,54 @@ type VoteSnap = {
   userDownvoted: boolean;
 };
 
-function voteShareLabel(up: number, down: number): string | null {
-  const total = up + down;
+/** % of voters who upvoted: up / (up + down), e.g. 5 up + 1 down → 83% */
+function likePercentage(up: number, down: number): string | null {
+  const u = Math.max(0, Math.round(Number(up)));
+  const d = Math.max(0, Math.round(Number(down)));
+  const total = u + d;
   if (total === 0) return null;
-  const upPct = Math.round((up / total) * 100);
-  const downPct = 100 - upPct;
-  return `(${upPct}% up, ${downPct}% down)`;
+  const pct = Math.round((u / total) * 100);
+  return `${pct}%`;
+}
+
+const revenueBadgeTone: Record<string, string> = {
+  free:
+    "border-green-600/50 bg-green-500/15 text-green-800 dark:border-green-500/40 dark:bg-green-500/10 dark:text-green-400",
+  freemium:
+    "border-blue-600/50 bg-blue-500/15 text-blue-800 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-400",
+  paid:
+    "border-red-600/50 bg-red-500/15 text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-400",
+  enterprise:
+    "border-orange-600/50 bg-orange-500/15 text-orange-800 dark:border-orange-500/40 dark:bg-orange-500/10 dark:text-orange-400",
+};
+
+function revenueBadgeClassName(revenue: string): string {
+  const key = revenue.toLowerCase().trim();
+  return revenueBadgeTone[key] ?? "";
+}
+
+async function parseVoteResponseBody(res: Response): Promise<{
+  message?: string;
+  error?: string;
+  upvoteCount?: number;
+  downvoteCount?: number;
+  userUpvoted?: boolean;
+  userDownvoted?: boolean;
+}> {
+  try {
+    const text = await res.text();
+    if (!text) return {};
+    return JSON.parse(text) as {
+      message?: string;
+      error?: string;
+      upvoteCount?: number;
+      downvoteCount?: number;
+      userUpvoted?: boolean;
+      userDownvoted?: boolean;
+    };
+  } catch {
+    return {};
+  }
 }
 
 export function ToolCard({
@@ -192,17 +210,25 @@ export function ToolCard({
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
       });
-      const data = await res.json();
+      const data = await parseVoteResponseBody(res);
       if (!res.ok) {
         throw new Error(
-          data.message || data.error || "Could not update vote",
+          data.message ||
+            data.error ||
+            (res.status === 401
+              ? "Please log in to vote"
+              : prev.userUpvoted
+                ? "Failed to remove upvote"
+                : "Failed to upvote"),
         );
       }
       applyVoteSnap(data as VoteSnap);
     } catch (error: unknown) {
       applyVoteSnap(prev);
       alert(
-        error instanceof Error ? error.message : "Could not update vote.",
+        error instanceof Error
+          ? error.message
+          : "Failed to upvote. Please try again.",
       );
     } finally {
       setVoteBusy(false);
@@ -242,24 +268,32 @@ export function ToolCard({
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
       });
-      const data = await res.json();
+      const data = await parseVoteResponseBody(res);
       if (!res.ok) {
         throw new Error(
-          data.message || data.error || "Could not update vote",
+          data.message ||
+            data.error ||
+            (res.status === 401
+              ? "Please log in to vote"
+              : prev.userDownvoted
+                ? "Failed to remove downvote"
+                : "Failed to downvote"),
         );
       }
       applyVoteSnap(data as VoteSnap);
     } catch (error: unknown) {
       applyVoteSnap(prev);
       alert(
-        error instanceof Error ? error.message : "Could not update vote.",
+        error instanceof Error
+          ? error.message
+          : "Failed to downvote. Please try again.",
       );
     } finally {
       setVoteBusy(false);
     }
   };
 
-  const shareLabel = voteShareLabel(upvoteCount, downvoteCount);
+  const likePctLabel = likePercentage(upvoteCount, downvoteCount);
 
   const handleFavorite = async () => {
     if (!user) {
@@ -391,18 +425,16 @@ export function ToolCard({
   const revenueBadge = tool.revenue ? (
     <Badge
       variant="outline"
-      className="shrink-0 text-[10px] capitalize"
+      className={cn(
+        "shrink-0 text-[14px] font-medium capitalize leading-tight",
+        revenueBadgeClassName(tool.revenue),
+      )}
     >
       {tool.revenue}
     </Badge>
   ) : null;
 
-  const metaChips = (
-    <>
-      {trafficVisitsRow}
-      {revenueBadge}
-    </>
-  );
+  const toolCategories = toolCategoryList(tool);
 
   if (layout === "list") {
     return (
@@ -413,37 +445,51 @@ export function ToolCard({
       >
         <Card className="overflow-hidden border-border/50 transition-colors hover:border-primary/40">
           <CardContent className="flex min-w-0 flex-col gap-3 p-3 sm:flex-row sm:items-center sm:gap-4">
-            <div className="flex min-w-0 flex-1 items-start gap-3">
+            <div className="flex min-w-0 flex-1 flex-col items-center gap-3 sm:flex-row sm:items-start">
               {logoBlock}
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2 gap-y-1">
+              <div className="min-w-0 w-full flex-1 text-center sm:text-left">
+                <div className="flex min-w-0 w-full flex-col gap-1.5">
                   <h3
                     className="min-w-0 max-w-full text-balance text-base font-semibold leading-tight text-foreground [overflow-wrap:anywhere] [word-break:normal]"
                     title={tool.name}
                   >
                     {titleDisplayBreaks(tool.name)}
                   </h3>
-                  <Badge
-                    variant="outline"
-                    className={cn(
-                      "max-w-[min(100%,12rem)] shrink-0 truncate text-xs",
-                      categoryBadgeClass(tool.category),
-                    )}
-                    title={tool.category}
-                  >
-                    {tool.category}
-                  </Badge>
+                  <div className="flex flex-wrap items-center justify-center gap-1 sm:justify-start">
+                    {toolCategories.map((cat) => (
+                      <Badge
+                        key={cat}
+                        variant="outline"
+                        className={cn(
+                          "max-w-[min(100%,12rem)] shrink-0 truncate text-xs leading-tight",
+                          toolCategoryBadgeClass(cat),
+                        )}
+                        title={cat}
+                      >
+                        {cat}
+                      </Badge>
+                    ))}
+                  </div>
                 </div>
-                <p className="mt-1 line-clamp-2 text-sm text-muted-foreground [overflow-wrap:anywhere]">
+                <p className="mt-1 line-clamp-2 text-center text-sm text-muted-foreground [overflow-wrap:anywhere] sm:text-left">
                   {tool.description}
                 </p>
               </div>
             </div>
 
-            <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-border/50 pt-2 sm:border-0 sm:pt-0 md:gap-3">
-              <div className="flex flex-wrap items-center gap-2">{ratingBlock}</div>
-              <div className="flex flex-wrap items-center gap-2">{metaChips}</div>
-              <div className="ml-auto flex items-center gap-1 sm:ml-0">
+            <div className="flex w-full min-w-0 shrink-0 flex-col items-center gap-2 border-t border-border/50 pt-2 sm:border-0 sm:pt-0 md:gap-3">
+              <div className="flex w-full flex-col items-center gap-1.5">
+                {ratingBlock ? (
+                  <div className="flex w-full justify-center">{ratingBlock}</div>
+                ) : null}
+                <div className="flex w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                  {trafficVisitsRow}
+                </div>
+                {revenueBadge ? (
+                  <div className="flex w-full justify-center">{revenueBadge}</div>
+                ) : null}
+              </div>
+              <div className="flex w-full flex-wrap items-center justify-center gap-1 sm:justify-end">
                 <Button
                   variant="ghost"
                   size="sm"
@@ -505,9 +551,9 @@ export function ToolCard({
                       {downvoteCount}
                     </span>
                   </Button>
-                  {shareLabel ? (
-                    <span className="w-full text-[11px] leading-tight text-muted-foreground sm:w-auto">
-                      {shareLabel}
+                  {likePctLabel ? (
+                    <span className="w-full text-center text-sm font-medium tabular-nums text-muted-foreground">
+                      {likePctLabel}
                     </span>
                   ) : null}
                 </div>
@@ -549,56 +595,19 @@ export function ToolCard({
       >
         <CardContent
           className={cn(
-            "flex min-h-0 min-w-0 flex-1 flex-col gap-0 p-4 sm:p-5",
+            "flex min-h-0 min-w-0 flex-1 flex-col gap-0 px-3.5 pb-4 pt-3.5 sm:px-5 sm:pb-5 sm:pt-5",
             descriptionExpanded ? "overflow-visible" : "overflow-hidden",
           )}
         >
-          <div className="mb-3 flex min-w-0 items-start gap-2">
-            <div className="flex min-w-0 flex-1 items-start gap-3">
-              {tool.logoUrl ? (
-                <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-lg border border-border bg-background">
-                  <Image
-                    src={tool.logoUrl}
-                    alt=""
-                    fill
-                    className="object-cover"
-                    sizes="44px"
-                    unoptimized
-                  />
-                </div>
-              ) : (
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-border bg-gradient-to-br from-primary/20 to-secondary/20">
-                  <span className="text-lg font-bold text-primary">
-                    {tool.name.charAt(0).toUpperCase()}
-                  </span>
-                </div>
-              )}
-              <div className="min-w-0 flex-1">
-                <h3
-                  className="mb-1 line-clamp-3 text-pretty text-base font-semibold leading-snug text-foreground [overflow-wrap:anywhere] [word-break:normal]"
-                  title={tool.name}
-                >
-                  {titleDisplayBreaks(tool.name)}
-                </h3>
-                <Badge
-                  variant="outline"
-                  className={cn(
-                    "mt-0.5 inline-flex max-w-full items-center truncate text-xs",
-                    categoryBadgeClass(tool.category),
-                  )}
-                  title={tool.category}
-                >
-                  {tool.category}
-                </Badge>
-              </div>
-            </div>
+          {/* Symmetric horizontal inset balances the favorite control so logo/title read visually centered */}
+          <div className="relative mb-3 min-w-0 px-8 sm:px-9">
             <Button
               variant="ghost"
               size="sm"
               onClick={handleFavorite}
               disabled={favoriting || !user}
               className={cn(
-                "h-8 w-8 shrink-0 p-0",
+                "absolute right-0 top-0 z-10 h-9 w-9 shrink-0 touch-manipulation p-0 sm:h-8 sm:w-8",
                 userFavorited && "text-red-500",
               )}
               aria-label="Favorite"
@@ -607,11 +616,52 @@ export function ToolCard({
                 className={cn("h-4 w-4", userFavorited && "fill-current")}
               />
             </Button>
+            <div className="mx-auto flex min-w-0 max-w-full flex-col items-center gap-2.5 text-center sm:gap-2">
+              {tool.logoUrl ? (
+                <div className="relative h-[3.25rem] w-[3.25rem] shrink-0 overflow-hidden rounded-xl border border-border bg-background sm:h-14 sm:w-14">
+                  <Image
+                    src={tool.logoUrl}
+                    alt=""
+                    fill
+                    className="object-cover"
+                    sizes="(max-width:640px) 52px, 56px"
+                    unoptimized
+                  />
+                </div>
+              ) : (
+                <div className="flex h-[3.25rem] w-[3.25rem] shrink-0 items-center justify-center rounded-xl border border-border bg-gradient-to-br from-primary/20 to-secondary/20 sm:h-14 sm:w-14">
+                  <span className="text-xl font-bold text-primary sm:text-2xl">
+                    {tool.name.charAt(0).toUpperCase()}
+                  </span>
+                </div>
+              )}
+              <h3
+                className="line-clamp-3 w-full max-w-full text-balance text-base font-semibold leading-snug text-foreground [overflow-wrap:anywhere] [word-break:normal]"
+                title={tool.name}
+              >
+                {titleDisplayBreaks(tool.name)}
+              </h3>
+              <div className="flex flex-wrap justify-center gap-1">
+                {toolCategories.map((cat) => (
+                  <Badge
+                    key={cat}
+                    variant="outline"
+                    className={cn(
+                      "inline-flex max-w-full shrink-0 items-center justify-center truncate text-xs leading-tight",
+                      toolCategoryBadgeClass(cat),
+                    )}
+                    title={cat}
+                  >
+                    {cat}
+                  </Badge>
+                ))}
+              </div>
+            </div>
           </div>
 
           <div
             className={cn(
-              "mb-3 min-w-0 flex-1",
+              "mb-3 min-w-0 flex-1 text-center",
               descriptionExpanded
                 ? "max-h-none overflow-visible"
                 : "min-h-0 overflow-hidden",
@@ -630,7 +680,7 @@ export function ToolCard({
               <button
                 type="button"
                 onClick={() => setDescriptionExpanded(!descriptionExpanded)}
-                className="mt-1 text-xs text-primary hover:underline"
+                className="mt-1.5 inline-block text-xs text-primary hover:underline"
               >
                 {descriptionExpanded ? "Show less" : "Show more…"}
               </button>
@@ -638,63 +688,61 @@ export function ToolCard({
           </div>
 
           <div className="mt-auto flex min-w-0 flex-col gap-2 border-t border-border/40 pt-3">
-            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 sm:gap-x-3">
-              <div className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleUpvote}
-                  disabled={voteBusy || !user}
-                  title="Upvote — counts this month"
+            <div className="flex w-full flex-wrap items-center justify-center gap-x-1 gap-y-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleUpvote}
+                disabled={voteBusy || !user}
+                title="Upvote — counts this month"
+                className={cn(
+                  "h-8 shrink-0 gap-1 px-2",
+                  userUpvoted && "text-primary",
+                )}
+              >
+                <ThumbsUp
                   className={cn(
-                    "h-8 shrink-0 gap-1 px-2",
-                    userUpvoted && "text-primary",
+                    "h-4 w-4 shrink-0",
+                    userUpvoted && "fill-current",
                   )}
-                >
-                  <ThumbsUp
-                    className={cn(
-                      "h-4 w-4 shrink-0",
-                      userUpvoted && "fill-current",
-                    )}
-                  />
-                  <span className="tabular-nums text-sm font-medium">
-                    {upvoteCount}
-                  </span>
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleDownvote}
-                  disabled={voteBusy || !user}
-                  title="Downvote — signal low quality (counts this month)"
+                />
+                <span className="tabular-nums text-sm font-medium">
+                  {upvoteCount}
+                </span>
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleDownvote}
+                disabled={voteBusy || !user}
+                title="Downvote — signal low quality (counts this month)"
+                className={cn(
+                  "h-8 shrink-0 gap-1 px-2",
+                  userDownvoted && "text-destructive",
+                )}
+              >
+                <ThumbsDown
                   className={cn(
-                    "h-8 shrink-0 gap-1 px-2",
-                    userDownvoted && "text-destructive",
+                    "h-4 w-4 shrink-0",
+                    userDownvoted && "fill-current",
                   )}
-                >
-                  <ThumbsDown
-                    className={cn(
-                      "h-4 w-4 shrink-0",
-                      userDownvoted && "fill-current",
-                    )}
-                  />
-                  <span className="tabular-nums text-sm font-medium">
-                    {downvoteCount}
-                  </span>
-                </Button>
-                {shareLabel ? (
-                  <span className="max-w-full text-[11px] leading-tight text-muted-foreground">
-                    {shareLabel}
-                  </span>
-                ) : null}
-              </div>
-              {ratingBlock ? (
-                <div className="flex min-w-0 items-center border-l border-border/50 pl-2 sm:pl-3">
-                  {ratingBlock}
-                </div>
+                />
+                <span className="tabular-nums text-sm font-medium">
+                  {downvoteCount}
+                </span>
+              </Button>
+              {likePctLabel ? (
+                <span className="w-full text-center text-sm font-medium tabular-nums text-muted-foreground">
+                  {likePctLabel}
+                </span>
               ) : null}
             </div>
-            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+            {ratingBlock ? (
+              <div className="flex w-full justify-center">
+                {ratingBlock}
+              </div>
+            ) : null}
+            <div className="flex w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
               {trafficVisitsRow}
             </div>
             {revenueBadge ? (
@@ -705,7 +753,7 @@ export function ToolCard({
           </div>
         </CardContent>
 
-        <CardFooter className="mt-0 shrink-0 border-t border-border/50 p-3 sm:p-4">
+        <CardFooter className="mt-0 shrink-0 border-t border-border/50 px-3.5 pb-3.5 pt-3 sm:px-5 sm:pb-4 sm:pt-4">
           <Button
             asChild
             variant="ghost"

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { toolSchema } from '@/lib/schemas'
+import { toolCategoryList } from '@/lib/tool-categories'
 import { createClient } from '@supabase/supabase-js'
 
 export async function GET(
@@ -19,7 +20,18 @@ export async function GET(
       return NextResponse.json({ error: 'Tool not found' }, { status: 404 })
     }
 
-    return NextResponse.json(tool)
+    const row = tool as Record<string, unknown>
+    const cats = toolCategoryList({
+      category: typeof row.category === 'string' ? row.category : null,
+      categories: Array.isArray(row.categories)
+        ? (row.categories as string[])
+        : null,
+    })
+    return NextResponse.json({
+      ...row,
+      categories: cats,
+      category: cats[0],
+    })
   } catch (error) {
     console.error('Error fetching tool:', error)
     return NextResponse.json(
@@ -44,6 +56,7 @@ export async function PUT(
       description: validatedData.description,
       url: validatedData.url,
       category: validatedData.category,
+      categories: validatedData.categories,
       logoUrl: validatedData.logoUrl || null,
       tags: validatedData.tags || null,
       traffic: validatedData.traffic || null,

@@ -2,11 +2,106 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase";
 import { toolSchema } from "@/lib/schemas";
+import { toolCategoryList } from "@/lib/tool-categories";
 import { createClient } from "@supabase/supabase-js";
 import {
   getLocalMonthStartIso,
   popularityScore,
 } from "@/lib/tool-popularity";
+
+/** Match sidebar category even when DB has pipe-separated junk (e.g. `Video Editing|SaaS`). */
+function applyCategoryFilter(query: any, category: string) {
+  const c = category.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return query.or(
+    `category.eq."${c}",category.ilike."${c}|%",category.ilike."%|${c}|%",category.ilike."%|${c}"`,
+  );
+}
+
+function jsonbCountsToMap(obj: unknown): Map<string, number> {
+  const m = new Map<string, number>();
+  if (obj && typeof obj === "object") {
+    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+      const n = typeof v === "number" ? v : Number(v);
+      if (!Number.isNaN(n)) m.set(k, n);
+    }
+  }
+  return m;
+}
+
+/** One DB round-trip for all tools’ monthly vote totals (see supabase-batch-vote-counts.sql). */
+async function fetchMonthlyVoteCountMaps(
+  admin: any,
+  toolIds: string[],
+  monthStartIso: string,
+): Promise<{ up: Map<string, number>; down: Map<string, number> }> {
+  const empty = () => ({
+    up: new Map<string, number>(),
+    down: new Map<string, number>(),
+  });
+  if (toolIds.length === 0) return empty();
+
+  const { data: rpcData, error: rpcErr } = await admin.rpc(
+    "batch_monthly_vote_counts",
+    {
+      p_tool_ids: toolIds,
+      p_month_start: monthStartIso,
+    },
+  );
+
+  if (!rpcErr && rpcData && typeof rpcData === "object") {
+    const row = rpcData as { upvotes?: unknown; downvotes?: unknown };
+    return {
+      up: jsonbCountsToMap(row.upvotes),
+      down: jsonbCountsToMap(row.downvotes),
+    };
+  }
+
+  if (rpcErr?.message) {
+    console.warn(
+      "[tools GET] batch_monthly_vote_counts RPC skipped:",
+      rpcErr.message,
+    );
+  }
+
+  const upvoteCountMap = new Map<string, number>();
+  const downvoteCountMap = new Map<string, number>();
+  const [upvoteRes, downvoteRes] = await Promise.all([
+    admin
+      .from("upvote")
+      .select("toolId")
+      .in("toolId", toolIds)
+      .gte("upvotedAt", monthStartIso),
+    admin
+      .from("downvote")
+      .select("toolId")
+      .in("toolId", toolIds)
+      .gte("downvotedAt", monthStartIso),
+  ]);
+
+  if (upvoteRes.error) {
+    console.error("❌ Upvote batch fetch failed:", upvoteRes.error);
+  } else {
+    (upvoteRes.data || []).forEach((row: { toolId: string }) => {
+      upvoteCountMap.set(
+        row.toolId,
+        (upvoteCountMap.get(row.toolId) || 0) + 1,
+      );
+    });
+  }
+
+  if (downvoteRes.error) {
+    console.error("❌ Downvote batch fetch failed:", downvoteRes.error);
+  } else {
+    (downvoteRes.data || []).forEach((row: { toolId: string }) => {
+      downvoteCountMap.set(
+        row.toolId,
+        (downvoteCountMap.get(row.toolId) || 0) + 1,
+      );
+    });
+  }
+
+  return { up: upvoteCountMap, down: downvoteCountMap };
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -14,13 +109,30 @@ export async function GET(request: NextRequest) {
     const category = searchParams.get("category");
     const traffic = searchParams.getAll("traffic");
     const revenue = searchParams.getAll("revenue");
-    const search = searchParams.get("search");
     const sort = searchParams.get("sort") || "popular";
     const order = searchParams.get("order") || "desc";
     const favoritesOnly = searchParams.get("favoritesOnly") === "true";
 
     // Get authorization header (used later for user authentication)
     const authHeader = request.headers.get("authorization");
+
+    const userIdPromise = (async (): Promise<string | null> => {
+      if (!authHeader) return null;
+      try {
+        const token = authHeader.replace("Bearer ", "");
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+        const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+        const userClient = createClient(supabaseUrl, supabaseAnonKey, {
+          global: { headers: { Authorization: `Bearer ${token}` } },
+        });
+        const {
+          data: { user },
+        } = await userClient.auth.getUser();
+        return user?.id ?? null;
+      } catch {
+        return null;
+      }
+    })();
 
     // Type assertion to work around Proxy type issues
     const admin = supabaseAdmin as any;
@@ -31,7 +143,7 @@ export async function GET(request: NextRequest) {
 
     // Apply filters
     if (category) {
-      query = query.eq("category", category);
+      query = applyCategoryFilter(query, category);
     }
 
     if (traffic.length > 0) {
@@ -40,13 +152,6 @@ export async function GET(request: NextRequest) {
 
     if (revenue.length > 0) {
       query = query.in("revenue", revenue);
-    }
-
-    // Apply search filter
-    if (search) {
-      const searchLower = search.toLowerCase();
-      // Supabase doesn't support OR queries easily, so we'll filter in memory
-      // For better performance, you could use full-text search if enabled
     }
 
     // DB ordering: use stable columns only. "popular" / "upvotes" are sorted in memory
@@ -70,7 +175,10 @@ export async function GET(request: NextRequest) {
       query = query.order("createdAt", { ascending: false });
     }
 
-    const { data: tools, error } = await query;
+    const [{ data: tools, error }, userId] = await Promise.all([
+      query,
+      userIdPromise,
+    ]);
 
     if (error) {
       console.error("❌ Supabase error fetching tools:", error);
@@ -78,54 +186,26 @@ export async function GET(request: NextRequest) {
       return NextResponse.json([], { status: 200 });
     }
 
-    // Apply case-insensitive search filter in memory
+    // Search runs client-side on the home page (instant typing, no refetch per keystroke).
     let filteredTools = tools || [];
-    if (search) {
-      const searchLower = search.toLowerCase();
-      filteredTools = filteredTools.filter(
-        (tool: any) =>
-          tool.name?.toLowerCase().includes(searchLower) ||
-          tool.description?.toLowerCase().includes(searchLower) ||
-          (tool.tags && tool.tags.toLowerCase().includes(searchLower))
-      );
-    }
 
-    // Filter by favorites if requested
+    // Filter by favorites if requested (single auth resolution via userIdPromise)
     if (favoritesOnly) {
-      const authHeader = request.headers.get("authorization");
-      if (authHeader) {
-        const token = authHeader.replace("Bearer ", "");
-        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-        const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-        const userClient = createClient(supabaseUrl, supabaseAnonKey, {
-          global: { headers: { Authorization: `Bearer ${token}` } },
-        });
-        const {
-          data: { user },
-        } = await userClient.auth.getUser();
-
-        if (user) {
-          // Get user's favorite tool IDs
-          const { data: favorites } = await admin
-            .from("favorite")
-            .select("toolId")
-            .eq("userId", user.id);
-
-          const favoriteToolIds = new Set(
-            (favorites || []).map((f: any) => f.toolId)
-          );
-
-          // Filter tools to only show favorites
-          filteredTools = filteredTools.filter((tool: any) =>
-            favoriteToolIds.has(tool.id)
-          );
-        } else {
-          // No user, return empty array
-          filteredTools = [];
-        }
-      } else {
-        // No auth header, return empty array
+      if (!userId) {
         filteredTools = [];
+      } else {
+        const { data: favorites } = await admin
+          .from("favorite")
+          .select("toolId")
+          .eq("userId", userId);
+
+        const favoriteToolIds = new Set(
+          (favorites || []).map((f: any) => f.toolId),
+        );
+
+        filteredTools = filteredTools.filter((tool: any) =>
+          favoriteToolIds.has(tool.id),
+        );
       }
     }
 
@@ -136,64 +216,10 @@ export async function GET(request: NextRequest) {
     // Monthly upvote window: `upvotedAt` in current local calendar month (matches UX).
     const monthStartIso = getLocalMonthStartIso();
 
-    // Get user if authenticated (once, not per tool)
-    let userId: string | null = null;
-    if (authHeader) {
-      const token = authHeader.replace("Bearer ", "");
-      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-      const userClient = createClient(supabaseUrl, supabaseAnonKey, {
-        global: { headers: { Authorization: `Bearer ${token}` } },
-      });
-      const {
-        data: { user },
-      } = await userClient.auth.getUser();
-      if (user) {
-        userId = user.id;
-      }
-    }
-
     const toolIds = filteredTools.map((t: { id: string }) => t.id);
 
-    const upvoteCountMap = new Map<string, number>();
-    const downvoteCountMap = new Map<string, number>();
-
-    if (toolIds.length > 0) {
-      const [upvoteRes, downvoteRes] = await Promise.all([
-        admin
-          .from("upvote")
-          .select("toolId")
-          .in("toolId", toolIds)
-          .gte("upvotedAt", monthStartIso),
-        admin
-          .from("downvote")
-          .select("toolId")
-          .in("toolId", toolIds)
-          .gte("downvotedAt", monthStartIso),
-      ]);
-
-      if (upvoteRes.error) {
-        console.error("❌ Upvote batch fetch failed:", upvoteRes.error);
-      } else {
-        (upvoteRes.data || []).forEach((row: { toolId: string }) => {
-          upvoteCountMap.set(
-            row.toolId,
-            (upvoteCountMap.get(row.toolId) || 0) + 1,
-          );
-        });
-      }
-
-      if (downvoteRes.error) {
-        console.error("❌ Downvote batch fetch failed:", downvoteRes.error);
-      } else {
-        (downvoteRes.data || []).forEach((row: { toolId: string }) => {
-          downvoteCountMap.set(
-            row.toolId,
-            (downvoteCountMap.get(row.toolId) || 0) + 1,
-          );
-        });
-      }
-    }
+    const { up: upvoteCountMap, down: downvoteCountMap } =
+      await fetchMonthlyVoteCountMaps(admin, toolIds, monthStartIso);
 
     let userUpvoteSet = new Set<string>();
     let userDownvoteSet = new Set<string>();
@@ -236,14 +262,19 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const processedTools = filteredTools.map((tool: any) => ({
-      ...tool,
-      upvoteCount: upvoteCountMap.get(tool.id) || 0,
+    const processedTools = filteredTools.map((tool: any) => {
+      const cats = toolCategoryList(tool);
+      return {
+        ...tool,
+        categories: cats,
+        category: cats[0],
+        upvoteCount: upvoteCountMap.get(tool.id) || 0,
       downvoteCount: downvoteCountMap.get(tool.id) || 0,
       userUpvoted: userUpvoteSet.has(tool.id),
       userDownvoted: userDownvoteSet.has(tool.id),
       userFavorited: userFavoriteSet.has(tool.id),
-    }));
+      };
+    });
 
     if (sort === "upvotes") {
       processedTools.sort((a: { upvoteCount?: number }, b: { upvoteCount?: number }) => {
@@ -301,6 +332,7 @@ export async function POST(request: NextRequest) {
       description: validatedData.description,
       url: validatedData.url,
       category: validatedData.category,
+      categories: validatedData.categories,
     };
 
     // Handle optional fields - convert empty strings to null

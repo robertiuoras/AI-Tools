@@ -1,6 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, Suspense } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  useRef,
+  Suspense,
+} from "react";
 import { useRouter } from "next/navigation";
 import { Hero } from "@/components/Hero";
 import { ToolCard } from "@/components/ToolCard";
@@ -28,6 +35,7 @@ import { MOST_POPULAR_HELP } from "@/lib/tool-popularity";
 import type { ToolCardLayout } from "@/components/ToolCard";
 import { supabase } from "@/lib/supabase";
 import type { Tool } from "@/lib/supabase";
+import { toolCategoryList } from "@/lib/tool-categories";
 
 type SortOption = "alphabetical" | "newest" | "popular" | "traffic" | "traffic-low" | "upvotes";
 type SortOrder = "asc" | "desc";
@@ -67,7 +75,10 @@ function HomePageContent() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [tourReplayNonce, setTourReplayNonce] = useState(0);
   const [viewMode, setViewMode] = useState<ToolCardLayout>("grid");
+  const [refreshing, setRefreshing] = useState(false);
   const toolGridCols = useToolGridColumnCount();
+  const toolsRef = useRef<Tool[]>([]);
+  toolsRef.current = tools;
 
   useEffect(() => {
     try {
@@ -90,9 +101,29 @@ function HomePageContent() {
   const searchSuggestions = useMemo(() => {
     if (!tools || tools.length === 0) return [];
     const names = tools.map((t) => t.name);
-    const cats = tools.map((t) => t.category);
+    const cats = tools.flatMap((t) => toolCategoryList(t));
     return Array.from(new Set([...names, ...cats]));
   }, [tools]);
+
+  /** Search filters in the browser — no network per keystroke (fast vs full refetch + loading). */
+  const displayedTools = useMemo(() => {
+    const raw = search.trim();
+    const q = raw.toLowerCase();
+    if (!q) return tools;
+    const matches = tools.filter(
+      (t) =>
+        t.name?.toLowerCase().includes(q) ||
+        t.description?.toLowerCase().includes(q) ||
+        (t.tags && t.tags.toLowerCase().includes(q)) ||
+        toolCategoryList(t).some((c) => c.toLowerCase().includes(q)),
+    );
+    // Picking a suggestion often sets the full tool name — show that tool alone when unambiguous
+    const exactName = matches.filter(
+      (t) => t.name?.toLowerCase() === q,
+    );
+    if (exactName.length === 1) return exactName;
+    return matches;
+  }, [tools, search]);
 
   // Get user session
   useEffect(() => {
@@ -209,13 +240,14 @@ function HomePageContent() {
   }, []);
 
   const fetchTools = useCallback(async () => {
-    setLoading(true);
+    const hadCachedTools = toolsRef.current.length > 0;
+    if (hadCachedTools) setRefreshing(true);
+    else setLoading(true);
     try {
       const params = new URLSearchParams();
       if (selectedCategory) params.append("category", selectedCategory);
       selectedTraffic.forEach((t) => params.append("traffic", t));
       selectedRevenue.forEach((r) => params.append("revenue", r));
-      if (search) params.append("search", search);
       params.append("sort", sort);
       params.append("order", sortOrder);
       if (favoritesOnly) params.append("favoritesOnly", "true");
@@ -266,25 +298,21 @@ function HomePageContent() {
       setTools([]);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [
     selectedCategory,
     selectedTraffic,
     selectedRevenue,
-    search,
     sort,
     sortOrder,
     favoritesOnly,
     // Removed user from dependencies - it causes unnecessary refetches
+    // Search is client-side only (see displayedTools)
   ]);
 
-  // Debounce search to avoid too many requests
   useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      fetchTools();
-    }, search ? 300 : 0); // 300ms debounce for search, immediate for other filters
-
-    return () => clearTimeout(timeoutId);
+    void fetchTools();
   }, [fetchTools]);
 
   return (
@@ -308,12 +336,20 @@ function HomePageContent() {
 
           <div className="flex-1 space-y-6">
             <div className="scroll-mt-24 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex-1 max-w-2xl" data-tutorial="search-bar">
+              <div className="flex-1 max-w-2xl space-y-1" data-tutorial="search-bar">
                 <SearchBar
                   value={search}
                   onChange={setSearch}
                   suggestions={searchSuggestions}
                 />
+                {refreshing ? (
+                  <p
+                    className="pl-3 text-[11px] text-muted-foreground"
+                    aria-live="polite"
+                  >
+                    Updating list…
+                  </p>
+                ) : null}
               </div>
               <UpvoteTimer />
               <div className="flex flex-wrap items-center gap-2">
@@ -413,7 +449,7 @@ function HomePageContent() {
             </div>
 
             <div className="min-h-[8rem] space-y-4 scroll-mt-24">
-              {loading ? (
+              {loading && tools.length === 0 ? (
                 viewMode === "grid" ? (
                   <>
                     <div
@@ -462,16 +498,27 @@ function HomePageContent() {
                     No tools found. Try adjusting your filters or search.
                   </p>
                 </div>
+              ) : displayedTools.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 text-center">
+                  <p className="text-lg text-muted-foreground">
+                    No tools match &ldquo;{search.trim()}&rdquo;. Try different
+                    keywords or clear the search.
+                  </p>
+                </div>
               ) : (
                 <>
                   <p className="text-sm text-muted-foreground">
-                    Showing {tools.length} tool{tools.length !== 1 ? "s" : ""}
+                    Showing {displayedTools.length} tool
+                    {displayedTools.length !== 1 ? "s" : ""}
+                    {search.trim() && tools.length !== displayedTools.length
+                      ? ` (${tools.length} total with current filters)`
+                      : ""}
                   </p>
                   {(() => {
                     const firstRowCount =
                       viewMode === "list" ? 1 : toolGridCols;
-                    const firstSlice = tools.slice(0, firstRowCount);
-                    const restSlice = tools.slice(firstRowCount);
+                    const firstSlice = displayedTools.slice(0, firstRowCount);
+                    const restSlice = displayedTools.slice(firstRowCount);
                     const gridClass =
                       viewMode === "grid"
                         ? "grid min-w-0 grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"

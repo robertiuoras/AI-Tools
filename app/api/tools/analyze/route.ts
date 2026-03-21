@@ -1,10 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { categories } from '@/lib/schemas'
+import { categories, normalizeToolCategory } from '@/lib/schemas'
+
+/** Normalize + dedupe AI category output; cap length; primary = first. */
+function categoriesFromAiContent(content: {
+  categories?: unknown
+  category?: unknown
+}): string[] {
+  let list: string[] = []
+  if (Array.isArray(content.categories) && content.categories.length > 0) {
+    list = content.categories.map((c) => normalizeToolCategory(String(c)))
+  } else if (content.category != null && String(content.category).trim()) {
+    list = [normalizeToolCategory(String(content.category))]
+  } else {
+    list = ['Other']
+  }
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const c of list) {
+    if (c && !seen.has(c)) {
+      seen.add(c)
+      out.push(c)
+    }
+  }
+  return out.slice(0, 5)
+}
 
 interface AnalysisResult {
   name: string
   description: string
+  /** Primary category (same as categories[0]) */
   category: string
+  /** 1–5 labels from the allowed list, best match first */
+  categories: string[]
   tags: string
   revenue: 'free' | 'freemium' | 'paid' | 'enterprise' | null
   traffic: 'low' | 'medium' | 'high' | 'unknown'
@@ -339,11 +366,14 @@ Visits (search for numbers):
 - New/niche → 10K-100K
 - null only if no indicators
 
+Allowed categories (each entry in "categories" MUST be copied exactly from this list):
+${categories.map((c) => `- "${c}"`).join('\n')}
+
 Return JSON:
 {
   "name": "Tool name (max 50 chars)",
   "description": "2-3 sentence description",
-  "category": "${categories.join('|')}",
+  "categories": ["Best fit", "Second fit", "Optional third"],
   "tags": "ai, tag1, tag2 (3-5 tags)",
   "revenue": "free|freemium|paid|enterprise|null",
   "traffic": "low|medium|high|unknown",
@@ -355,7 +385,7 @@ Rules:
 - Revenue: Analyze pricing carefully
 - Visits: Provide number if any indicators exist
 - Tags: Always provide (even if generic)
-- Category: Must match exactly
+- categories: 2–4 strings when the tool clearly spans multiple areas (e.g. SaaS + Productivity + AI Automation); 1 string if only one fits. Order by relevance (first = primary). Every value must match the allowed list exactly — spelling and spacing. No duplicates. Never use pipes inside strings.
 - Return ONLY valid JSON, no markdown formatting`
 
     console.log('🚀 [OpenAI] ==========================================')
@@ -378,7 +408,7 @@ Rules:
         ],
         temperature: 0.3, // Lower temperature for more consistent, focused responses (saves tokens)
         response_format: { type: 'json_object' },
-        max_tokens: 500, // Limit response tokens (default is higher, this saves tokens)
+        max_tokens: 650, // Room for multi-category arrays
     }
 
     console.log('📤 [OpenAI] Request body (without prompt):', JSON.stringify({
@@ -590,10 +620,12 @@ Rules:
     console.log('✅ [OpenAI] Parsed content:', JSON.stringify(content, null, 2))
     console.log('✅ [OpenAI] ==========================================')
 
+    const cats = categoriesFromAiContent(content)
     const result = {
       name: content.name || title,
       description: content.description || description,
-      category: content.category || 'Other',
+      categories: cats,
+      category: cats[0],
       tags: content.tags || '',
       revenue: content.revenue || null,
       traffic: content.traffic || 'unknown',
@@ -817,10 +849,17 @@ export async function POST(request: NextRequest) {
       }, { status: statusCode })
     }
 
+    const cats =
+      analysis.categories && analysis.categories.length > 0
+        ? analysis.categories
+        : categoriesFromAiContent({
+            category: analysis.category,
+          })
     const result: AnalysisResult = {
       name: analysis.name || scraped.title || validUrl.hostname.replace('www.', ''),
       description: analysis.description || scraped.description || 'AI tool',
-      category: analysis.category || 'Other',
+      categories: cats,
+      category: cats[0],
       tags: analysis.tags || '',
       revenue: analysis.revenue ?? null,
       traffic: analysis.traffic ?? 'unknown',

@@ -50,6 +50,11 @@ export function SearchBar({
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
             const trimmed = value.trim()
+            if (open && filteredSuggestions.length > 0) {
+              e.preventDefault()
+              handleSelect(filteredSuggestions[0])
+              return
+            }
             if (trimmed && onSubmit) {
               e.preventDefault()
               onSubmit(trimmed)
@@ -79,6 +84,7 @@ export function SearchBar({
             <button
               key={s}
               type="button"
+              onMouseDown={(ev) => ev.preventDefault()}
               onClick={() => handleSelect(s)}
               className="flex w-full items-center justify-between px-3 py-1.5 text-left hover:bg-accent"
             >

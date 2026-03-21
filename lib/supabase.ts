@@ -55,6 +55,8 @@ export interface Tool {
   url: string;
   logoUrl: string | null;
   category: string;
+  /** Multiple categories (when column exists in DB); `category` is the primary (first). */
+  categories?: string[] | null;
   tags: string | null;
   traffic: "low" | "medium" | "high" | "unknown" | null;
   revenue: "free" | "freemium" | "paid" | "enterprise" | null;

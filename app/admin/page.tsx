@@ -1,9 +1,11 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -16,8 +18,89 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useToast } from '@/components/ui/toaster'
 import { categories, videoCategories } from '@/lib/schemas'
+import { toolCategoryBadgeClass } from '@/lib/tool-category-styles'
+import { toolCategoryList } from '@/lib/tool-categories'
 import type { Tool, Video } from '@/lib/supabase'
-import { Loader2, Plus, Trash2, Edit2, Sparkles, RefreshCw, Star, Youtube, Music2 } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { Loader2, Plus, Trash2, Edit2, Sparkles, RefreshCw, Star, Youtube, Music2, Check } from 'lucide-react'
+
+/** Shared tool form → API body (matches handleSubmit / PUT). */
+type AdminToolFormState = {
+  name: string
+  description: string
+  url: string
+  logoUrl: string
+  categories: string[]
+  tags: string
+  traffic: string
+  revenue: string
+  rating: string
+  estimatedVisits: string
+}
+
+function buildToolPayload(
+  fd: AdminToolFormState,
+  editingId: string | null,
+  tools: Tool[],
+):
+  | { ok: true; payload: Record<string, unknown> }
+  | { ok: false; reason: 'incomplete' | 'duplicate'; existingName?: string } {
+  if (
+    !fd.name?.trim() ||
+    !fd.description?.trim() ||
+    !fd.url?.trim() ||
+    fd.categories.length === 0
+  ) {
+    return { ok: false, reason: 'incomplete' }
+  }
+
+  const normalizedUrl = fd.url.trim().toLowerCase().replace(/\/$/, '')
+  const existingTool = tools.find((tool) => {
+    const existingUrl = tool.url.toLowerCase().replace(/\/$/, '')
+    return existingUrl === normalizedUrl && tool.id !== editingId
+  })
+  if (existingTool) {
+    return {
+      ok: false,
+      reason: 'duplicate',
+      existingName: existingTool.name,
+    }
+  }
+
+  const payload: Record<string, unknown> = {
+    name: fd.name.trim(),
+    description: fd.description.trim(),
+    url: fd.url.trim(),
+    categories: fd.categories,
+  }
+
+  if (fd.logoUrl && fd.logoUrl.trim()) {
+    payload.logoUrl = fd.logoUrl.trim()
+  }
+  if (fd.tags && fd.tags.trim()) {
+    payload.tags = fd.tags.trim()
+  }
+  if (fd.traffic && fd.traffic.trim()) {
+    payload.traffic = fd.traffic
+  }
+  if (fd.revenue && fd.revenue.trim()) {
+    payload.revenue = fd.revenue
+  }
+  if (fd.rating && fd.rating.trim()) {
+    const ratingNum = parseFloat(fd.rating)
+    if (!isNaN(ratingNum) && ratingNum >= 0 && ratingNum <= 5) {
+      payload.rating = ratingNum
+    }
+  }
+  if (fd.estimatedVisits && fd.estimatedVisits.trim()) {
+    const visitsNum = parseInt(fd.estimatedVisits, 10)
+    if (!isNaN(visitsNum) && visitsNum > 0) {
+      payload.estimatedVisits = visitsNum
+    }
+  }
+
+  return { ok: true, payload }
+}
 
 export default function AdminPage() {
   const router = useRouter()
@@ -34,6 +117,11 @@ export default function AdminPage() {
   const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0, currentUrl: '' })
   const [editingId, setEditingId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const [adminCategoryFilter, setAdminCategoryFilter] = useState<string>('all')
+  const [adminCreatedSort, setAdminCreatedSort] = useState<'newest' | 'oldest'>('newest')
+  const [adminRevenueFilter, setAdminRevenueFilter] = useState<
+    'all' | 'free' | 'freemium' | 'paid' | 'enterprise' | 'unset'
+  >('all')
   const [isProcessing, setIsProcessing] = useState(false)
   const [lastRequestTime, setLastRequestTime] = useState<number>(0)
   const [cooldownRemaining, setCooldownRemaining] = useState<number>(0)
@@ -42,13 +130,30 @@ export default function AdminPage() {
     description: '',
     url: '',
     logoUrl: '',
-    category: '',
+    categories: [] as string[],
     tags: '',
     traffic: '',
     revenue: '',
     rating: '',
     estimatedVisits: '',
   })
+
+  const [autoSaveStatus, setAutoSaveStatus] = useState<
+    'idle' | 'pending' | 'saving' | 'saved'
+  >('idle')
+  const formDataRef = useRef(formData)
+  const toolsRef = useRef(tools)
+  const editingIdRef = useRef(editingId)
+  const editBaselineRef = useRef<string | null>(null)
+  const autoSaveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const autoSaveGenerationRef = useRef(0)
+  const autoSaveSavedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const addToastRef = useRef(addToast)
+  addToastRef.current = addToast
+
+  formDataRef.current = formData
+  toolsRef.current = tools
+  editingIdRef.current = editingId
 
   // Videos tab state
   const [adminTab, setAdminTab] = useState<'tools' | 'videos'>('tools')
@@ -124,6 +229,143 @@ export default function AdminPage() {
     }
   }
 
+  /** Debounced auto-save when editing an existing tool */
+  useEffect(() => {
+    if (!editingId) {
+      if (autoSaveDebounceRef.current) {
+        clearTimeout(autoSaveDebounceRef.current)
+        autoSaveDebounceRef.current = null
+      }
+      return
+    }
+
+    const builtNow = buildToolPayload(formData, editingId, tools)
+    if (!builtNow.ok) {
+      if (autoSaveDebounceRef.current) {
+        clearTimeout(autoSaveDebounceRef.current)
+        autoSaveDebounceRef.current = null
+      }
+      setAutoSaveStatus('idle')
+      return
+    }
+    const snapshotNow = JSON.stringify(builtNow.payload)
+    if (snapshotNow === editBaselineRef.current) {
+      if (autoSaveDebounceRef.current) {
+        clearTimeout(autoSaveDebounceRef.current)
+        autoSaveDebounceRef.current = null
+      }
+      setAutoSaveStatus('idle')
+      return
+    }
+
+    if (autoSaveDebounceRef.current) {
+      clearTimeout(autoSaveDebounceRef.current)
+    }
+
+    setAutoSaveStatus('pending')
+
+    autoSaveDebounceRef.current = setTimeout(() => {
+      autoSaveDebounceRef.current = null
+      const id = editingIdRef.current
+      if (!id) return
+
+      const fd = formDataRef.current
+      const toolsNow = toolsRef.current
+      const b = buildToolPayload(fd, id, toolsNow)
+      if (!b.ok) {
+        if (b.reason === 'duplicate') {
+          addToastRef.current({
+            variant: 'warning',
+            title: 'Duplicate URL',
+            description: b.existingName
+              ? `A tool with this URL already exists: ${b.existingName}.`
+              : 'Another tool already uses this URL.',
+          })
+        }
+        setAutoSaveStatus('idle')
+        return
+      }
+      const snap = JSON.stringify(b.payload)
+      if (snap === editBaselineRef.current) {
+        setAutoSaveStatus('idle')
+        return
+      }
+
+      const gen = ++autoSaveGenerationRef.current
+      setAutoSaveStatus('saving')
+
+      void (async () => {
+        try {
+          const response = await fetch(`/api/tools/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(b.payload),
+          })
+
+          if (gen !== autoSaveGenerationRef.current) return
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}))
+            if (response.status === 409) {
+              const errorMessage =
+                errorData.message || 'A tool with this URL already exists'
+              addToastRef.current({
+                variant: 'error',
+                title: 'Duplicate URL',
+                description: errorMessage,
+              })
+            } else {
+              const errorMessage =
+                errorData.details ||
+                errorData.error ||
+                errorData.message ||
+                `HTTP error! status: ${response.status}`
+              addToastRef.current({
+                variant: 'error',
+                title: 'Auto-save failed',
+                description: errorMessage,
+              })
+            }
+            setAutoSaveStatus('idle')
+            return
+          }
+
+          editBaselineRef.current = snap
+          await fetchTools()
+
+          if (gen !== autoSaveGenerationRef.current) return
+
+          setAutoSaveStatus('saved')
+          if (autoSaveSavedTimerRef.current) {
+            clearTimeout(autoSaveSavedTimerRef.current)
+          }
+          autoSaveSavedTimerRef.current = setTimeout(() => {
+            autoSaveSavedTimerRef.current = null
+            setAutoSaveStatus((s) => (s === 'saved' ? 'idle' : s))
+          }, 2000)
+        } catch (err) {
+          if (gen !== autoSaveGenerationRef.current) return
+          console.error('Auto-save error:', err)
+          const msg =
+            err instanceof Error ? err.message : 'Unknown error occurred'
+          addToastRef.current({
+            variant: 'error',
+            title: 'Auto-save failed',
+            description: msg,
+          })
+          setAutoSaveStatus('idle')
+        }
+      })()
+    }, 650)
+
+    return () => {
+      if (autoSaveDebounceRef.current) {
+        clearTimeout(autoSaveDebounceRef.current)
+        autoSaveDebounceRef.current = null
+      }
+    }
+  }, [formData, editingId, tools])
+
   const fetchVideos = async () => {
     setVideosLoading(true)
     try {
@@ -138,80 +380,109 @@ export default function AdminPage() {
     }
   }
 
+  const filteredAdminTools = useMemo(() => {
+    let list = [...tools]
+    const q = searchQuery.trim().toLowerCase()
+    if (q) {
+      list = list.filter(
+        (tool) =>
+          tool.name.toLowerCase().includes(q) ||
+          tool.description.toLowerCase().includes(q) ||
+          toolCategoryList(tool).some((c) => c.toLowerCase().includes(q)) ||
+          (tool.tags && tool.tags.toLowerCase().includes(q)) ||
+          tool.url.toLowerCase().includes(q),
+      )
+    }
+    if (adminCategoryFilter !== 'all') {
+      list = list.filter((t) =>
+        toolCategoryList(t).includes(adminCategoryFilter),
+      )
+    }
+    if (adminRevenueFilter !== 'all') {
+      if (adminRevenueFilter === 'unset') {
+        list = list.filter((t) => !t.revenue)
+      } else {
+        list = list.filter((t) => t.revenue === adminRevenueFilter)
+      }
+    }
+    list.sort((a, b) => {
+      const ta = new Date(a.createdAt || 0).getTime()
+      const tb = new Date(b.createdAt || 0).getTime()
+      return adminCreatedSort === 'newest' ? tb - ta : ta - tb
+    })
+    return list
+  }, [
+    tools,
+    searchQuery,
+    adminCategoryFilter,
+    adminRevenueFilter,
+    adminCreatedSort,
+  ])
+
+  const adminFiltersActive =
+    adminCategoryFilter !== 'all' ||
+    adminRevenueFilter !== 'all' ||
+    adminCreatedSort !== 'newest'
+
+  const sortSelectedCategories = (selected: string[]) => {
+    const known = selected.filter((c) =>
+      categories.includes(c as (typeof categories)[number]),
+    )
+    const unknown = selected.filter(
+      (c) => !categories.includes(c as (typeof categories)[number]),
+    )
+    const sortedKnown = [...known].sort(
+      (a, b) =>
+        categories.indexOf(a as (typeof categories)[number]) -
+        categories.indexOf(b as (typeof categories)[number]),
+    )
+    return [...sortedKnown, ...unknown]
+  }
+
+  const toggleToolCategory = (cat: string) => {
+    setFormData((prev) => {
+      const has = prev.categories.includes(cat)
+      const next = has
+        ? prev.categories.filter((c) => c !== cat)
+        : sortSelectedCategories([...prev.categories, cat])
+      return { ...prev, categories: next }
+    })
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (editingId) return
+
     setSubmitting(true)
 
     try {
-      // Validate required fields
-      if (!formData.name || !formData.description || !formData.url || !formData.category) {
-        addToast({
-          variant: 'warning',
-          title: 'Missing Required Fields',
-          description: 'Please fill in all required fields: Name, Description, URL, and Category',
-        })
+      const built = buildToolPayload(formData, null, tools)
+      if (!built.ok) {
+        if (built.reason === 'incomplete') {
+          addToast({
+            variant: 'warning',
+            title: 'Missing Required Fields',
+            description:
+              'Please fill in Name, Description, URL, and at least one category',
+          })
+        } else if (built.reason === 'duplicate') {
+          addToast({
+            variant: 'warning',
+            title: 'Duplicate URL',
+            description: built.existingName
+              ? `A tool with this URL already exists: ${built.existingName}. Please edit the existing tool instead.`
+              : 'A tool with this URL already exists.',
+          })
+        }
         setSubmitting(false)
         return
       }
 
-      // Check for duplicate URL (normalize URL for comparison)
-      const normalizedUrl = formData.url.trim().toLowerCase().replace(/\/$/, '') // Remove trailing slash
-      const existingTool = tools.find(tool => {
-        const existingUrl = tool.url.toLowerCase().replace(/\/$/, '')
-        return existingUrl === normalizedUrl && tool.id !== editingId
-      })
-      
-      if (existingTool) {
-        addToast({
-          variant: 'warning',
-          title: 'Duplicate URL',
-          description: `A tool with this URL already exists: ${existingTool.name}. Please edit the existing tool instead.`,
-        })
-        setSubmitting(false)
-        return
-      }
-
-      // Clean up empty strings and convert to proper types
-      const payload: any = {
-        name: formData.name.trim(),
-        description: formData.description.trim(),
-        url: formData.url.trim(),
-        category: formData.category,
-      }
-
-      // Optional fields - only include if they have values
-      if (formData.logoUrl && formData.logoUrl.trim()) {
-        payload.logoUrl = formData.logoUrl.trim()
-      }
-      if (formData.tags && formData.tags.trim()) {
-        payload.tags = formData.tags.trim()
-      }
-      if (formData.traffic && formData.traffic.trim()) {
-        payload.traffic = formData.traffic
-      }
-      if (formData.revenue && formData.revenue.trim()) {
-        payload.revenue = formData.revenue
-      }
-      if (formData.rating && formData.rating.trim()) {
-        const ratingNum = parseFloat(formData.rating)
-        if (!isNaN(ratingNum) && ratingNum >= 0 && ratingNum <= 5) {
-          payload.rating = ratingNum
-        }
-      }
-      if (formData.estimatedVisits && formData.estimatedVisits.trim()) {
-        const visitsNum = parseInt(formData.estimatedVisits)
-        if (!isNaN(visitsNum) && visitsNum > 0) {
-          payload.estimatedVisits = visitsNum
-        }
-      }
-
+      const payload = built.payload
       console.log('Submitting payload:', payload)
 
-      const url = editingId ? `/api/tools/${editingId}` : '/api/tools'
-      const method = editingId ? 'PUT' : 'POST'
-
-      const response = await fetch(url, {
-        method,
+      const response = await fetch('/api/tools', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       })
@@ -257,19 +528,31 @@ export default function AdminPage() {
   }
 
   const handleEdit = (tool: Tool) => {
-    setEditingId(tool.id)
-    setFormData({
+    if (autoSaveDebounceRef.current) {
+      clearTimeout(autoSaveDebounceRef.current)
+      autoSaveDebounceRef.current = null
+    }
+    if (autoSaveSavedTimerRef.current) {
+      clearTimeout(autoSaveSavedTimerRef.current)
+      autoSaveSavedTimerRef.current = null
+    }
+    const nextForm = {
       name: tool.name,
       description: tool.description,
       url: tool.url,
       logoUrl: tool.logoUrl || '',
-      category: tool.category,
+      categories: toolCategoryList(tool),
       tags: tool.tags || '',
       traffic: tool.traffic || '',
       revenue: tool.revenue || '',
       rating: tool.rating?.toString() || '',
       estimatedVisits: tool.estimatedVisits?.toString() || '',
-    })
+    }
+    setEditingId(tool.id)
+    setFormData(nextForm)
+    const b = buildToolPayload(nextForm, tool.id, tools)
+    editBaselineRef.current = b.ok ? JSON.stringify(b.payload) : ''
+    setAutoSaveStatus('idle')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -703,7 +986,10 @@ export default function AdminPage() {
         description: data.description || '',
         url: data.url || quickAddUrl,
         logoUrl: data.logoUrl || '',
-        category: data.category || 'Other',
+        categories:
+          Array.isArray(data.categories) && data.categories.length > 0
+            ? data.categories
+            : [data.category || 'Other'],
         tags: data.tags || '',
         traffic: data.traffic || '',
         revenue: data.revenue || '',
@@ -723,12 +1009,24 @@ export default function AdminPage() {
       window.scrollTo({ top: 0, behavior: 'smooth' })
       
       // Auto-submit immediately (no cooldown)
-      if (data.name && data.description && data.url && data.category && !editingId) {
+      const analyzedCategories =
+        Array.isArray(data.categories) && data.categories.length > 0
+          ? data.categories
+          : data.category
+            ? [data.category]
+            : []
+      if (
+        data.name &&
+        data.description &&
+        data.url &&
+        analyzedCategories.length > 0 &&
+        !editingId
+      ) {
         const payload: any = {
           name: data.name.trim(),
           description: data.description.trim(),
           url: data.url.trim(),
-          category: data.category,
+          categories: analyzedCategories,
         }
 
         // Optional fields
@@ -996,7 +1294,10 @@ export default function AdminPage() {
           name: data.name || '',
           description: data.description || '',
           url: data.url || url,
-          category: data.category || 'Other',
+          categories:
+            Array.isArray(data.categories) && data.categories.length > 0
+              ? data.categories
+              : [data.category || 'Other'],
         }
 
         if (data.logoUrl) payload.logoUrl = data.logoUrl
@@ -1069,12 +1370,22 @@ export default function AdminPage() {
   }
 
   const resetForm = () => {
+    if (autoSaveDebounceRef.current) {
+      clearTimeout(autoSaveDebounceRef.current)
+      autoSaveDebounceRef.current = null
+    }
+    if (autoSaveSavedTimerRef.current) {
+      clearTimeout(autoSaveSavedTimerRef.current)
+      autoSaveSavedTimerRef.current = null
+    }
+    editBaselineRef.current = null
+    setAutoSaveStatus('idle')
     setFormData({
       name: '',
       description: '',
       url: '',
       logoUrl: '',
-      category: '',
+      categories: [],
       tags: '',
       traffic: '',
       revenue: '',
@@ -1138,10 +1449,39 @@ export default function AdminPage() {
       <div className="grid gap-8 lg:grid-cols-2">
         <Card className="border-border/60 shadow-lg shadow-black/5 dark:shadow-black/20 bg-card/95">
           <CardHeader className="pb-4">
-            <CardTitle className="text-xl">{editingId ? 'Edit Tool' : 'Add New Tool'}</CardTitle>
+            <CardTitle className="text-xl flex flex-wrap items-center gap-3">
+              <span>{editingId ? 'Edit Tool' : 'Add New Tool'}</span>
+              {editingId && (
+                <span
+                  className="flex items-center gap-2 font-normal text-muted-foreground"
+                  style={{ fontSize: 'calc(0.875rem + 5px)' }}
+                >
+                  {(autoSaveStatus === 'pending' || autoSaveStatus === 'saving') && (
+                    <>
+                      <Loader2
+                        className="animate-spin text-primary"
+                        style={{ width: 'calc(1rem + 5px)', height: 'calc(1rem + 5px)' }}
+                        aria-hidden
+                      />
+                      <span>Saving…</span>
+                    </>
+                  )}
+                  {autoSaveStatus === 'saved' && (
+                    <>
+                      <Check
+                        className="text-emerald-600 dark:text-emerald-400"
+                        style={{ width: 'calc(1rem + 5px)', height: 'calc(1rem + 5px)' }}
+                        aria-hidden
+                      />
+                      <span className="text-emerald-600 dark:text-emerald-400">Saved</span>
+                    </>
+                  )}
+                </span>
+              )}
+            </CardTitle>
             <CardDescription>
               {editingId
-                ? 'Update the tool information below'
+                ? 'Changes save automatically after you stop typing or changing categories'
                 : 'Fill in the details to add a new AI tool'}
             </CardDescription>
           </CardHeader>
@@ -1364,7 +1704,13 @@ export default function AdminPage() {
                   </div>
               </div>
             )}
-            <form onSubmit={handleSubmit} className="space-y-4">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                if (!editingId) void handleSubmit(e)
+              }}
+              className="space-y-4"
+            >
               <div className="space-y-2">
                 <Label htmlFor="name">Name *</Label>
                 <Input
@@ -1412,24 +1758,45 @@ export default function AdminPage() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="category">Category *</Label>
-                <Select
-                  value={formData.category}
-                  onValueChange={(value) =>
-                    setFormData({ ...formData, category: value })
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a category" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {categories.map((cat) => (
-                      <SelectItem key={cat} value={cat}>
-                        {cat}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Label>Categories *</Label>
+                <p className="text-xs text-muted-foreground">
+                  Pick one or more. Order follows the list (first = primary badge on the home page).
+                </p>
+                <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
+                  <div className="grid max-h-52 grid-cols-1 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
+                    {categories.map((cat, catIdx) => {
+                      const checked = formData.categories.includes(cat)
+                      const fieldId = `admin-tool-cat-${catIdx}`
+                      return (
+                        <label
+                          key={cat}
+                          htmlFor={fieldId}
+                          className={cn(
+                            'flex cursor-pointer items-center gap-2 rounded-md border px-2 py-1.5 transition-colors',
+                            checked
+                              ? 'border-primary/40 bg-background shadow-sm'
+                              : 'border-transparent hover:bg-background/60',
+                          )}
+                        >
+                          <Checkbox
+                            id={fieldId}
+                            checked={checked}
+                            onCheckedChange={() => toggleToolCategory(cat)}
+                          />
+                          <Badge
+                            variant="outline"
+                            className={cn(
+                              'pointer-events-none text-xs font-medium capitalize',
+                              toolCategoryBadgeClass(cat),
+                            )}
+                          >
+                            {cat}
+                          </Badge>
+                        </label>
+                      )
+                    })}
+                  </div>
+                </div>
               </div>
 
               <div className="space-y-2">
@@ -1513,22 +1880,22 @@ export default function AdminPage() {
                 </div>
               </div>
 
-              <div className="flex gap-2">
-                <Button type="submit" disabled={submitting}>
-                  {submitting ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Saving...
-                    </>
-                  ) : editingId ? (
-                    'Update Tool'
-                  ) : (
-                    <>
-                      <Plus className="mr-2 h-4 w-4" />
-                      Add Tool
-                    </>
-                  )}
-                </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                {!editingId && (
+                  <Button type="submit" disabled={submitting}>
+                    {submitting ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Saving...
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="mr-2 h-4 w-4" />
+                        Add Tool
+                      </>
+                    )}
+                  </Button>
+                )}
                 {editingId && (
                   <Button type="button" variant="outline" onClick={resetForm}>
                     Cancel
@@ -1542,7 +1909,19 @@ export default function AdminPage() {
         <Card className="flex flex-col h-full border-border/60 shadow-lg shadow-black/5 dark:shadow-black/20 bg-card/95">
           <CardHeader className="flex-shrink-0">
             <CardTitle className="text-xl">All Tools ({tools.length})</CardTitle>
-            <CardDescription>Manage existing tools in the directory</CardDescription>
+            <CardDescription>
+              Manage existing tools in the directory
+              {tools.length > 0 && (
+                <>
+                  {' '}
+                  · Showing{' '}
+                  <span className="font-medium text-foreground">
+                    {filteredAdminTools.length}
+                  </span>{' '}
+                  of {tools.length}
+                </>
+              )}
+            </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col flex-1 min-h-0 p-6">
             {loading ? (
@@ -1555,28 +1934,111 @@ export default function AdminPage() {
               </p>
             ) : (
               <>
-                <div className="mb-4 flex-shrink-0">
+                <div className="mb-4 flex-shrink-0 space-y-3">
                   <Input
                     placeholder="Search tools by name, description, or category..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="w-full"
                   />
+                  <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+                    <div className="grid flex-1 min-w-[10rem] gap-1.5">
+                      <Label className="text-xs text-muted-foreground">
+                        Category
+                      </Label>
+                      <Select
+                        value={adminCategoryFilter}
+                        onValueChange={setAdminCategoryFilter}
+                      >
+                        <SelectTrigger className="h-9 w-full">
+                          <SelectValue placeholder="Category" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All categories</SelectItem>
+                          {categories.map((cat) => (
+                            <SelectItem key={cat} value={cat}>
+                              {cat}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="grid flex-1 min-w-[10rem] gap-1.5">
+                      <Label className="text-xs text-muted-foreground">
+                        Created
+                      </Label>
+                      <Select
+                        value={adminCreatedSort}
+                        onValueChange={(v) =>
+                          setAdminCreatedSort(v as 'newest' | 'oldest')
+                        }
+                      >
+                        <SelectTrigger className="h-9 w-full">
+                          <SelectValue placeholder="Sort by date" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="newest">Newest first</SelectItem>
+                          <SelectItem value="oldest">Oldest first</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="grid flex-1 min-w-[10rem] gap-1.5">
+                      <Label className="text-xs text-muted-foreground">
+                        Revenue
+                      </Label>
+                      <Select
+                        value={adminRevenueFilter}
+                        onValueChange={(v) =>
+                          setAdminRevenueFilter(
+                            v as
+                              | 'all'
+                              | 'free'
+                              | 'freemium'
+                              | 'paid'
+                              | 'enterprise'
+                              | 'unset',
+                          )
+                        }
+                      >
+                        <SelectTrigger className="h-9 w-full">
+                          <SelectValue placeholder="Revenue model" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All revenue models</SelectItem>
+                          <SelectItem value="free">Free</SelectItem>
+                          <SelectItem value="freemium">Freemium</SelectItem>
+                          <SelectItem value="paid">Paid</SelectItem>
+                          <SelectItem value="enterprise">Enterprise</SelectItem>
+                          <SelectItem value="unset">Not set</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {(adminFiltersActive || searchQuery.trim()) && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-9 shrink-0 sm:mb-0"
+                        onClick={() => {
+                          setSearchQuery('')
+                          setAdminCategoryFilter('all')
+                          setAdminRevenueFilter('all')
+                          setAdminCreatedSort('newest')
+                        }}
+                      >
+                        Clear filters
+                      </Button>
+                    )}
+                  </div>
                 </div>
-                <div className="flex-1 overflow-y-auto pr-2 space-y-2" style={{ maxHeight: 'calc(9 * (80px + 8px))' }}>
-                  {tools
-                    .filter((tool) => {
-                      if (!searchQuery.trim()) return true
-                      const query = searchQuery.toLowerCase()
-                      return (
-                        tool.name.toLowerCase().includes(query) ||
-                        tool.description.toLowerCase().includes(query) ||
-                        tool.category.toLowerCase().includes(query) ||
-                        (tool.tags && tool.tags.toLowerCase().includes(query)) ||
-                        tool.url.toLowerCase().includes(query)
-                      )
-                    })
-                    .map((tool) => (
+                <div className="relative min-h-0 flex-1">
+                  <div
+                    className="scrollbar-thin space-y-2 overflow-y-auto pb-3 pr-2"
+                    style={{
+                      maxHeight: 'min(70vh, calc(8.45 * (80px + 8px)))',
+                    }}
+                  >
+                    {filteredAdminTools.map((tool) => (
                   <div
                     key={tool.id}
                     className="flex items-start justify-between rounded-xl border border-border/60 p-4 hover:bg-muted/40 hover:border-violet-200 dark:hover:border-violet-800/50 transition-all min-h-[80px]"
@@ -1586,10 +2048,19 @@ export default function AdminPage() {
                       <p className="text-sm text-muted-foreground line-clamp-2 mt-1">
                         {tool.description}
                       </p>
-                      <div className="mt-2 flex flex-wrap items-center gap-2">
-                        <span className="text-xs text-muted-foreground">
-                          {tool.category}
-                        </span>
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5 gap-y-1">
+                        {toolCategoryList(tool).map((c) => (
+                          <Badge
+                            key={c}
+                            variant="outline"
+                            className={cn(
+                              'text-[11px] font-medium capitalize',
+                              toolCategoryBadgeClass(c),
+                            )}
+                          >
+                            {c}
+                          </Badge>
+                        ))}
                         {tool.rating && (
                           <span className="text-xs text-muted-foreground">
                             ⭐ {tool.rating.toFixed(1)}
@@ -1622,20 +2093,15 @@ export default function AdminPage() {
                     </div>
                   </div>
                     ))}
+                  </div>
+                  <div
+                    className="pointer-events-none absolute bottom-0 left-0 right-2 h-12 rounded-b-lg bg-gradient-to-t from-card to-transparent dark:from-card"
+                    aria-hidden
+                  />
                 </div>
-                {tools.filter((tool) => {
-                  if (!searchQuery.trim()) return true
-                  const query = searchQuery.toLowerCase()
-                  return (
-                    tool.name.toLowerCase().includes(query) ||
-                    tool.description.toLowerCase().includes(query) ||
-                    tool.category.toLowerCase().includes(query) ||
-                    (tool.tags && tool.tags.toLowerCase().includes(query)) ||
-                    tool.url.toLowerCase().includes(query)
-                  )
-                }).length === 0 && searchQuery.trim() && (
+                {filteredAdminTools.length === 0 && (
                   <p className="text-center text-muted-foreground py-8">
-                    No tools match your search.
+                    No tools match your search or filters.
                   </p>
                 )}
               </>

@@ -1,34 +1,5 @@
 import { z } from 'zod'
 
-// Pre-process schema to handle empty strings for tools
-const preprocessTool = z.preprocess((data: any) => {
-  if (typeof data === 'object' && data !== null) {
-    return {
-      ...data,
-      logoUrl: data.logoUrl === '' ? null : data.logoUrl,
-      tags: data.tags === '' ? null : data.tags,
-      traffic: data.traffic === '' ? null : data.traffic,
-      revenue: data.revenue === '' ? null : data.revenue,
-    }
-  }
-  return data
-}, z.object({
-  name: z.string().min(1, 'Name is required'),
-  description: z.string().min(1, 'Description is required'),
-  url: z.string().url('Must be a valid URL'),
-  logoUrl: z.union([z.string().url('Must be a valid URL'), z.null()]).optional().nullable(),
-  category: z.string().min(1, 'Category is required'),
-  tags: z.string().optional().nullable(),
-  traffic: z.enum(['low', 'medium', 'high', 'unknown']).optional().nullable(),
-  revenue: z.enum(['free', 'freemium', 'paid', 'enterprise']).optional().nullable(),
-  rating: z.number().min(0).max(5).optional().nullable(),
-  estimatedVisits: z.number().int().positive().optional().nullable(),
-}))
-
-export const toolSchema = preprocessTool
-
-export type ToolInput = z.infer<typeof toolSchema>
-
 /** AI tool categories (alphabetical). DB stores free text; keep analyze prompt in sync. */
 export const categories = [
   'AI Agents',
@@ -39,6 +10,7 @@ export const categories = [
   'Design',
   'Education',
   'Image Generation',
+  'Job',
   'Language',
   'Legal',
   'Marketing',
@@ -53,6 +25,80 @@ export const categories = [
 ] as const
 
 export type Category = typeof categories[number]
+
+const categorySet = new Set<string>(categories)
+
+/**
+ * Collapse bad data (e.g. "Video Editing|AI Automation|SaaS") to one known category.
+ * Picks the first segment that matches our category list; otherwise first segment or Other.
+ */
+export function normalizeToolCategory(raw: string | null | undefined): string {
+  if (raw == null || typeof raw !== 'string') return 'Other'
+  const s = raw.trim()
+  if (!s) return 'Other'
+  if (categorySet.has(s)) return s
+  const parts = s.split('|').map((p) => p.trim()).filter(Boolean)
+  for (const p of parts) {
+    if (categorySet.has(p)) return p
+  }
+  if (parts.length === 1) return parts[0]
+  return 'Other'
+}
+
+// Pre-process schema to handle empty strings for tools + legacy single `category`
+const toolObjectSchema = z.object({
+  name: z.string().min(1, 'Name is required'),
+  description: z.string().min(1, 'Description is required'),
+  url: z.string().url('Must be a valid URL'),
+  logoUrl: z.union([z.string().url('Must be a valid URL'), z.null()]).optional().nullable(),
+  categories: z
+    .array(z.string())
+    .min(1, 'Select at least one category')
+    .max(12),
+  tags: z.string().optional().nullable(),
+  traffic: z.enum(['low', 'medium', 'high', 'unknown']).optional().nullable(),
+  revenue: z.enum(['free', 'freemium', 'paid', 'enterprise']).optional().nullable(),
+  rating: z.number().min(0).max(5).optional().nullable(),
+  estimatedVisits: z.number().int().positive().optional().nullable(),
+})
+
+const preprocessTool = z.preprocess((data: any) => {
+  if (typeof data === 'object' && data !== null) {
+    let categories: string[] = []
+    if (Array.isArray(data.categories) && data.categories.length > 0) {
+      const fromArr: string[] = data.categories.map((c: unknown) =>
+        normalizeToolCategory(String(c)),
+      )
+      categories = [...new Set(fromArr)].filter((c) => c.length > 0)
+    }
+    if (
+      categories.length === 0 &&
+      data.category != null &&
+      String(data.category).trim()
+    ) {
+      categories = [normalizeToolCategory(String(data.category))]
+    }
+    if (categories.length === 0) {
+      categories = ['Other']
+    }
+    return {
+      ...data,
+      logoUrl: data.logoUrl === '' ? null : data.logoUrl,
+      tags: data.tags === '' ? null : data.tags,
+      traffic: data.traffic === '' ? null : data.traffic,
+      revenue: data.revenue === '' ? null : data.revenue,
+      categories,
+    }
+  }
+  return data
+}, toolObjectSchema)
+
+export const toolSchema = preprocessTool.transform((d) => ({
+  ...d,
+  category: d.categories[0],
+}))
+
+export type ToolInput = z.infer<typeof toolObjectSchema> & { category: string }
 
 // Video-specific categories for the /videos page
 export const videoCategories = [

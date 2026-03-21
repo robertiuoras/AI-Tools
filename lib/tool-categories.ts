@@ -1,0 +1,26 @@
+import { normalizeToolCategory } from '@/lib/schemas'
+
+export type ToolCategoryRow = {
+  category?: string | null
+  categories?: string[] | null
+}
+
+/**
+ * Ordered unique categories for a tool (from `categories[]` or legacy `category`).
+ */
+export function toolCategoryList(row: ToolCategoryRow): string[] {
+  const raw = row.categories
+  if (Array.isArray(raw) && raw.length > 0) {
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const c of raw) {
+      const n = normalizeToolCategory(typeof c === 'string' ? c : String(c))
+      if (!seen.has(n)) {
+        seen.add(n)
+        out.push(n)
+      }
+    }
+    if (out.length > 0) return out
+  }
+  return [normalizeToolCategory(row.category)]
+}
