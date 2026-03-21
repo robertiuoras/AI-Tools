@@ -62,9 +62,11 @@ export interface Tool {
   estimatedVisits: number | null;
   createdAt: string;
   updatedAt: string;
-  upvoteCount?: number; // Added for upvote count
-  userUpvoted?: boolean; // Added to check if current user upvoted
-  userFavorited?: boolean; // Added to check if current user favorited
+  upvoteCount?: number;
+  downvoteCount?: number;
+  userUpvoted?: boolean;
+  userDownvoted?: boolean;
+  userFavorited?: boolean;
 }
 
 export type VideoSource = "youtube" | "tiktok";

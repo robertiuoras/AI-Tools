@@ -69,7 +69,7 @@ const STEPS: TourStep[] = [
       "**Grid / list** icons — switch layout (toolbar above).",
       "**Sort** — change order; **ℹ️** explains **Most Popular**.",
       "**Heart** — favorite a tool (**signed in**).",
-      "**Thumbs-up** — upvote; counts **this month** (**signed in**).",
+      "**Thumbs-up / thumbs-down** — vote; counts **this month** (**signed in**). Share shows **% up vs down** when there are votes.",
     ],
   },
 ];

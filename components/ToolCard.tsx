@@ -4,7 +4,14 @@ import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import Image from "next/image";
 import Link from "next/link";
-import { ExternalLink, Star, TrendingUp, ThumbsUp, Heart } from "lucide-react";
+import {
+  ExternalLink,
+  Star,
+  TrendingUp,
+  ThumbsDown,
+  ThumbsUp,
+  Heart,
+} from "lucide-react";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -65,15 +72,32 @@ const trafficLabels: Record<string, string> = {
   unknown: "Unknown",
 };
 
+type VoteSnap = {
+  upvoteCount: number;
+  downvoteCount: number;
+  userUpvoted: boolean;
+  userDownvoted: boolean;
+};
+
+function voteShareLabel(up: number, down: number): string | null {
+  const total = up + down;
+  if (total === 0) return null;
+  const upPct = Math.round((up / total) * 100);
+  const downPct = 100 - upPct;
+  return `(${upPct}% up, ${downPct}% down)`;
+}
+
 export function ToolCard({
   tool,
   index = 0,
   layout = "grid",
 }: ToolCardProps) {
   const [user, setUser] = useState<SupabaseUser | null>(null);
-  const [upvoteCount, setUpvoteCount] = useState(tool.upvoteCount || 0);
-  const [userUpvoted, setUserUpvoted] = useState(tool.userUpvoted || false);
-  const [upvoting, setUpvoting] = useState(false);
+  const [upvoteCount, setUpvoteCount] = useState(tool.upvoteCount ?? 0);
+  const [downvoteCount, setDownvoteCount] = useState(tool.downvoteCount ?? 0);
+  const [userUpvoted, setUserUpvoted] = useState(!!tool.userUpvoted);
+  const [userDownvoted, setUserDownvoted] = useState(!!tool.userDownvoted);
+  const [voteBusy, setVoteBusy] = useState(false);
   const [userFavorited, setUserFavorited] = useState(tool.userFavorited || false);
   const [favoriting, setFavoriting] = useState(false);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
@@ -115,46 +139,127 @@ export function ToolCard({
     }
   }, [user, tool.id]);
 
+  useEffect(() => {
+    setUpvoteCount(tool.upvoteCount ?? 0);
+    setDownvoteCount(tool.downvoteCount ?? 0);
+    setUserUpvoted(!!tool.userUpvoted);
+    setUserDownvoted(!!tool.userDownvoted);
+  }, [
+    tool.id,
+    tool.upvoteCount,
+    tool.downvoteCount,
+    tool.userUpvoted,
+    tool.userDownvoted,
+  ]);
+
+  const applyVoteSnap = (data: VoteSnap) => {
+    setUpvoteCount(data.upvoteCount);
+    setDownvoteCount(data.downvoteCount);
+    setUserUpvoted(data.userUpvoted);
+    setUserDownvoted(data.userDownvoted);
+  };
+
   const handleUpvote = async () => {
     if (!user) {
-      alert("Please log in to upvote tools");
+      alert("Please log in to vote on tools");
       return;
     }
-
-    setUpvoting(true);
+    const prev: VoteSnap = {
+      upvoteCount,
+      downvoteCount,
+      userUpvoted,
+      userDownvoted,
+    };
+    if (userUpvoted) {
+      setUpvoteCount((c) => Math.max(0, c - 1));
+      setUserUpvoted(false);
+    } else {
+      setUpvoteCount((c) => c + 1);
+      setUserUpvoted(true);
+      if (userDownvoted) {
+        setDownvoteCount((c) => Math.max(0, c - 1));
+        setUserDownvoted(false);
+      }
+    }
+    setVoteBusy(true);
     try {
       const session = await supabase.auth.getSession();
       const token = (await session).data.session?.access_token;
-
-      const response = await fetch(`/api/tools/${tool.id}/upvote`, {
-        method: userUpvoted ? "DELETE" : "POST",
+      const res = await fetch(`/api/tools/${tool.id}/upvote`, {
+        method: prev.userUpvoted ? "DELETE" : "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
+      const data = await res.json();
+      if (!res.ok) {
         throw new Error(
-          errorData.message || errorData.error || "Failed to upvote",
+          data.message || data.error || "Could not update vote",
         );
       }
-
-      const data = await response.json();
-      setUpvoteCount(data.upvoteCount);
-      setUserUpvoted(data.userUpvoted);
+      applyVoteSnap(data as VoteSnap);
     } catch (error: unknown) {
-      console.error("Error upvoting:", error);
+      applyVoteSnap(prev);
       alert(
-        error instanceof Error
-          ? error.message
-          : "Failed to upvote. Please try again.",
+        error instanceof Error ? error.message : "Could not update vote.",
       );
     } finally {
-      setUpvoting(false);
+      setVoteBusy(false);
     }
   };
+
+  const handleDownvote = async () => {
+    if (!user) {
+      alert("Please log in to vote on tools");
+      return;
+    }
+    const prev: VoteSnap = {
+      upvoteCount,
+      downvoteCount,
+      userUpvoted,
+      userDownvoted,
+    };
+    if (userDownvoted) {
+      setDownvoteCount((c) => Math.max(0, c - 1));
+      setUserDownvoted(false);
+    } else {
+      setDownvoteCount((c) => c + 1);
+      setUserDownvoted(true);
+      if (userUpvoted) {
+        setUpvoteCount((c) => Math.max(0, c - 1));
+        setUserUpvoted(false);
+      }
+    }
+    setVoteBusy(true);
+    try {
+      const session = await supabase.auth.getSession();
+      const token = (await session).data.session?.access_token;
+      const res = await fetch(`/api/tools/${tool.id}/downvote`, {
+        method: prev.userDownvoted ? "DELETE" : "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(
+          data.message || data.error || "Could not update vote",
+        );
+      }
+      applyVoteSnap(data as VoteSnap);
+    } catch (error: unknown) {
+      applyVoteSnap(prev);
+      alert(
+        error instanceof Error ? error.message : "Could not update vote.",
+      );
+    } finally {
+      setVoteBusy(false);
+    }
+  };
+
+  const shareLabel = voteShareLabel(upvoteCount, downvoteCount);
 
   const handleFavorite = async () => {
     if (!user) {
@@ -357,25 +462,55 @@ export function ToolCard({
                     )}
                   />
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleUpvote}
-                  disabled={upvoting || !user}
-                  title="Community upvotes this calendar month"
-                  className={cn(
-                    "h-9 gap-1 px-2",
-                    userUpvoted && "text-primary",
-                  )}
-                >
-                  <ThumbsUp
+                <div className="flex flex-wrap items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleUpvote}
+                    disabled={voteBusy || !user}
+                    title="Upvote — counts this month"
                     className={cn(
-                      "h-4 w-4 shrink-0",
-                      userUpvoted && "fill-current",
+                      "h-9 gap-1 px-2",
+                      userUpvoted && "text-primary",
                     )}
-                  />
-                  <span className="text-sm font-medium">{upvoteCount}</span>
-                </Button>
+                  >
+                    <ThumbsUp
+                      className={cn(
+                        "h-4 w-4 shrink-0",
+                        userUpvoted && "fill-current",
+                      )}
+                    />
+                    <span className="text-sm font-medium tabular-nums">
+                      {upvoteCount}
+                    </span>
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleDownvote}
+                    disabled={voteBusy || !user}
+                    title="Downvote — signal low quality (counts this month)"
+                    className={cn(
+                      "h-9 gap-1 px-2",
+                      userDownvoted && "text-destructive",
+                    )}
+                  >
+                    <ThumbsDown
+                      className={cn(
+                        "h-4 w-4 shrink-0",
+                        userDownvoted && "fill-current",
+                      )}
+                    />
+                    <span className="text-sm font-medium tabular-nums">
+                      {downvoteCount}
+                    </span>
+                  </Button>
+                  {shareLabel ? (
+                    <span className="w-full text-[11px] leading-tight text-muted-foreground sm:w-auto">
+                      {shareLabel}
+                    </span>
+                  ) : null}
+                </div>
                 <Button variant="outline" size="sm" className="h-9 shrink-0" asChild>
                   <Link
                     href={tool.url}
@@ -503,30 +638,58 @@ export function ToolCard({
           </div>
 
           <div className="mt-auto flex min-w-0 flex-col gap-2 border-t border-border/40 pt-3">
-            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleUpvote}
-                disabled={upvoting || !user}
-                title="Community upvotes this calendar month"
-                className={cn(
-                  "h-8 shrink-0 gap-1.5 px-2",
-                  userUpvoted && "text-primary",
-                )}
-              >
-                <ThumbsUp
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 sm:gap-x-3">
+              <div className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleUpvote}
+                  disabled={voteBusy || !user}
+                  title="Upvote — counts this month"
                   className={cn(
-                    "h-4 w-4 shrink-0",
-                    userUpvoted && "fill-current",
+                    "h-8 shrink-0 gap-1 px-2",
+                    userUpvoted && "text-primary",
                   )}
-                />
-                <span className="tabular-nums text-sm font-medium">
-                  {upvoteCount}
-                </span>
-              </Button>
+                >
+                  <ThumbsUp
+                    className={cn(
+                      "h-4 w-4 shrink-0",
+                      userUpvoted && "fill-current",
+                    )}
+                  />
+                  <span className="tabular-nums text-sm font-medium">
+                    {upvoteCount}
+                  </span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleDownvote}
+                  disabled={voteBusy || !user}
+                  title="Downvote — signal low quality (counts this month)"
+                  className={cn(
+                    "h-8 shrink-0 gap-1 px-2",
+                    userDownvoted && "text-destructive",
+                  )}
+                >
+                  <ThumbsDown
+                    className={cn(
+                      "h-4 w-4 shrink-0",
+                      userDownvoted && "fill-current",
+                    )}
+                  />
+                  <span className="tabular-nums text-sm font-medium">
+                    {downvoteCount}
+                  </span>
+                </Button>
+                {shareLabel ? (
+                  <span className="max-w-full text-[11px] leading-tight text-muted-foreground">
+                    {shareLabel}
+                  </span>
+                ) : null}
+              </div>
               {ratingBlock ? (
-                <div className="flex min-w-0 items-center border-l border-border/50 pl-3">
+                <div className="flex min-w-0 items-center border-l border-border/50 pl-2 sm:pl-3">
                   {ratingBlock}
                 </div>
               ) : null}

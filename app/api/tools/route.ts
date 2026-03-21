@@ -156,59 +156,92 @@ export async function GET(request: NextRequest) {
     const toolIds = filteredTools.map((t: { id: string }) => t.id);
 
     const upvoteCountMap = new Map<string, number>();
-    if (toolIds.length > 0) {
-      const { data: upvoteRows, error: upvoteFetchError } = await admin
-        .from("upvote")
-        .select("toolId")
-        .in("toolId", toolIds)
-        .gte("upvotedAt", monthStartIso);
+    const downvoteCountMap = new Map<string, number>();
 
-      if (upvoteFetchError) {
-        console.error("❌ Upvote batch fetch failed:", upvoteFetchError);
+    if (toolIds.length > 0) {
+      const [upvoteRes, downvoteRes] = await Promise.all([
+        admin
+          .from("upvote")
+          .select("toolId")
+          .in("toolId", toolIds)
+          .gte("upvotedAt", monthStartIso),
+        admin
+          .from("downvote")
+          .select("toolId")
+          .in("toolId", toolIds)
+          .gte("downvotedAt", monthStartIso),
+      ]);
+
+      if (upvoteRes.error) {
+        console.error("❌ Upvote batch fetch failed:", upvoteRes.error);
       } else {
-        (upvoteRows || []).forEach((row: { toolId: string }) => {
+        (upvoteRes.data || []).forEach((row: { toolId: string }) => {
           upvoteCountMap.set(
             row.toolId,
             (upvoteCountMap.get(row.toolId) || 0) + 1,
           );
         });
       }
+
+      if (downvoteRes.error) {
+        console.error("❌ Downvote batch fetch failed:", downvoteRes.error);
+      } else {
+        (downvoteRes.data || []).forEach((row: { toolId: string }) => {
+          downvoteCountMap.set(
+            row.toolId,
+            (downvoteCountMap.get(row.toolId) || 0) + 1,
+          );
+        });
+      }
     }
 
-    // Batch fetch user upvotes if authenticated
     let userUpvoteSet = new Set<string>();
+    let userDownvoteSet = new Set<string>();
     let userFavoriteSet = new Set<string>();
     if (userId) {
       const today = new Date().toISOString().split("T")[0];
-      const { data: userUpvotes } = await admin
-        .from("upvote")
-        .select("toolId")
-        .eq("userId", userId)
-        .in("toolId", toolIds)
-        .gte("upvotedAt", `${today}T00:00:00.000Z`)
-        .lt("upvotedAt", `${today}T23:59:59.999Z`);
-      
-      (userUpvotes || []).forEach((upvote: any) => {
-        userUpvoteSet.add(upvote.toolId);
-      });
+      const dayStart = `${today}T00:00:00.000Z`;
+      const dayEnd = `${today}T23:59:59.999Z`;
 
-      // Batch fetch user favorites
-      const { data: userFavorites } = await admin
-        .from("favorite")
-        .select("toolId")
-        .eq("userId", userId)
-        .in("toolId", toolIds);
-      
-      (userFavorites || []).forEach((favorite: any) => {
-        userFavoriteSet.add(favorite.toolId);
+      const [userUpRes, userDownRes, userFavRes] = await Promise.all([
+        admin
+          .from("upvote")
+          .select("toolId")
+          .eq("userId", userId)
+          .in("toolId", toolIds)
+          .gte("upvotedAt", dayStart)
+          .lt("upvotedAt", dayEnd),
+        admin
+          .from("downvote")
+          .select("toolId")
+          .eq("userId", userId)
+          .in("toolId", toolIds)
+          .gte("downvotedAt", dayStart)
+          .lt("downvotedAt", dayEnd),
+        admin
+          .from("favorite")
+          .select("toolId")
+          .eq("userId", userId)
+          .in("toolId", toolIds),
+      ]);
+
+      (userUpRes.data || []).forEach((row: { toolId: string }) => {
+        userUpvoteSet.add(row.toolId);
+      });
+      (userDownRes.data || []).forEach((row: { toolId: string }) => {
+        userDownvoteSet.add(row.toolId);
+      });
+      (userFavRes.data || []).forEach((row: { toolId: string }) => {
+        userFavoriteSet.add(row.toolId);
       });
     }
 
-    // Map results to tools
     const processedTools = filteredTools.map((tool: any) => ({
       ...tool,
       upvoteCount: upvoteCountMap.get(tool.id) || 0,
+      downvoteCount: downvoteCountMap.get(tool.id) || 0,
       userUpvoted: userUpvoteSet.has(tool.id),
+      userDownvoted: userDownvoteSet.has(tool.id),
       userFavorited: userFavoriteSet.has(tool.id),
     }));
 

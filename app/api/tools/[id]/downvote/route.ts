@@ -23,38 +23,38 @@ export async function POST(
     const admin = supabaseAdmin as any;
     const { start, end } = todayUtcRange();
 
-    const [existingUpResult, todayUpvoteCountResult] = await Promise.all([
+    const [existingDown, todayDownvoteCount] = await Promise.all([
       admin
-        .from("upvote")
+        .from("downvote")
         .select("id")
         .eq("userId", userId)
         .eq("toolId", toolId)
-        .gte("upvotedAt", start)
-        .lt("upvotedAt", end)
+        .gte("downvotedAt", start)
+        .lt("downvotedAt", end)
         .maybeSingle(),
       admin
-        .from("upvote")
+        .from("downvote")
         .select("*", { count: "exact", head: true })
         .eq("userId", userId)
-        .gte("upvotedAt", start)
-        .lt("upvotedAt", end),
+        .gte("downvotedAt", start)
+        .lt("downvotedAt", end),
     ]);
 
-    if (existingUpResult.data) {
+    if (existingDown.data) {
       return NextResponse.json(
-        { error: "You have already upvoted this tool today" },
+        { error: "You have already downvoted this tool today" },
         { status: 400 },
       );
     }
 
-    if ((todayUpvoteCountResult.count ?? 0) >= 3) {
+    if ((todayDownvoteCount.count ?? 0) >= 3) {
       return NextResponse.json(
         {
-          error: "Daily upvote limit reached",
+          error: "Daily downvote limit reached",
           message:
-            "You can upvote up to 3 different tools per day. Your upvotes will reset tomorrow.",
+            "You can downvote up to 3 tools per day. Resets tomorrow.",
           limit: 3,
-          used: todayUpvoteCountResult.count ?? 0,
+          used: todayDownvoteCount.count ?? 0,
         },
         { status: 400 },
       );
@@ -66,31 +66,34 @@ export async function POST(
       .split("T")[0];
 
     await admin
-      .from("downvote")
+      .from("upvote")
       .delete()
       .eq("userId", userId)
       .eq("toolId", toolId)
-      .gte("downvotedAt", start)
-      .lt("downvotedAt", end);
+      .gte("upvotedAt", start)
+      .lt("upvotedAt", end);
 
-    const { error: insertError } = await admin.from("upvote").insert([
+    const { error: insertError } = await admin.from("downvote").insert([
       {
         userId,
         toolId,
-        upvotedAt: new Date().toISOString(),
+        downvotedAt: new Date().toISOString(),
         monthlyResetDate: monthStart,
       },
     ]);
 
     if (insertError) {
-      console.error("Error creating upvote:", insertError);
-      return NextResponse.json({ error: "Failed to upvote" }, { status: 500 });
+      console.error("Error creating downvote:", insertError);
+      return NextResponse.json(
+        { error: "Failed to downvote" },
+        { status: 500 },
+      );
     }
 
     const snap = await fetchVoteSnapshot(admin, toolId, userId);
     return NextResponse.json(snap);
   } catch (error: unknown) {
-    console.error("Error in POST upvote:", error);
+    console.error("Error in POST downvote:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 },
@@ -115,17 +118,17 @@ export async function DELETE(
     const { start, end } = todayUtcRange();
 
     const { error: deleteError } = await admin
-      .from("upvote")
+      .from("downvote")
       .delete()
       .eq("userId", userId)
       .eq("toolId", toolId)
-      .gte("upvotedAt", start)
-      .lt("upvotedAt", end);
+      .gte("downvotedAt", start)
+      .lt("downvotedAt", end);
 
     if (deleteError) {
-      console.error("Error deleting upvote:", deleteError);
+      console.error("Error deleting downvote:", deleteError);
       return NextResponse.json(
-        { error: "Failed to remove upvote" },
+        { error: "Failed to remove downvote" },
         { status: 500 },
       );
     }
@@ -133,7 +136,7 @@ export async function DELETE(
     const snap = await fetchVoteSnapshot(admin, toolId, userId);
     return NextResponse.json(snap);
   } catch (error: unknown) {
-    console.error("Error in DELETE upvote:", error);
+    console.error("Error in DELETE downvote:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 },
