@@ -15,12 +15,24 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { Heart } from "lucide-react";
+import { GraduationCap, Heart, Info, LayoutGrid, List } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { SiteTour } from "@/components/SiteTour";
+import { MOST_POPULAR_HELP } from "@/lib/tool-popularity";
+import type { ToolCardLayout } from "@/components/ToolCard";
 import { supabase } from "@/lib/supabase";
 import type { Tool } from "@/lib/supabase";
 
 type SortOption = "alphabetical" | "newest" | "popular" | "traffic" | "traffic-low" | "upvotes";
 type SortOrder = "asc" | "desc";
+
+const TOOLS_VIEW_STORAGE_KEY = "ai-tools-view";
 
 function HomePageContent() {
   const router = useRouter();
@@ -30,10 +42,31 @@ function HomePageContent() {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedTraffic, setSelectedTraffic] = useState<string[]>([]);
   const [selectedRevenue, setSelectedRevenue] = useState<string[]>([]);
-  const [sort, setSort] = useState<SortOption>("alphabetical");
-  const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
+  const [sort, setSort] = useState<SortOption>("popular");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [user, setUser] = useState<any>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [tourReplayNonce, setTourReplayNonce] = useState(0);
+  const [viewMode, setViewMode] = useState<ToolCardLayout>("grid");
+
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem(TOOLS_VIEW_STORAGE_KEY);
+      if (v === "list" || v === "grid") setViewMode(v);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const setToolsViewMode = useCallback((mode: ToolCardLayout) => {
+    setViewMode(mode);
+    try {
+      localStorage.setItem(TOOLS_VIEW_STORAGE_KEY, mode);
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const searchSuggestions = useMemo(() => {
     if (!tools || tools.length === 0) return [];
@@ -55,6 +88,43 @@ function HomePageContent() {
     });
 
     return () => subscription.unsubscribe();
+  }, []);
+
+  // Admin role (for dev-only site tour replay button)
+  useEffect(() => {
+    let cancelled = false;
+
+    const checkAdmin = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) {
+        if (!cancelled) setIsAdmin(false);
+        return;
+      }
+      try {
+        const res = await fetch("/api/auth/check", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = (await res.json()) as { role?: string };
+        if (!cancelled) setIsAdmin(data?.role === "admin");
+      } catch {
+        if (!cancelled) setIsAdmin(false);
+      }
+    };
+
+    void checkAdmin();
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(() => {
+      void checkAdmin();
+    });
+
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
   }, []);
 
   // Handle OAuth callback if tokens are in the hash
@@ -205,9 +275,12 @@ function HomePageContent() {
             />
           </div>
 
-          <div className="flex-1 space-y-6">
+          <div
+            className="flex-1 scroll-mt-24 space-y-6"
+            data-tutorial="tool-results"
+          >
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex-1 max-w-2xl">
+              <div className="flex-1 max-w-2xl" data-tutorial="search-bar">
                 <SearchBar
                   value={search}
                   onChange={setSearch}
@@ -215,23 +288,85 @@ function HomePageContent() {
                 />
               </div>
               <UpvoteTimer />
-              <div className="flex items-center gap-2">
-                <Select
-                  value={sort}
-                  onValueChange={(v) => setSort(v as SortOption)}
+              <div className="flex flex-wrap items-center gap-2">
+                <div
+                  className="flex rounded-md border border-border bg-muted/30 p-0.5"
+                  role="group"
+                  aria-label="Results layout"
                 >
-                  <SelectTrigger className="w-[180px]">
-                    <SelectValue placeholder="Sort by" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="popular">Most Popular</SelectItem>
-                    <SelectItem value="alphabetical">Alphabetical</SelectItem>
-                    <SelectItem value="newest">Newest</SelectItem>
-                    <SelectItem value="traffic">Highest Traffic</SelectItem>
-                    <SelectItem value="traffic-low">Lowest Traffic</SelectItem>
-                    <SelectItem value="upvotes">Most Upvoted</SelectItem>
-                  </SelectContent>
-                </Select>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={viewMode === "grid" ? "secondary" : "ghost"}
+                    className="h-8 w-8 p-0"
+                    title="Grid view"
+                    aria-pressed={viewMode === "grid"}
+                    onClick={() => setToolsViewMode("grid")}
+                  >
+                    <LayoutGrid className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={viewMode === "list" ? "secondary" : "ghost"}
+                    className="h-8 w-8 p-0"
+                    title="List view"
+                    aria-pressed={viewMode === "list"}
+                    onClick={() => setToolsViewMode("list")}
+                  >
+                    <List className="h-4 w-4" />
+                  </Button>
+                </div>
+                <div className="flex items-center gap-1">
+                  <Select
+                    value={sort}
+                    onValueChange={(v) => {
+                      const next = v as SortOption;
+                      setSort(next);
+                      if (next === "alphabetical") setSortOrder("asc");
+                      else setSortOrder("desc");
+                    }}
+                  >
+                    <SelectTrigger
+                      className="w-[180px]"
+                      title="Most Popular: monthly upvotes, then traffic, then star rating (curated estimate)"
+                    >
+                      <SelectValue placeholder="Sort by" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="popular">Most Popular</SelectItem>
+                      <SelectItem value="alphabetical">Alphabetical</SelectItem>
+                      <SelectItem value="newest">Newest</SelectItem>
+                      <SelectItem value="traffic">Highest Traffic</SelectItem>
+                      <SelectItem value="traffic-low">Lowest Traffic</SelectItem>
+                      <SelectItem value="upvotes">Most Upvoted</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Dialog>
+                    <DialogTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 shrink-0 text-muted-foreground"
+                        title={MOST_POPULAR_HELP.title}
+                        aria-label={MOST_POPULAR_HELP.title}
+                      >
+                        <Info className="h-4 w-4" />
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="max-w-md">
+                      <DialogHeader>
+                        <DialogTitle>{MOST_POPULAR_HELP.title}</DialogTitle>
+                      </DialogHeader>
+                      <ul className="list-disc space-y-2 pl-4 text-sm text-muted-foreground">
+                        {MOST_POPULAR_HELP.bullets.map((b, i) => (
+                          <li key={i}>{b}</li>
+                        ))}
+                      </ul>
+                    </DialogContent>
+                  </Dialog>
+                </div>
                 {sort === "alphabetical" && (
                   <Select
                     value={sortOrder}
@@ -250,14 +385,25 @@ function HomePageContent() {
             </div>
 
             {loading ? (
-              <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                {[...Array(8)].map((_, i) => (
-                  <div
-                    key={i}
-                    className="h-64 animate-pulse rounded-lg border bg-muted"
-                  />
-                ))}
-              </div>
+              viewMode === "grid" ? (
+                <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                  {[...Array(8)].map((_, i) => (
+                    <div
+                      key={i}
+                      className="h-64 min-h-0 animate-pulse rounded-lg border bg-muted"
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="flex flex-col gap-3">
+                  {[...Array(8)].map((_, i) => (
+                    <div
+                      key={i}
+                      className="h-[4.5rem] animate-pulse rounded-lg border bg-muted"
+                    />
+                  ))}
+                </div>
+              )
             ) : tools.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-center">
                 <p className="text-lg text-muted-foreground">
@@ -269,9 +415,20 @@ function HomePageContent() {
                 <p className="text-sm text-muted-foreground">
                   Showing {tools.length} tool{tools.length !== 1 ? "s" : ""}
                 </p>
-                <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                <div
+                  className={
+                    viewMode === "grid"
+                      ? "grid min-w-0 grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+                      : "flex min-w-0 flex-col gap-3"
+                  }
+                >
                   {tools.map((tool, index) => (
-                    <ToolCard key={tool.id} tool={tool} index={index} />
+                    <ToolCard
+                      key={tool.id}
+                      tool={tool}
+                      index={index}
+                      layout={viewMode}
+                    />
                   ))}
                 </div>
               </>
@@ -279,6 +436,22 @@ function HomePageContent() {
           </div>
         </div>
       </div>
+      {isAdmin && (
+        <div className="fixed bottom-4 right-4 z-30 print:hidden">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="gap-1.5 border-dashed border-amber-500/50 bg-background/90 text-xs shadow-md backdrop-blur-sm hover:bg-amber-500/10"
+            title="Clears tour completion for this browser and starts the onboarding tour (admin testing only)"
+            onClick={() => setTourReplayNonce((n) => n + 1)}
+          >
+            <GraduationCap className="h-3.5 w-3.5" />
+            Test site tour
+          </Button>
+        </div>
+      )}
+      <SiteTour adminReplayNonce={tourReplayNonce} />
     </div>
   );
 }

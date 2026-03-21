@@ -53,16 +53,16 @@ export function AdminNavLink() {
     <Link
       href="/admin"
       className={cn(
-        "text-sm font-medium transition-colors",
-        isAdminPage
-          ? "relative text-foreground"
-          : "text-muted-foreground hover:text-foreground",
+        "group relative text-sm font-medium transition-colors",
+        isAdminPage ? "text-foreground" : "text-muted-foreground",
       )}
     >
       <span
         className={cn(
-          isAdminPage &&
-            "bg-gradient-to-r from-amber-400 to-rose-500 bg-clip-text text-transparent",
+          "transition-all duration-200",
+          isAdminPage
+            ? "bg-gradient-to-r from-amber-400 to-rose-500 bg-clip-text text-transparent"
+            : "text-muted-foreground group-hover:bg-gradient-to-r group-hover:from-amber-400 group-hover:to-rose-500 group-hover:bg-clip-text group-hover:text-transparent",
         )}
       >
         Admin

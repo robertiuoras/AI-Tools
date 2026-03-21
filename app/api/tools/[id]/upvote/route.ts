@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { createClient } from "@supabase/supabase-js";
+import { getLocalMonthStartIso } from "@/lib/tool-popularity";
 
 // Create a client that can read auth tokens from cookies
 function getSupabaseClient(request: NextRequest) {
@@ -120,13 +121,13 @@ export async function POST(
       return NextResponse.json({ error: "Failed to upvote" }, { status: 500 });
     }
 
-    // Get updated upvote count (only from current month)
-    // Reuse monthStart variable defined above
+    // Monthly total on the tool (same window as GET /api/tools list)
+    const monthStartIso = getLocalMonthStartIso();
     const { count } = await admin
       .from("upvote")
       .select("*", { count: "exact", head: true })
       .eq("toolId", toolId)
-      .gte("monthlyResetDate", monthStart);
+      .gte("upvotedAt", monthStartIso);
 
     return NextResponse.json({
       upvoteCount: count || 0,
@@ -194,19 +195,12 @@ export async function DELETE(
       );
     }
 
-    // Get updated upvote count (only from current month)
-    const monthStart = new Date(
-      new Date().getFullYear(),
-      new Date().getMonth(),
-      1
-    )
-      .toISOString()
-      .split("T")[0];
+    const monthStartIso = getLocalMonthStartIso();
     const { count } = await admin
       .from("upvote")
       .select("*", { count: "exact", head: true })
       .eq("toolId", toolId)
-      .gte("monthlyResetDate", monthStart);
+      .gte("upvotedAt", monthStartIso);
 
     // Check if user still has an upvote today (after deletion)
     const { count: userUpvoteCount } = await admin

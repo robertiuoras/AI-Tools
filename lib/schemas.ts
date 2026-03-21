@@ -29,18 +29,27 @@ export const toolSchema = preprocessTool
 
 export type ToolInput = z.infer<typeof toolSchema>
 
+/** AI tool categories (alphabetical). DB stores free text; keep analyze prompt in sync. */
 export const categories = [
-  'Video Editing',
+  'AI Agents',
   'AI Automation',
-  'SaaS',
-  'Image Generation',
-  'Code Assistants',
-  'Writing',
-  'Productivity',
-  'Design',
-  'Marketing',
   'Analytics',
+  'Code Assistants',
+  'Customer Support',
+  'Design',
+  'Education',
+  'Image Generation',
+  'Language',
+  'Legal',
+  'Marketing',
+  'Music & Audio',
   'Other',
+  'Productivity',
+  'Research',
+  'SaaS',
+  'Video Editing',
+  'Voice & Audio',
+  'Writing',
 ] as const
 
 export type Category = typeof categories[number]

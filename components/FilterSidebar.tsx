@@ -96,6 +96,7 @@ export function FilterSidebar({
 
       {/* Sidebar */}
       <aside
+        data-tutorial="filter-sidebar"
         className={cn(
           'fixed left-0 top-0 z-50 h-full w-80 transform border-r border-border bg-background/95 backdrop-blur-sm transition-transform duration-300 lg:relative lg:z-auto lg:translate-x-0',
           isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',

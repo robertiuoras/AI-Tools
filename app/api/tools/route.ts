@@ -3,6 +3,10 @@ import { randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase";
 import { toolSchema } from "@/lib/schemas";
 import { createClient } from "@supabase/supabase-js";
+import {
+  getLocalMonthStartIso,
+  popularityScore,
+} from "@/lib/tool-popularity";
 
 export async function GET(request: NextRequest) {
   try {
@@ -11,8 +15,8 @@ export async function GET(request: NextRequest) {
     const traffic = searchParams.getAll("traffic");
     const revenue = searchParams.getAll("revenue");
     const search = searchParams.get("search");
-    const sort = searchParams.get("sort") || "alphabetical";
-    const order = searchParams.get("order") || "asc";
+    const sort = searchParams.get("sort") || "popular";
+    const order = searchParams.get("order") || "desc";
     const favoritesOnly = searchParams.get("favoritesOnly") === "true";
 
     // Get authorization header (used later for user authentication)
@@ -45,36 +49,32 @@ export async function GET(request: NextRequest) {
       // For better performance, you could use full-text search if enabled
     }
 
-    // Apply sorting
+    // DB ordering: use stable columns only. "popular" / "upvotes" are sorted in memory
+    // after monthly upvote counts are attached (avoids bad SQL + null rating issues).
     if (sort === "alphabetical") {
       query = query.order("name", { ascending: order === "asc" });
     } else if (sort === "newest") {
-      query = query.order("createdAt", { ascending: order !== "asc" });
-    } else if (sort === "popular") {
-      query = query.order("rating", {
-        ascending: order === "asc",
-        nullsFirst: false,
-      });
+      // desc = newest first (align with default order=desc when switching sort in UI)
+      query = query.order("createdAt", { ascending: order === "asc" });
     } else if (sort === "traffic") {
-      // Highest traffic = highest visits = descending order
       query = query.order("estimatedVisits", {
-        ascending: false, // false = descending = highest first
+        ascending: false,
         nullsFirst: false,
       });
     } else if (sort === "traffic-low") {
-      // Lowest traffic = lowest visits = ascending order
       query = query.order("estimatedVisits", {
-        ascending: true, // true = ascending = lowest first
-        nullsFirst: true, // nulls first for lowest traffic
+        ascending: true,
+        nullsFirst: true,
       });
-    } else if (sort === "upvotes") {
-      // For upvotes, we'll sort in memory after getting the data
+    } else if (sort === "popular" || sort === "upvotes") {
+      query = query.order("createdAt", { ascending: false });
     }
 
     const { data: tools, error } = await query;
 
     if (error) {
       console.error("❌ Supabase error fetching tools:", error);
+      // 200 + [] keeps the UI stable; check server logs for the real error
       return NextResponse.json([], { status: 200 });
     }
 
@@ -129,16 +129,13 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Process tools to add upvote counts and user upvote status
-    // Only count upvotes from current month
-    const monthStart = new Date(
-      new Date().getFullYear(),
-      new Date().getMonth(),
-      1
-    )
-      .toISOString()
-      .split("T")[0];
-    
+    if (filteredTools.length === 0) {
+      return NextResponse.json([]);
+    }
+
+    // Monthly upvote window: `upvotedAt` in current local calendar month (matches UX).
+    const monthStartIso = getLocalMonthStartIso();
+
     // Get user if authenticated (once, not per tool)
     let userId: string | null = null;
     if (authHeader) {
@@ -156,19 +153,27 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Batch fetch all upvote counts at once
-    const toolIds = filteredTools.map((t: any) => t.id);
-    const { data: upvoteCounts } = await admin
-      .from("upvote")
-      .select("toolId")
-      .in("toolId", toolIds)
-      .gte("monthlyResetDate", monthStart);
+    const toolIds = filteredTools.map((t: { id: string }) => t.id);
 
-    // Count upvotes per tool
     const upvoteCountMap = new Map<string, number>();
-    (upvoteCounts || []).forEach((upvote: any) => {
-      upvoteCountMap.set(upvote.toolId, (upvoteCountMap.get(upvote.toolId) || 0) + 1);
-    });
+    if (toolIds.length > 0) {
+      const { data: upvoteRows, error: upvoteFetchError } = await admin
+        .from("upvote")
+        .select("toolId")
+        .in("toolId", toolIds)
+        .gte("upvotedAt", monthStartIso);
+
+      if (upvoteFetchError) {
+        console.error("❌ Upvote batch fetch failed:", upvoteFetchError);
+      } else {
+        (upvoteRows || []).forEach((row: { toolId: string }) => {
+          upvoteCountMap.set(
+            row.toolId,
+            (upvoteCountMap.get(row.toolId) || 0) + 1,
+          );
+        });
+      }
+    }
 
     // Batch fetch user upvotes if authenticated
     let userUpvoteSet = new Set<string>();
@@ -207,13 +212,23 @@ export async function GET(request: NextRequest) {
       userFavorited: userFavoriteSet.has(tool.id),
     }));
 
-    // Sort by upvotes if requested
     if (sort === "upvotes") {
-      processedTools.sort((a: any, b: any) => {
+      processedTools.sort((a: { upvoteCount?: number }, b: { upvoteCount?: number }) => {
         const aCount = a.upvoteCount || 0;
         const bCount = b.upvoteCount || 0;
         return order === "desc" ? bCount - aCount : aCount - bCount;
       });
+    }
+
+    if (sort === "popular") {
+      type Row = {
+        upvoteCount?: number;
+        estimatedVisits?: number | null;
+        rating?: number | null;
+      };
+      processedTools.sort(
+        (a: Row, b: Row) => popularityScore(b) - popularityScore(a),
+      );
     }
 
     return NextResponse.json(processedTools);

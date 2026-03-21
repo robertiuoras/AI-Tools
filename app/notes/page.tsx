@@ -3,16 +3,23 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  type KeyboardEvent,
   type ReactNode,
 } from "react";
 import { supabase, type Note, type NotePage } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Star,
   Plus,
@@ -25,32 +32,33 @@ import {
   Loader2,
   Palette,
   Highlighter,
+  Type,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { linkifyText } from "@/lib/linkify";
+import {
+  migrateLegacyNoteMarkup,
+  normalizeColorHex,
+  isProbablyHtml,
+  sanitizeNoteHtml,
+  noteContentToEditorHtml,
+  normalizeNoteHtmlForSave,
+  htmlToPlainText,
+} from "@/lib/note-html";
+import { NoteColorPicker } from "@/components/NoteColorPicker";
 
 const INLINE_TOKEN_RE =
-  /\*\*([^*]+)\*\*|\*([^*]+)\*|==([^=\n]+)==|__([^_]+)__|~~([^~]+)~~|`([^`]+)`|⟦c#([0-9a-fA-F]{6})⟧([\s\S]*?)⟦\/c⟧|⟦s(\d{1,2})⟧([\s\S]*?)⟦\/s⟧/g;
+  /\*\*([^*]+)\*\*|\*([^*]+)\*|==([^=\n]+)==|__([^_]+)__|~~([^~]+)~~|`([^`]+)`|\{\{c#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\}\}([\s\S]*?)\{\{\/c\}\}|\{\{s(\d{1,3})\}\}([\s\S]*?)\{\{\/s\}\}/g;
 const BULLET_LINE_RE = /^(\s*)([-*•])\s+/;
 const NUMBERED_LINE_RE = /^(\s*)\d+\.\s+/;
 
 /** Preset text colors for toolbar (6-char hex, no #). */
-const NOTE_TEXT_COLORS = [
-  "e11d48",
-  "ea580c",
-  "ca8a04",
-  "16a34a",
-  "2563eb",
-  "9333ea",
-  "db2777",
-  "0d9488",
-];
-
 const FONT_SIZE_OPTIONS = [12, 14, 16, 18, 24, 32] as const;
 
 function renderInlineMarkdown(text: string, depth = 0): ReactNode {
+  const src = migrateLegacyNoteMarkup(text);
   if (depth > 8) {
-    return <>{linkifyText(text)}</>;
+    return <>{linkifyText(src)}</>;
   }
 
   const nodes: ReactNode[] = [];
@@ -60,12 +68,12 @@ function renderInlineMarkdown(text: string, depth = 0): ReactNode {
   let partIndex = 0;
   let match: RegExpExecArray | null = null;
 
-  while ((match = re.exec(text))) {
+  while ((match = re.exec(src))) {
     const matchIndex = match.index ?? 0;
 
     if (matchIndex > lastIndex) {
       nodes.push(
-        <span key={`t-${partIndex++}`}>{linkifyText(text.slice(lastIndex, matchIndex))}</span>,
+        <span key={`t-${partIndex++}`}>{linkifyText(src.slice(lastIndex, matchIndex))}</span>,
       );
     }
 
@@ -115,17 +123,18 @@ function renderInlineMarkdown(text: string, depth = 0): ReactNode {
         </code>,
       );
     } else if (typeof colorHex === "string" && colorInner !== undefined) {
+      const hex = normalizeColorHex(colorHex);
       nodes.push(
         <span
           key={`col-${partIndex++}`}
-          style={{ color: `#${colorHex}` }}
+          style={{ color: `#${hex}` }}
           className="font-inherit"
         >
           {renderInlineMarkdown(colorInner, depth + 1)}
         </span>,
       );
     } else if (typeof sizePx === "string" && sizeInner !== undefined) {
-      const px = Math.min(48, Math.max(10, parseInt(sizePx, 10) || 16));
+      const px = Math.min(72, Math.max(8, parseInt(sizePx, 10) || 16));
       nodes.push(
         <span
           key={`sz-${partIndex++}`}
@@ -140,15 +149,16 @@ function renderInlineMarkdown(text: string, depth = 0): ReactNode {
     lastIndex = matchIndex + match[0].length;
   }
 
-  if (lastIndex < text.length) {
-    nodes.push(<span key={`t-${partIndex++}`}>{linkifyText(text.slice(lastIndex))}</span>);
+  if (lastIndex < src.length) {
+    nodes.push(<span key={`t-${partIndex++}`}>{linkifyText(src.slice(lastIndex))}</span>);
   }
 
   return <>{nodes}</>;
 }
 
 function renderPreviewMarkdown(text: string): ReactNode {
-  const lines = text.split(/\r?\n/);
+  const body = migrateLegacyNoteMarkup(text);
+  const lines = body.split(/\r?\n/);
   const out: ReactNode[] = [];
   let ulItems: ReactNode[] = [];
   let olItems: ReactNode[] = [];
@@ -226,6 +236,29 @@ function renderPreviewMarkdown(text: string): ReactNode {
   return <>{out}</>;
 }
 
+const NOTE_HTML_VIEW_CLASS =
+  "note-html-view min-h-0 space-y-2 text-sm [&_a]:font-medium [&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2 [&_a]:break-all [&_h3]:scroll-m-20 [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:tracking-tight [&_li]:my-0.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:whitespace-pre-wrap [&_ul]:list-disc [&_ul]:pl-5";
+
+function renderReadNoteBody(content: string): ReactNode {
+  const t = content.trim();
+  if (!t) {
+    return (
+      <span className="text-muted-foreground italic">Click here to write…</span>
+    );
+  }
+  if (isProbablyHtml(content)) {
+    return (
+      <div
+        className={NOTE_HTML_VIEW_CLASS}
+        dangerouslySetInnerHTML={{
+          __html: sanitizeNoteHtml(content),
+        }}
+      />
+    );
+  }
+  return renderPreviewMarkdown(content);
+}
+
 export default function NotesPage() {
   const [token, setToken] = useState<string | null>(null);
   const [pages, setPages] = useState<NotePage[]>([]);
@@ -241,13 +274,28 @@ export default function NotesPage() {
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
   const [editingNoteRowId, setEditingNoteRowId] = useState<string | null>(null);
   const [editingMainTitle, setEditingMainTitle] = useState(false);
-  const [moreToolsOpen, setMoreToolsOpen] = useState(false);
-  const [colorPickOpen, setColorPickOpen] = useState(false);
+  const [formatMenuOpen, setFormatMenuOpen] = useState(false);
+  const [editorSession, setEditorSession] = useState(0);
+  const [fmtActive, setFmtActive] = useState({
+    bold: false,
+    italic: false,
+    underline: false,
+    strikeThrough: false,
+    unorderedList: false,
+    orderedList: false,
+    heading3: false,
+  });
+  /** Synced color well + hex field in Format panel (6-char #RRGGBB). */
+  const [formatPanelColor, setFormatPanelColor] = useState("#2563eb");
+  const [customFontSize, setCustomFontSize] = useState("16");
   const [newPageTitle, setNewPageTitle] = useState("");
   const [newNoteTitle, setNewNoteTitle] = useState("");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const editorRef = useRef<HTMLDivElement | null>(null);
+  const formatMenuRef = useRef<HTMLDivElement | null>(null);
+  /** Normalized body last written (or baseline when editor opened); skips redundant autosave UI + PUT. */
+  const lastAutoSavedBodyRef = useRef<string | null>(null);
   const notesRef = useRef(notes);
   notesRef.current = notes;
   const skipNextNotesFetchForPageRef = useRef(false);
@@ -406,8 +454,7 @@ export default function NotesPage() {
   useEffect(() => {
     if (!selectedNoteId) return;
     setIsEditing(false);
-    setMoreToolsOpen(false);
-    setColorPickOpen(false);
+    setFormatMenuOpen(false);
     setEditingMainTitle(false);
     setEditingNoteRowId(null);
   }, [selectedNoteId]);
@@ -492,12 +539,22 @@ export default function NotesPage() {
 
   const persistNoteBody = useCallback(
     async (noteId: string, content: string, showIndicator: boolean) => {
+      const normalized = normalizeNoteHtmlForSave(content);
+      if (
+        lastAutoSavedBodyRef.current !== null &&
+        normalized === lastAutoSavedBodyRef.current
+      ) {
+        return true;
+      }
       if (showIndicator) setAutoSaveState("saving");
       const ok = await updateNoteRef.current(
         noteId,
-        { content },
+        { content: normalized },
         { silent: true },
       );
+      if (ok) {
+        lastAutoSavedBodyRef.current = normalized;
+      }
       if (showIndicator) {
         if (ok) {
           setAutoSaveState("saved");
@@ -515,7 +572,9 @@ export default function NotesPage() {
     if (!isEditing || !selectedNoteId) return;
     const id = window.setInterval(() => {
       const n = notesRef.current.find((x) => x.id === selectedNoteId);
-      if (n) void persistNoteBody(n.id, n.content, true);
+      if (!n || !editorRef.current) return;
+      const raw = editorRef.current.innerHTML;
+      void persistNoteBody(n.id, raw, true);
     }, 4000);
     return () => clearInterval(id);
   }, [isEditing, selectedNoteId, persistNoteBody]);
@@ -531,383 +590,255 @@ export default function NotesPage() {
     if (selectedNoteId === noteId) setSelectedNoteId(remaining[0]?.id ?? null);
   };
 
-  const updateEditorContent = useCallback(
-    (
-      noteId: string,
-      newContent: string,
-      selection?: { start: number; end: number },
-      opts?: { focus?: boolean },
-    ) => {
-      setNotes((prev) => prev.map((n) => (n.id === noteId ? { ...n, content: newContent } : n)));
+  const selectionInEditor = useCallback(() => {
+    const root = editorRef.current;
+    if (!root) return false;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return false;
+    return root.contains(sel.anchorNode);
+  }, []);
 
-      const focus = opts?.focus !== false;
-      if (!focus) return;
-
-      requestAnimationFrame(() => {
-        const ta = textareaRef.current;
-        if (!ta) return;
-        ta.focus();
-        if (selection) ta.setSelectionRange(selection.start, selection.end);
-      });
-    },
-    [],
-  );
-
-  const applyBold = useCallback(() => {
-    if (!selectedNote) return;
-    const ta = textareaRef.current;
-    if (!ta) return;
-
-    ta.focus();
-    const start = ta.selectionStart ?? 0;
-    const end = ta.selectionEnd ?? 0;
-    const text = selectedNote.content;
-
-    const before = text.slice(0, start);
-    const sel = text.slice(start, end);
-    const after = text.slice(end);
-
-    if (start === end) {
-      const newText = before + "****" + after;
-      updateEditorContent(selectedNote.id, newText, { start: start + 2, end: start + 2 });
-      return;
+  const selectionInsideHeading3 = useCallback(() => {
+    const root = editorRef.current;
+    const sel = window.getSelection();
+    if (!root || !sel?.anchorNode || !root.contains(sel.anchorNode)) return false;
+    let n: Node | null = sel.anchorNode;
+    if (n.nodeType === Node.TEXT_NODE) n = (n as Text).parentElement;
+    while (n && n !== root) {
+      if (n instanceof HTMLElement && n.tagName === "H3") return true;
+      n = n.parentElement;
     }
+    return false;
+  }, []);
 
-    const newText = before + `**${sel}**` + after;
-    updateEditorContent(selectedNote.id, newText, { start: start + 2, end: end + 2 });
-  }, [selectedNote, updateEditorContent]);
-
-  const applyItalic = useCallback(() => {
-    if (!selectedNote) return;
-    const ta = textareaRef.current;
-    if (!ta) return;
-
-    ta.focus();
-    const start = ta.selectionStart ?? 0;
-    const end = ta.selectionEnd ?? 0;
-    const text = selectedNote.content;
-
-    const before = text.slice(0, start);
-    const sel = text.slice(start, end);
-    const after = text.slice(end);
-
-    if (start === end) {
-      const newText = before + "**" + after;
-      updateEditorContent(selectedNote.id, newText, { start: start + 1, end: start + 1 });
-      return;
-    }
-
-    const newText = before + `*${sel}*` + after;
-    updateEditorContent(selectedNote.id, newText, { start: start + 1, end: end + 1 });
-  }, [selectedNote, updateEditorContent]);
-
-  const toggleBullets = useCallback(() => {
-    if (!selectedNote) return;
-    const ta = textareaRef.current;
-    if (!ta) return;
-
-    ta.focus();
-    const start = ta.selectionStart ?? 0;
-    const end = ta.selectionEnd ?? 0;
-    const text = selectedNote.content;
-
-    // No selection: add a bullet at the current line start (preserving indentation).
-    if (start === end) {
-      const lineStart = text.lastIndexOf("\n", start - 1) + 1;
-      const currentLine = text.slice(lineStart);
-      const indentMatch = currentLine.match(/^(\s*)/);
-      const indent = indentMatch?.[1] ?? "";
-      const rest = currentLine.slice(indent.length);
-
-      const newText = text.slice(0, lineStart) + indent + "• " + rest;
-      const cursor = lineStart + indent.length + 2;
-      updateEditorContent(selectedNote.id, newText, { start: cursor, end: cursor });
-      return;
-    }
-
-    const blockStart = text.lastIndexOf("\n", start - 1) + 1;
-    let blockEnd = text.indexOf("\n", end);
-    if (blockEnd === -1) blockEnd = text.length;
-
-    const block = text.slice(blockStart, blockEnd);
-    const lines = block.split("\n");
-
-    const allBulleted = lines.length > 0 && lines.every((l) => BULLET_LINE_RE.test(l));
-
-    const transformedLines = lines.map((l) => {
-      if (allBulleted) {
-        // Remove bullet marker, keep indentation.
-        return l.replace(BULLET_LINE_RE, "$1");
+  const refreshFmt = useCallback(() => {
+    if (!isEditing || !selectionInEditor()) return;
+    try {
+      let heading3 = false;
+      try {
+        const raw = (
+          document.queryCommandValue("formatBlock") || ""
+        ).toLowerCase();
+        heading3 =
+          raw.includes("h3") ||
+          raw.includes("heading 3") ||
+          raw === "3";
+      } catch {
+        /* ignore */
       }
-
-      const indentMatch = l.match(/^(\s*)/);
-      const indent = indentMatch?.[1] ?? "";
-      const rest = l.slice(indent.length);
-      return `${indent}• ${rest}`;
-    });
-
-    const newBlock = transformedLines.join("\n");
-    const newText = text.slice(0, blockStart) + newBlock + text.slice(blockEnd);
-
-    updateEditorContent(selectedNote.id, newText, {
-      start: blockStart,
-      end: blockStart + newBlock.length,
-    });
-  }, [selectedNote, updateEditorContent]);
-
-  const applyHighlight = useCallback(() => {
-    if (!selectedNote) return;
-    const ta = textareaRef.current;
-    if (!ta) return;
-
-    ta.focus();
-    const start = ta.selectionStart ?? 0;
-    const end = ta.selectionEnd ?? 0;
-    const text = selectedNote.content;
-
-    const before = text.slice(0, start);
-    const sel = text.slice(start, end);
-    const after = text.slice(end);
-
-    if (start === end) {
-      const newText = before + "====" + after;
-      updateEditorContent(selectedNote.id, newText, { start: start + 2, end: start + 2 });
-      return;
-    }
-
-    const newText = before + `==${sel}==` + after;
-    updateEditorContent(selectedNote.id, newText, {
-      start: start + 2,
-      end: start + 2 + sel.length,
-    });
-  }, [selectedNote, updateEditorContent]);
-
-  const applyTextColor = useCallback(
-    (hex6: string) => {
-      if (!selectedNote) return;
-      const ta = textareaRef.current;
-      if (!ta) return;
-
-      ta.focus();
-      const start = ta.selectionStart ?? 0;
-      const end = ta.selectionEnd ?? 0;
-      const text = selectedNote.content;
-      const h = hex6.replace(/^#/, "").slice(0, 6);
-      if (!/^[0-9a-fA-F]{6}$/.test(h)) return;
-
-      const before = text.slice(0, start);
-      const sel = text.slice(start, end);
-      const after = text.slice(end);
-      const inner = sel || "text";
-
-      const open = `⟦c#${h}⟧`;
-      const close = `⟦/c⟧`;
-      const newText = before + open + inner + close + after;
-      const selStart = start + open.length;
-      updateEditorContent(selectedNote.id, newText, {
-        start: selStart,
-        end: selStart + inner.length,
+      if (!heading3) heading3 = selectionInsideHeading3();
+      setFmtActive({
+        bold: document.queryCommandState("bold"),
+        italic: document.queryCommandState("italic"),
+        underline: document.queryCommandState("underline"),
+        strikeThrough: document.queryCommandState("strikeThrough"),
+        unorderedList: document.queryCommandState("insertUnorderedList"),
+        orderedList: document.queryCommandState("insertOrderedList"),
+        heading3,
       });
-      setColorPickOpen(false);
+    } catch {
+      // ignore
+    }
+  }, [isEditing, selectionInEditor, selectionInsideHeading3]);
+
+  useLayoutEffect(() => {
+    if (!isEditing || !editorRef.current || !selectedNoteId) return;
+    const n = notesRef.current.find((x) => x.id === selectedNoteId);
+    if (!n) return;
+    editorRef.current.innerHTML = noteContentToEditorHtml(n.content);
+    lastAutoSavedBodyRef.current = normalizeNoteHtmlForSave(
+      editorRef.current.innerHTML,
+    );
+  }, [isEditing, editorSession, selectedNoteId]);
+
+  useEffect(() => {
+    if (!isEditing) return;
+    document.addEventListener("selectionchange", refreshFmt);
+    return () => document.removeEventListener("selectionchange", refreshFmt);
+  }, [isEditing, refreshFmt]);
+
+  const runFormatCommand = useCallback(
+    (command: string, value?: string) => {
+      editorRef.current?.focus();
+      try {
+        document.execCommand(command, false, value);
+      } catch {
+        /* ignore */
+      }
+      refreshFmt();
     },
-    [selectedNote, updateEditorContent],
+    [refreshFmt],
   );
 
-  const applyFontSize = useCallback(
+  const normalizePanelHex = useCallback((raw: string): string | null => {
+    let h = raw.replace(/^#/, "").trim();
+    if (/^[0-9a-fA-F]{3}$/.test(h)) {
+      h = h
+        .split("")
+        .map((c) => c + c)
+        .join("");
+    }
+    if (!/^[0-9a-fA-F]{6}$/.test(h)) return null;
+    return `#${h.toLowerCase()}`;
+  }, []);
+
+  const applyForeColor = useCallback(
+    (hex: string) => {
+      const full = normalizePanelHex(hex);
+      if (!full) return;
+      setFormatPanelColor(full);
+      editorRef.current?.focus();
+      try {
+        document.execCommand("styleWithCSS", false, "true");
+      } catch {
+        /* ignore */
+      }
+      try {
+        document.execCommand("foreColor", false, full);
+      } catch {
+        /* ignore */
+      }
+      refreshFmt();
+    },
+    [normalizePanelHex, refreshFmt],
+  );
+
+  const applyHighlightColor = useCallback(() => {
+    editorRef.current?.focus();
+    try {
+      document.execCommand("styleWithCSS", false, "true");
+    } catch {
+      /* ignore */
+    }
+    let ok = false;
+    try {
+      ok = document.execCommand("hiliteColor", false, "#fef08a");
+    } catch {
+      /* ignore */
+    }
+    if (!ok) {
+      try {
+        document.execCommand("backColor", false, "#fef08a");
+      } catch {
+        /* ignore */
+      }
+    }
+    refreshFmt();
+  }, [refreshFmt]);
+
+  const applyFontSizePx = useCallback(
     (px: number) => {
-      if (!selectedNote) return;
-      const ta = textareaRef.current;
-      if (!ta) return;
-
-      ta.focus();
-      const start = ta.selectionStart ?? 0;
-      const end = ta.selectionEnd ?? 0;
-      const text = selectedNote.content;
-      const size = Math.min(48, Math.max(10, px));
-
-      const before = text.slice(0, start);
-      const sel = text.slice(start, end);
-      const after = text.slice(end);
-      const inner = sel || "text";
-
-      const open = `⟦s${size}⟧`;
-      const close = `⟦/s⟧`;
-      const newText = before + open + inner + close + after;
-      const selStart = start + open.length;
-      updateEditorContent(selectedNote.id, newText, {
-        start: selStart,
-        end: selStart + inner.length,
-      });
-    },
-    [selectedNote, updateEditorContent],
-  );
-
-  const applyUnderline = useCallback(() => {
-    if (!selectedNote) return;
-    const ta = textareaRef.current;
-    if (!ta) return;
-
-    ta.focus();
-    const start = ta.selectionStart ?? 0;
-    const end = ta.selectionEnd ?? 0;
-    const text = selectedNote.content;
-
-    const before = text.slice(0, start);
-    const sel = text.slice(start, end);
-    const after = text.slice(end);
-
-    if (start === end) {
-      const newText = before + "____" + after;
-      updateEditorContent(selectedNote.id, newText, { start: start + 2, end: start + 2 });
-      return;
-    }
-
-    const newText = before + `__${sel}__` + after;
-    updateEditorContent(selectedNote.id, newText, { start: start + 2, end: end + 2 });
-  }, [selectedNote, updateEditorContent]);
-
-  const applyStrike = useCallback(() => {
-    if (!selectedNote) return;
-    const ta = textareaRef.current;
-    if (!ta) return;
-
-    ta.focus();
-    const start = ta.selectionStart ?? 0;
-    const end = ta.selectionEnd ?? 0;
-    const text = selectedNote.content;
-
-    const before = text.slice(0, start);
-    const sel = text.slice(start, end);
-    const after = text.slice(end);
-
-    if (start === end) {
-      const newText = before + "~~~~" + after;
-      updateEditorContent(selectedNote.id, newText, { start: start + 2, end: start + 2 });
-      return;
-    }
-
-    const newText = before + `~~${sel}~~` + after;
-    updateEditorContent(selectedNote.id, newText, { start: start + 2, end: end + 2 });
-  }, [selectedNote, updateEditorContent]);
-
-  const applyCode = useCallback(() => {
-    if (!selectedNote) return;
-    const ta = textareaRef.current;
-    if (!ta) return;
-
-    ta.focus();
-    const start = ta.selectionStart ?? 0;
-    const end = ta.selectionEnd ?? 0;
-    const text = selectedNote.content;
-
-    const before = text.slice(0, start);
-    const sel = text.slice(start, end);
-    const after = text.slice(end);
-
-    if (start === end) {
-      const newText = before + "``" + after;
-      updateEditorContent(selectedNote.id, newText, { start: start + 1, end: start + 1 });
-      return;
-    }
-
-    const newText = before + `\`${sel}\`` + after;
-    updateEditorContent(selectedNote.id, newText, { start: start + 1, end: end + 1 });
-  }, [selectedNote, updateEditorContent]);
-
-  const toggleNumberedList = useCallback(() => {
-    if (!selectedNote) return;
-    const ta = textareaRef.current;
-    if (!ta) return;
-
-    ta.focus();
-    const start = ta.selectionStart ?? 0;
-    const end = ta.selectionEnd ?? 0;
-    const text = selectedNote.content;
-
-    if (start === end) {
-      const lineStart = text.lastIndexOf("\n", start - 1) + 1;
-      const currentLine = text.slice(lineStart);
-      const indentMatch = currentLine.match(/^(\s*)/);
-      const indent = indentMatch?.[1] ?? "";
-      const rest = currentLine.slice(indent.length);
-
-      const newText = text.slice(0, lineStart) + indent + "1. " + rest;
-      const cursor = lineStart + indent.length + 3;
-      updateEditorContent(selectedNote.id, newText, { start: cursor, end: cursor });
-      return;
-    }
-
-    const blockStart = text.lastIndexOf("\n", start - 1) + 1;
-    let blockEnd = text.indexOf("\n", end);
-    if (blockEnd === -1) blockEnd = text.length;
-
-    const block = text.slice(blockStart, blockEnd);
-    const lines = block.split("\n");
-
-    const allNumbered = lines.length > 0 && lines.every((l) => NUMBERED_LINE_RE.test(l));
-
-    const transformedLines = lines.map((l) => {
-      if (allNumbered) {
-        return l.replace(NUMBERED_LINE_RE, "$1");
+      const size = Math.min(100, Math.max(1, Math.round(Number(px)) || 16));
+      const root = editorRef.current;
+      root?.focus();
+      const sel = window.getSelection();
+      if (!root || !sel || sel.rangeCount === 0) return;
+      const r = sel.getRangeAt(0);
+      const span = document.createElement("span");
+      span.style.fontSize = `${size}px`;
+      if (r.collapsed) {
+        span.appendChild(document.createTextNode("\u200b"));
+        r.insertNode(span);
+        const z = span.firstChild;
+        if (z) {
+          const nr = document.createRange();
+          nr.setStart(z, 1);
+          nr.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(nr);
+        }
+      } else {
+        try {
+          r.surroundContents(span);
+        } catch {
+          const frag = r.extractContents();
+          span.appendChild(frag);
+          r.insertNode(span);
+        }
+        sel.removeAllRanges();
+        const nr = document.createRange();
+        nr.selectNodeContents(span);
+        nr.collapse(false);
+        sel.addRange(nr);
       }
-
-      const indentMatch = l.match(/^(\s*)/);
-      const indent = indentMatch?.[1] ?? "";
-      const rest = l.slice(indent.length);
-      return `${indent}1. ${rest}`;
-    });
-
-    const newBlock = transformedLines.join("\n");
-    const newText = text.slice(0, blockStart) + newBlock + text.slice(blockEnd);
-
-    updateEditorContent(selectedNote.id, newText, {
-      start: blockStart,
-      end: blockStart + newBlock.length,
-    });
-  }, [selectedNote, updateEditorContent]);
-
-  const insertHeading = useCallback(() => {
-    if (!selectedNote) return;
-    const ta = textareaRef.current;
-    if (!ta) return;
-
-    ta.focus();
-    const start = ta.selectionStart ?? 0;
-    const text = selectedNote.content;
-    const lineStart = text.lastIndexOf("\n", start - 1) + 1;
-    const before = text.slice(0, lineStart);
-    const after = text.slice(lineStart);
-    const newText = before + "## " + after;
-    const cursor = lineStart + 3;
-    updateEditorContent(selectedNote.id, newText, { start: cursor, end: cursor });
-  }, [selectedNote, updateEditorContent]);
-
-  const handleNoteKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key !== "Enter" || !selectedNote) return;
-      const ta = e.currentTarget;
-      const start = ta.selectionStart;
-      const end = ta.selectionEnd;
-      if (start !== end) return;
-
-      const text = selectedNote.content;
-      const lineStart = text.lastIndexOf("\n", start - 1) + 1;
-      const nextNl = text.indexOf("\n", start);
-      const lineEnd = nextNl === -1 ? text.length : nextNl;
-      const line = text.slice(lineStart, lineEnd);
-
-      const listMatch = line.match(/^(\s*)(?:[-*•]|\d+\.)\s+(.*)$/);
-      if (!listMatch) return;
-
-      const indent = listMatch[1];
-      e.preventDefault();
-      const insert = `\n${indent}• `;
-      const newText = text.slice(0, start) + insert + text.slice(start);
-      const newPos = start + insert.length;
-      updateEditorContent(selectedNote.id, newText, { start: newPos, end: newPos });
+      refreshFmt();
     },
-    [selectedNote, updateEditorContent],
+    [refreshFmt],
   );
+
+  const wrapSelectionInCode = useCallback(() => {
+    const root = editorRef.current;
+    root?.focus();
+    const sel = window.getSelection();
+    if (!root || !sel || sel.rangeCount === 0) return;
+    const r = sel.getRangeAt(0);
+    const code = document.createElement("code");
+    code.className =
+      "rounded bg-muted px-1 py-0.5 text-[0.9em] font-mono";
+    if (r.collapsed) {
+      code.textContent = "code";
+      r.insertNode(code);
+    } else {
+      try {
+        r.surroundContents(code);
+      } catch {
+        const frag = r.extractContents();
+        code.appendChild(frag);
+        r.insertNode(code);
+      }
+    }
+    sel.removeAllRanges();
+    const nr = document.createRange();
+    nr.selectNodeContents(code);
+    sel.addRange(nr);
+    refreshFmt();
+  }, [refreshFmt]);
+
+  const toggleHeadingBlock = useCallback(() => {
+    const root = editorRef.current;
+    root?.focus();
+    try {
+      document.execCommand("styleWithCSS", false, "true");
+    } catch {
+      /* ignore */
+    }
+    let inH3 = false;
+    try {
+      const raw = (
+        document.queryCommandValue("formatBlock") || ""
+      ).toLowerCase();
+      inH3 =
+        raw.includes("h3") ||
+        raw.includes("heading 3") ||
+        raw === "3";
+    } catch {
+      /* ignore */
+    }
+    if (!inH3) inH3 = selectionInsideHeading3();
+    try {
+      if (inH3) {
+        document.execCommand("formatBlock", false, "p");
+      } else {
+        document.execCommand("formatBlock", false, "h3");
+      }
+    } catch {
+      /* ignore */
+    }
+    refreshFmt();
+  }, [refreshFmt, selectionInsideHeading3]);
+
+  const beginEditingNote = useCallback(() => {
+    setEditorSession((s) => s + 1);
+    setIsEditing(true);
+  }, []);
+
+  const syncEditorToState = useCallback(() => {
+    if (!selectedNoteId) return;
+    const html = editorRef.current?.innerHTML ?? "";
+    setNotes((prev) =>
+      prev.map((n) => (n.id === selectedNoteId ? { ...n, content: html } : n)),
+    );
+  }, [selectedNoteId]);
 
   if (!token) {
     return (
@@ -1172,38 +1103,86 @@ export default function NotesPage() {
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
                   {editingMainTitle ? (
-                    <Input
-                      aria-label="Note heading"
-                      autoFocus
-                      className="min-w-0 flex-1 font-semibold"
-                      placeholder="Note title"
-                      value={selectedNote.title}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setNotes((prev) =>
-                          prev.map((n) =>
-                            n.id === selectedNote.id ? { ...n, title: v } : n,
-                          ),
-                        );
-                      }}
-                      onBlur={(e) => {
-                        const t = e.target.value.trim() || "Untitled Note";
-                        void updateNote(
-                          selectedNote.id,
-                          { title: t },
-                          { silent: true },
-                        );
-                        setEditingMainTitle(false);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Escape") setEditingMainTitle(false);
-                      }}
-                    />
+                    <>
+                      <div className="flex min-w-0 flex-1 items-center gap-1">
+                        <Input
+                          aria-label="Note heading"
+                          autoFocus
+                          className="min-w-0 flex-1 font-semibold"
+                          placeholder="Note title"
+                          value={selectedNote.title}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setNotes((prev) =>
+                              prev.map((n) =>
+                                n.id === selectedNote.id
+                                  ? { ...n, title: v }
+                                  : n,
+                              ),
+                            );
+                          }}
+                          onBlur={(e) => {
+                            const t = e.target.value.trim() || "Untitled Note";
+                            void updateNote(
+                              selectedNote.id,
+                              { title: t },
+                              { silent: true },
+                            );
+                            setEditingMainTitle(false);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Escape") setEditingMainTitle(false);
+                          }}
+                        />
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="ghost"
+                          className="h-8 w-8 shrink-0"
+                          title="Copy title"
+                          onClick={() =>
+                            void copyText(
+                              selectedNote.title,
+                              `editor-title-${selectedNote.id}`,
+                            )
+                          }
+                        >
+                          {copiedKey === `editor-title-${selectedNote.id}` ? (
+                            <Check className="h-4 w-4 text-emerald-500" />
+                          ) : (
+                            <Copy className="h-4 w-4" />
+                          )}
+                          <span className="sr-only">Copy title</span>
+                        </Button>
+                      </div>
+                    </>
                   ) : (
                     <>
-                      <span className="min-w-0 flex-1 truncate font-semibold">
-                        {selectedNote.title}
-                      </span>
+                      <div className="flex min-w-0 flex-1 items-center gap-1">
+                        <span className="min-w-0 truncate font-semibold">
+                          {selectedNote.title}
+                        </span>
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="ghost"
+                          className="h-8 w-8 shrink-0"
+                          title="Copy title"
+                          onClick={() =>
+                            void copyText(
+                              selectedNote.title,
+                              `editor-title-${selectedNote.id}`,
+                            )
+                          }
+                        >
+                          {copiedKey === `editor-title-${selectedNote.id}` ? (
+                            <Check className="h-4 w-4 text-emerald-500" />
+                          ) : (
+                            <Copy className="h-4 w-4" />
+                          )}
+                          <span className="sr-only">Copy title</span>
+                        </Button>
+                      </div>
                       <Button
                         type="button"
                         size="icon"
@@ -1216,25 +1195,6 @@ export default function NotesPage() {
                       </Button>
                     </>
                   )}
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    title="Copy title"
-                    onClick={() =>
-                      void copyText(
-                        selectedNote.title,
-                        `editor-title-${selectedNote.id}`,
-                      )
-                    }
-                  >
-                    {copiedKey === `editor-title-${selectedNote.id}` ? (
-                      <Check className="h-4 w-4 text-emerald-500" />
-                    ) : (
-                      <Copy className="h-4 w-4" />
-                    )}
-                    <span className="sr-only">Copy title</span>
-                  </Button>
                 </div>
                 <div className="min-w-0 space-y-2">
                   <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -1264,12 +1224,13 @@ export default function NotesPage() {
                           className="h-7 text-xs"
                           title="Copy note body"
                           onMouseDown={(e) => e.preventDefault()}
-                          onClick={() =>
-                            void copyText(
-                              selectedNote.content,
-                              `editor-body-${selectedNote.id}`,
-                            )
-                          }
+                          onClick={() => {
+                            const c = selectedNote.content;
+                            const plain = isProbablyHtml(c)
+                              ? htmlToPlainText(c)
+                              : c;
+                            void copyText(plain, `editor-body-${selectedNote.id}`);
+                          }}
                         >
                           {copiedKey === `editor-body-${selectedNote.id}` ? (
                             <>
@@ -1285,207 +1246,292 @@ export default function NotesPage() {
                         </Button>
 
                         {isEditing && (
-                          <>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className="h-7 w-9 px-0"
-                              title="Bold (**)"
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={applyBold}
-                            >
-                              <span className="font-bold">B</span>
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className="h-7 w-9 px-0 italic"
-                              title="Italic (*)"
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={applyItalic}
-                            >
-                              I
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className="h-7 w-9 px-0 underline"
-                              title="Underline (__)"
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={applyUnderline}
-                            >
-                              U
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className="h-7 w-9 px-0"
-                              title="Highlight (==)"
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={applyHighlight}
-                            >
-                              <Highlighter className="h-3.5 w-3.5" />
-                            </Button>
+                          <div className="relative" ref={formatMenuRef}>
                             <Button
                               type="button"
                               size="sm"
                               variant="outline"
                               className={cn(
-                                "h-7 w-9 px-0",
-                                colorPickOpen && "border-primary ring-1 ring-primary/30",
+                                "h-7 gap-1 px-2 text-xs",
+                                formatMenuOpen &&
+                                  "border-primary ring-1 ring-primary/30",
                               )}
-                              title="Text color"
+                              title="Text formatting"
                               onMouseDown={(e) => e.preventDefault()}
-                              onClick={() => setColorPickOpen((o) => !o)}
+                              onClick={() => setFormatMenuOpen((o) => !o)}
                             >
-                              <Palette className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className="h-7 w-9 px-0"
-                              title="Bullets (• )"
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={toggleBullets}
-                            >
-                              •
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className="h-7 gap-1 px-2 text-xs"
-                              title="More tools"
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={() => setMoreToolsOpen((o) => !o)}
-                            >
-                              More
+                              <Type className="h-3.5 w-3.5" />
+                              Format
                               <ChevronDown
                                 className={cn(
                                   "h-3.5 w-3.5 transition-transform",
-                                  moreToolsOpen && "rotate-180",
+                                  formatMenuOpen && "rotate-180",
                                 )}
                               />
                             </Button>
-                          </>
+                            {formatMenuOpen && (
+                              <div
+                                className="absolute right-0 z-50 mt-1 w-[min(100vw-1rem,26rem)] max-h-[min(90vh,640px)] overflow-y-auto rounded-md border border-border bg-popover p-2 shadow-md"
+                                onMouseDown={(e) => e.preventDefault()}
+                              >
+                                <div className="mb-2 flex flex-wrap gap-1">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className={cn(
+                                      "h-8 w-9 px-0",
+                                      fmtActive.bold &&
+                                        "border-primary bg-primary/10",
+                                    )}
+                                    title="Bold"
+                                    onClick={() =>
+                                      runFormatCommand("bold")
+                                    }
+                                  >
+                                    <span className="font-bold">B</span>
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className={cn(
+                                      "h-8 w-9 px-0 italic",
+                                      fmtActive.italic &&
+                                        "border-primary bg-primary/10",
+                                    )}
+                                    title="Italic"
+                                    onClick={() =>
+                                      runFormatCommand("italic")
+                                    }
+                                  >
+                                    I
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className={cn(
+                                      "h-8 w-9 px-0 underline",
+                                      fmtActive.underline &&
+                                        "border-primary bg-primary/10",
+                                    )}
+                                    title="Underline"
+                                    onClick={() =>
+                                      runFormatCommand("underline")
+                                    }
+                                  >
+                                    U
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className={cn(
+                                      "h-8 w-9 px-0 line-through",
+                                      fmtActive.strikeThrough &&
+                                        "border-primary bg-primary/10",
+                                    )}
+                                    title="Strikethrough"
+                                    onClick={() =>
+                                      runFormatCommand("strikeThrough")
+                                    }
+                                  >
+                                    S
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-8 w-9 px-0"
+                                    title="Highlight selection"
+                                    onClick={applyHighlightColor}
+                                  >
+                                    <Highlighter className="h-3.5 w-3.5" />
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className={cn(
+                                      "h-8 w-9 px-0",
+                                      fmtActive.unorderedList &&
+                                        "border-primary bg-primary/10",
+                                    )}
+                                    title="Bullet list"
+                                    onClick={() =>
+                                      runFormatCommand(
+                                        "insertUnorderedList",
+                                      )
+                                    }
+                                  >
+                                    •
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className={cn(
+                                      "h-8 min-w-9 px-1 text-xs",
+                                      fmtActive.orderedList &&
+                                        "border-primary bg-primary/10",
+                                    )}
+                                    title="Numbered list"
+                                    onClick={() =>
+                                      runFormatCommand("insertOrderedList")
+                                    }
+                                  >
+                                    1.
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className={cn(
+                                      "h-8 px-2 text-xs",
+                                      fmtActive.heading3 &&
+                                        "border-primary bg-primary/10",
+                                    )}
+                                    title="Heading — click again to remove"
+                                    onClick={toggleHeadingBlock}
+                                  >
+                                    H3
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-8 font-mono text-xs"
+                                    title="Inline code"
+                                    onClick={wrapSelectionInCode}
+                                  >
+                                    &lt;/&gt;
+                                  </Button>
+                                </div>
+                                <div className="mb-2 space-y-2 border-t border-border/60 pt-2">
+                                  <div className="flex items-center gap-2">
+                                    <Palette className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                    <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                                      Color
+                                    </span>
+                                  </div>
+                                  <NoteColorPicker
+                                    value={formatPanelColor}
+                                    onChange={applyForeColor}
+                                  />
+                                </div>
+                                <div className="flex flex-col gap-2 border-t border-border/60 pt-2 sm:flex-row sm:flex-wrap sm:items-end">
+                                  <div className="flex flex-col gap-1">
+                                    <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                                      Size (px)
+                                    </span>
+                                    <Select
+                                      onValueChange={(v) => {
+                                        applyFontSizePx(Number(v));
+                                        setCustomFontSize(v);
+                                      }}
+                                    >
+                                      <SelectTrigger className="h-8 w-[110px] text-xs">
+                                        <SelectValue placeholder="Presets" />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {FONT_SIZE_OPTIONS.map((px) => (
+                                          <SelectItem
+                                            key={px}
+                                            value={String(px)}
+                                          >
+                                            {px}px
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                  <div className="flex flex-1 flex-wrap items-end gap-1">
+                                    <div className="flex min-w-0 flex-col gap-1">
+                                      <Label
+                                        htmlFor="note-custom-font-size"
+                                        className="text-[10px] text-muted-foreground"
+                                      >
+                                        Custom (1–100)
+                                      </Label>
+                                      <Input
+                                        id="note-custom-font-size"
+                                        type="number"
+                                        min={1}
+                                        max={100}
+                                        className="h-8 w-20 text-xs"
+                                        value={customFontSize}
+                                        onChange={(e) =>
+                                          setCustomFontSize(e.target.value)
+                                        }
+                                        onKeyDown={(e) => {
+                                          if (e.key !== "Enter") return;
+                                          e.preventDefault();
+                                          const n = Number(customFontSize);
+                                          if (!Number.isFinite(n)) return;
+                                          applyFontSizePx(n);
+                                        }}
+                                      />
+                                    </div>
+                                    <Button
+                                      type="button"
+                                      variant="secondary"
+                                      size="sm"
+                                      className="h-8 shrink-0 text-xs"
+                                      onClick={() => {
+                                        const n = Number(customFontSize);
+                                        if (!Number.isFinite(n)) return;
+                                        applyFontSizePx(n);
+                                      }}
+                                    >
+                                      Apply
+                                    </Button>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         )}
                       </div>
-                      {isEditing && colorPickOpen && (
-                        <div className="flex flex-wrap items-center justify-end gap-1.5 rounded-md border border-border/80 bg-muted/30 p-2">
-                          <span className="w-full text-[10px] font-medium uppercase tracking-wide text-muted-foreground sm:w-auto">
-                            Colors
-                          </span>
-                          {NOTE_TEXT_COLORS.map((c) => (
-                            <button
-                              key={c}
-                              type="button"
-                              title={`#${c}`}
-                              className="h-7 w-7 shrink-0 rounded-md border border-border shadow-sm ring-offset-2 transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                              style={{ backgroundColor: `#${c}` }}
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={() => applyTextColor(c)}
-                            />
-                          ))}
-                        </div>
-                      )}
-                      {isEditing && moreToolsOpen && (
-                        <div className="flex flex-col gap-2 rounded-md border border-border/80 bg-muted/30 p-1.5">
-                          <div className="flex flex-wrap justify-end gap-1">
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className="h-7 text-xs"
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={insertHeading}
-                            >
-                              Heading
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className="h-7 text-xs"
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={toggleNumberedList}
-                            >
-                              1. List
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className="h-7 text-xs line-through"
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={applyStrike}
-                            >
-                              Strike
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className="h-7 font-mono text-xs"
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={applyCode}
-                            >
-                              Code
-                            </Button>
-                          </div>
-                          <div className="flex flex-wrap items-center justify-end gap-1 border-t border-border/50 pt-2">
-                            <span className="mr-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                              Size (px)
-                            </span>
-                            {FONT_SIZE_OPTIONS.map((px) => (
-                              <Button
-                                key={px}
-                                type="button"
-                                size="sm"
-                                variant="secondary"
-                                className="h-7 min-w-8 px-2 text-xs"
-                                onMouseDown={(e) => e.preventDefault()}
-                                onClick={() => applyFontSize(px)}
-                              >
-                                {px}
-                              </Button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
                     </div>
                   </div>
                   {isEditing ? (
-                    <textarea
-                      className="min-h-[280px] w-full min-w-0 max-w-full cursor-text resize-y break-words rounded-lg border bg-background px-3 py-2 text-sm [overflow-wrap:anywhere] sm:min-h-[22rem]"
-                      ref={textareaRef}
-                      value={selectedNote.content}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setNotes((prev) =>
-                          prev.map((n) =>
-                            n.id === selectedNote.id ? { ...n, content: v } : n,
-                          ),
-                        );
-                      }}
-                      onKeyDown={handleNoteKeyDown}
-                      onBlur={(e) => {
+                    <div
+                      ref={editorRef}
+                      role="textbox"
+                      tabIndex={0}
+                      aria-multiline
+                      aria-label="Note body editor"
+                      contentEditable
+                      suppressContentEditableWarning
+                      className={cn(
+                        "min-h-[280px] w-full min-w-0 max-w-full cursor-text overflow-x-hidden overflow-y-auto rounded-lg border bg-background px-3 py-2 text-sm text-foreground outline-none [overflow-wrap:anywhere] focus-visible:ring-2 focus-visible:ring-ring sm:min-h-[22rem]",
+                        NOTE_HTML_VIEW_CLASS,
+                      )}
+                      onInput={syncEditorToState}
+                      onMouseUp={refreshFmt}
+                      onKeyUp={refreshFmt}
+                      onBlur={() => {
                         void (async () => {
+                          const raw = editorRef.current?.innerHTML ?? "";
+                          const normalized =
+                            normalizeNoteHtmlForSave(raw);
+                          setNotes((prev) =>
+                            prev.map((n) =>
+                              n.id === selectedNote.id
+                                ? { ...n, content: normalized }
+                                : n,
+                            ),
+                          );
                           await persistNoteBody(
                             selectedNote.id,
-                            e.target.value,
+                            normalized,
                             true,
                           );
                           setIsEditing(false);
-                          setMoreToolsOpen(false);
-                          setColorPickOpen(false);
+                          setFormatMenuOpen(false);
                         })();
                       }}
-                      placeholder="Click outside to save and lock. Auto-saves while you type. Highlight ==text==, color ⟦c#RRGGBB⟧text⟦/c⟧, size ⟦s18⟧text⟦/s⟧ — or use the toolbar."
                     />
                   ) : (
                     <div
@@ -1495,29 +1541,23 @@ export default function NotesPage() {
                       onKeyDown={(e) => {
                         if (e.key === "Enter" || e.key === " ") {
                           e.preventDefault();
-                          setIsEditing(true);
+                          beginEditingNote();
                           requestAnimationFrame(() =>
-                            textareaRef.current?.focus(),
+                            editorRef.current?.focus(),
                           );
                         }
                       }}
                       onClick={(e) => {
                         if ((e.target as HTMLElement).closest("a")) return;
-                        setIsEditing(true);
+                        beginEditingNote();
                         requestAnimationFrame(() =>
-                          textareaRef.current?.focus(),
+                          editorRef.current?.focus(),
                         );
                       }}
                       className="min-h-[280px] w-full min-w-0 max-w-full cursor-pointer select-text overflow-x-hidden overflow-y-auto rounded-lg border bg-background px-3 py-2 text-sm text-foreground [overflow-wrap:anywhere] sm:min-h-[22rem]"
                       aria-live="polite"
                     >
-                      {selectedNote.content.trim() ? (
-                        renderPreviewMarkdown(selectedNote.content)
-                      ) : (
-                        <span className="text-muted-foreground italic">
-                          Click here to write…
-                        </span>
-                      )}
+                      {renderReadNoteBody(selectedNote.content)}
                     </div>
                   )}
                 </div>

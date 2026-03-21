@@ -1,12 +1,5 @@
 import React from "react";
-
-/** Match http(s) URLs in plain text (stops at common delimiters). */
-const URL_REGEX = /https?:\/\/[^\s<>"'`)\]]+/gi;
-
-/** Strip trailing punctuation that often wraps URLs in prose. */
-function trimUrlHref(raw: string): string {
-  return raw.replace(/[.,;:!?)'"\]]+$/u, "");
-}
+import { LINKIFY_URL_REGEX, trimUrlHref } from "./linkify-url";
 
 /**
  * Renders plain text with http(s) URLs as external links.
@@ -19,7 +12,7 @@ export function linkifyText(text: string): React.ReactNode {
   let last = 0;
   let key = 0;
 
-  for (const match of text.matchAll(URL_REGEX)) {
+  for (const match of text.matchAll(LINKIFY_URL_REGEX)) {
     const raw = match[0];
     const start = match.index ?? 0;
     if (start > last) {
