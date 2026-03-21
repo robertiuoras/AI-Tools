@@ -47,9 +47,13 @@ function categoryBadgeClass(category: string) {
   return categoryColors[category] ?? categoryColors.Other;
 }
 
-/** Lets long names like "DeepLearning.AI" wrap at dots instead of mid-word. */
-function titleWithSoftBreaks(name: string): string {
+/**
+ * Softer wrap points for product names: camelCase boundaries, then dots/slashes.
+ * Helps avoid splits like "DeepLearnin" / "g.AI".
+ */
+function titleDisplayBreaks(name: string): string {
   return name
+    .replace(/([a-z\d])([A-Z])/g, "$1\u200B$2")
     .replace(/\.(?=\S)/g, ".\u200B")
     .replace(/\/(?=\S)/g, "/\u200B");
 }
@@ -192,12 +196,9 @@ export function ToolCard({
     }
   };
 
-  const maxDescriptionLength = 120;
-  const shouldTruncate = tool.description.length > maxDescriptionLength;
-  const displayDescription =
-    descriptionExpanded || !shouldTruncate
-      ? tool.description
-      : tool.description.substring(0, maxDescriptionLength) + "...";
+  /** Full text from API/DB — never substring-truncate; preview uses line-clamp only. */
+  const fullDescription = String(tool.description ?? "").trim();
+  const needsExpandToggle = fullDescription.length > 100;
 
   const formatVisits = (visits?: number | null) => {
     if (!visits) return null;
@@ -266,7 +267,7 @@ export function ToolCard({
       </div>
     ) : null;
 
-  const metaChips = (
+  const trafficVisitsRow = (
     <>
       {tool.traffic && tool.traffic !== "unknown" && (
         <span className="inline-flex items-center gap-1 whitespace-nowrap text-xs text-muted-foreground">
@@ -279,11 +280,22 @@ export function ToolCard({
           ~{formatVisits(tool.estimatedVisits)}/mo
         </span>
       )}
-      {tool.revenue && (
-        <Badge variant="outline" className="shrink-0 text-[10px] capitalize">
-          {tool.revenue}
-        </Badge>
-      )}
+    </>
+  );
+
+  const revenueBadge = tool.revenue ? (
+    <Badge
+      variant="outline"
+      className="shrink-0 text-[10px] capitalize"
+    >
+      {tool.revenue}
+    </Badge>
+  ) : null;
+
+  const metaChips = (
+    <>
+      {trafficVisitsRow}
+      {revenueBadge}
     </>
   );
 
@@ -304,7 +316,7 @@ export function ToolCard({
                     className="min-w-0 max-w-full text-balance text-base font-semibold leading-tight text-foreground [overflow-wrap:anywhere] [word-break:normal]"
                     title={tool.name}
                   >
-                    {titleWithSoftBreaks(tool.name)}
+                    {titleDisplayBreaks(tool.name)}
                   </h3>
                   <Badge
                     variant="outline"
@@ -389,10 +401,23 @@ export function ToolCard({
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, delay: index * 0.05 }}
-      className="h-full min-h-0 min-w-0"
+      className={cn(
+        "min-w-0",
+        descriptionExpanded ? "h-auto min-h-0" : "h-full min-h-0",
+      )}
     >
-      <Card className="group relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-border/50 bg-card transition-all duration-300 hover:border-primary/50 hover:shadow-lg hover:shadow-primary/10 dark:hover:shadow-primary/20">
-        <CardContent className="flex min-h-0 min-w-0 flex-1 flex-col gap-0 overflow-hidden p-4 sm:p-5">
+      <Card
+        className={cn(
+          "group relative flex h-full min-h-0 min-w-0 flex-col border-border/50 bg-card transition-all duration-300 hover:border-primary/50 hover:shadow-lg hover:shadow-primary/10 dark:hover:shadow-primary/20",
+          descriptionExpanded ? "overflow-visible" : "overflow-hidden",
+        )}
+      >
+        <CardContent
+          className={cn(
+            "flex min-h-0 min-w-0 flex-1 flex-col gap-0 p-4 sm:p-5",
+            descriptionExpanded ? "overflow-visible" : "overflow-hidden",
+          )}
+        >
           <div className="mb-3 flex min-w-0 items-start gap-2">
             <div className="flex min-w-0 flex-1 items-start gap-3">
               {tool.logoUrl ? (
@@ -415,10 +440,10 @@ export function ToolCard({
               )}
               <div className="min-w-0 flex-1">
                 <h3
-                  className="mb-1 line-clamp-2 text-pretty text-base font-semibold leading-snug text-foreground [overflow-wrap:anywhere] [word-break:normal]"
+                  className="mb-1 line-clamp-3 text-pretty text-base font-semibold leading-snug text-foreground [overflow-wrap:anywhere] [word-break:normal]"
                   title={tool.name}
                 >
-                  {titleWithSoftBreaks(tool.name)}
+                  {titleDisplayBreaks(tool.name)}
                 </h3>
                 <Badge
                   variant="outline"
@@ -449,16 +474,24 @@ export function ToolCard({
             </Button>
           </div>
 
-          <div className="mb-3 min-h-0 min-w-0 flex-1 overflow-hidden">
+          <div
+            className={cn(
+              "mb-3 min-w-0 flex-1",
+              descriptionExpanded
+                ? "max-h-none overflow-visible"
+                : "min-h-0 overflow-hidden",
+            )}
+          >
             <p
               className={cn(
                 "text-sm leading-relaxed text-muted-foreground [overflow-wrap:anywhere]",
-                !descriptionExpanded && "line-clamp-4",
+                descriptionExpanded && "whitespace-pre-wrap break-words",
+                !descriptionExpanded && needsExpandToggle && "line-clamp-4",
               )}
             >
-              {displayDescription}
+              {fullDescription}
             </p>
-            {shouldTruncate && (
+            {needsExpandToggle && (
               <button
                 type="button"
                 onClick={() => setDescriptionExpanded(!descriptionExpanded)}
@@ -499,8 +532,13 @@ export function ToolCard({
               ) : null}
             </div>
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-              {metaChips}
+              {trafficVisitsRow}
             </div>
+            {revenueBadge ? (
+              <div className="flex w-full justify-center pt-0.5">
+                {revenueBadge}
+              </div>
+            ) : null}
           </div>
         </CardContent>
 

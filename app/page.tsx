@@ -34,6 +34,24 @@ type SortOrder = "asc" | "desc";
 
 const TOOLS_VIEW_STORAGE_KEY = "ai-tools-view";
 
+/** Match Tailwind breakpoints for tool grid columns (sm/lg/xl). */
+function useToolGridColumnCount() {
+  const [cols, setCols] = useState(4);
+  useEffect(() => {
+    const update = () => {
+      const w = window.innerWidth;
+      if (w < 640) setCols(1);
+      else if (w < 1024) setCols(2);
+      else if (w < 1280) setCols(3);
+      else setCols(4);
+    };
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+  return cols;
+}
+
 function HomePageContent() {
   const router = useRouter();
   const [tools, setTools] = useState<Tool[]>([]);
@@ -49,6 +67,7 @@ function HomePageContent() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [tourReplayNonce, setTourReplayNonce] = useState(0);
   const [viewMode, setViewMode] = useState<ToolCardLayout>("grid");
+  const toolGridCols = useToolGridColumnCount();
 
   useEffect(() => {
     try {
@@ -223,9 +242,21 @@ function HomePageContent() {
 
       const data = await response.json();
 
-      // Ensure data is an array
+      // Ensure data is an array; normalize description from API/DB (full text)
       if (Array.isArray(data)) {
-        setTools(data);
+        setTools(
+          data.map((raw: Record<string, unknown>) => {
+            const d =
+              typeof raw.description === "string"
+                ? raw.description
+                : raw.description != null
+                  ? String(raw.description)
+                  : typeof raw.Description === "string"
+                    ? raw.Description
+                    : "";
+            return { ...raw, description: d } as Tool;
+          }),
+        );
       } else {
         console.error("Invalid response format:", data);
         setTools([]);
@@ -275,11 +306,8 @@ function HomePageContent() {
             />
           </div>
 
-          <div
-            className="flex-1 scroll-mt-24 space-y-6"
-            data-tutorial="tool-results"
-          >
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex-1 space-y-6">
+            <div className="scroll-mt-24 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex-1 max-w-2xl" data-tutorial="search-bar">
                 <SearchBar
                   value={search}
@@ -384,55 +412,103 @@ function HomePageContent() {
               </div>
             </div>
 
-            {loading ? (
-              viewMode === "grid" ? (
-                <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                  {[...Array(8)].map((_, i) => (
+            <div className="min-h-[8rem] space-y-4 scroll-mt-24">
+              {loading ? (
+                viewMode === "grid" ? (
+                  <>
                     <div
-                      key={i}
-                      className="h-64 min-h-0 animate-pulse rounded-lg border bg-muted"
-                    />
-                  ))}
+                      data-tutorial="tool-results-first-row"
+                      className="grid min-w-0 grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+                    >
+                      {Array.from({ length: toolGridCols }).map((_, i) => (
+                        <div
+                          key={`s1-${i}`}
+                          className="h-64 min-h-0 animate-pulse rounded-lg border bg-muted"
+                        />
+                      ))}
+                    </div>
+                    <div className="grid min-w-0 grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                      {Array.from({
+                        length: Math.max(0, 8 - toolGridCols),
+                      }).map((_, i) => (
+                        <div
+                          key={`s2-${i}`}
+                          className="h-64 min-h-0 animate-pulse rounded-lg border bg-muted"
+                        />
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div
+                      data-tutorial="tool-results-first-row"
+                      className="flex min-w-0 flex-col gap-3"
+                    >
+                      <div className="h-[4.5rem] animate-pulse rounded-lg border bg-muted" />
+                    </div>
+                    <div className="flex min-w-0 flex-col gap-3">
+                      {[...Array(7)].map((_, i) => (
+                        <div
+                          key={i}
+                          className="h-[4.5rem] animate-pulse rounded-lg border bg-muted"
+                        />
+                      ))}
+                    </div>
+                  </>
+                )
+              ) : tools.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 text-center">
+                  <p className="text-lg text-muted-foreground">
+                    No tools found. Try adjusting your filters or search.
+                  </p>
                 </div>
               ) : (
-                <div className="flex flex-col gap-3">
-                  {[...Array(8)].map((_, i) => (
-                    <div
-                      key={i}
-                      className="h-[4.5rem] animate-pulse rounded-lg border bg-muted"
-                    />
-                  ))}
-                </div>
-              )
-            ) : tools.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-center">
-                <p className="text-lg text-muted-foreground">
-                  No tools found. Try adjusting your filters or search.
-                </p>
-              </div>
-            ) : (
-              <>
-                <p className="text-sm text-muted-foreground">
-                  Showing {tools.length} tool{tools.length !== 1 ? "s" : ""}
-                </p>
-                <div
-                  className={
-                    viewMode === "grid"
-                      ? "grid min-w-0 grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
-                      : "flex min-w-0 flex-col gap-3"
-                  }
-                >
-                  {tools.map((tool, index) => (
-                    <ToolCard
-                      key={tool.id}
-                      tool={tool}
-                      index={index}
-                      layout={viewMode}
-                    />
-                  ))}
-                </div>
-              </>
-            )}
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    Showing {tools.length} tool{tools.length !== 1 ? "s" : ""}
+                  </p>
+                  {(() => {
+                    const firstRowCount =
+                      viewMode === "list" ? 1 : toolGridCols;
+                    const firstSlice = tools.slice(0, firstRowCount);
+                    const restSlice = tools.slice(firstRowCount);
+                    const gridClass =
+                      viewMode === "grid"
+                        ? "grid min-w-0 grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+                        : "flex min-w-0 flex-col gap-3";
+                    return (
+                      <>
+                        <div
+                          data-tutorial="tool-results-first-row"
+                          className={gridClass}
+                        >
+                          {firstSlice.map((tool, index) => (
+                            <ToolCard
+                              key={tool.id}
+                              tool={tool}
+                              index={index}
+                              layout={viewMode}
+                            />
+                          ))}
+                        </div>
+                        {restSlice.length > 0 ? (
+                          <div className={gridClass}>
+                            {restSlice.map((tool, index) => (
+                              <ToolCard
+                                key={tool.id}
+                                tool={tool}
+                                index={firstSlice.length + index}
+                                layout={viewMode}
+                              />
+                            ))}
+                          </div>
+                        ) : null}
+                      </>
+                    );
+                  })()}
+                </>
+              )}
+            </div>
           </div>
         </div>
       </div>
