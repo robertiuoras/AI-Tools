@@ -29,7 +29,7 @@ export default function RootLayout({
           <div className="min-h-screen bg-background">
             <nav className="sticky top-0 z-40 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
               <div className="container flex h-16 items-center justify-between px-4">
-                <Suspense fallback={<div className="flex items-center gap-1 rounded-lg bg-muted/50 p-1 px-4 py-2 text-sm text-muted-foreground">AI Tools | Videos | Creators | Notes</div>}>
+                <Suspense fallback={<div className="flex items-center gap-1 rounded-lg bg-muted/50 p-1 px-4 py-2 text-sm text-muted-foreground">AI Tools | Videos | Creators | Prompts | Notes</div>}>
                   <NavLinks />
                 </Suspense>
                 <div className="flex items-center gap-4">

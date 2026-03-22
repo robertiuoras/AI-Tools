@@ -53,7 +53,7 @@ const STEPS: TourStep[] = [
     id: "nav",
     title: "Videos, Creators & Notes",
     selector: '[data-tutorial="main-nav-links"]',
-    body: "Use the header for **Videos**, **Creators**, and private **Notes** (**sign in** required for notes).",
+    body: "Use the header for **Videos**, **Creators**, **Prompts** (community library + **My prompts** page), and private **Notes** (**sign in** required for notes).",
   },
   {
     id: "results",
