@@ -65,7 +65,7 @@ export function inlineDslToHtml(text: string, depth = 0): string {
       out += `<span style="color:#${hex}">${inlineDslToHtml(colorInner, depth + 1)}</span>`;
     } else if (typeof sizePx === "string" && sizeInner !== undefined) {
       const px = Math.min(72, Math.max(8, parseInt(sizePx, 10) || 16));
-      out += `<span style="font-size:${px}px">${inlineDslToHtml(sizeInner, depth + 1)}</span>`;
+      out += `<span style="font-size:${px}px !important">${inlineDslToHtml(sizeInner, depth + 1)}</span>`;
     }
     last = i + m[0].length;
   }
@@ -192,7 +192,11 @@ function sanitizeStyleValue(style: string): string | null {
       kept.push(chunk);
       continue;
     }
-    if (/^font-size:\s*\d+(?:\.\d+)?(?:px|pt|rem|em)$/i.test(chunk)) {
+    if (
+      /^font-size:\s*\d+(?:\.\d+)?(?:px|pt|rem|em)(?:\s*!important)?$/i.test(
+        chunk,
+      )
+    ) {
       kept.push(chunk);
     }
   }
@@ -275,9 +279,51 @@ export function noteContentToEditorHtml(content: string): string {
   return sanitizeNoteHtml(dslToHtml(content));
 }
 
+/** Collapse common contenteditable bug: extra <p> after list duplicating last item text. */
+function removeDuplicateParagraphAfterList(html: string): string {
+  const doc = new DOMParser().parseFromString(`<div>${html}</div>`, "text/html");
+  const root = doc.body.firstElementChild;
+  if (!root) return html;
+  const norm = (t: string) =>
+    t.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+  let i = 0;
+  while (i < root.children.length - 1) {
+    const a = root.children[i];
+    const b = root.children[i + 1];
+    if (!a || !b) {
+      i++;
+      continue;
+    }
+    if (a.tagName !== "UL" && a.tagName !== "OL") {
+      i++;
+      continue;
+    }
+    if (b.tagName !== "P") {
+      i++;
+      continue;
+    }
+    const lastLi = a.lastElementChild;
+    if (!lastLi || lastLi.tagName !== "LI") {
+      i++;
+      continue;
+    }
+    const liText = norm(lastLi.textContent ?? "");
+    const pText = norm(b.textContent ?? "");
+    if (liText.length > 0 && liText === pText) {
+      b.remove();
+      continue;
+    }
+    i++;
+  }
+  return root.innerHTML;
+}
+
 /** Before persist: normalize empty-ish editor output. */
 export function normalizeNoteHtmlForSave(html: string): string {
-  const s = sanitizeNoteHtml(html);
+  let s = sanitizeNoteHtml(html);
+  if (typeof document !== "undefined") {
+    s = removeDuplicateParagraphAfterList(s);
+  }
   const tmp =
     typeof document !== "undefined"
       ? new DOMParser().parseFromString(`<div>${s}</div>`, "text/html").body

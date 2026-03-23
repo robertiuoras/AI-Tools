@@ -56,8 +56,8 @@ const NUMBERED_LINE_RE = /^(\s*)\d+\.\s+/;
 /** Preset text colors for toolbar (6-char hex, no #). */
 const FONT_SIZE_OPTIONS = [12, 14, 16, 18, 24, 32] as const;
 
-const NOTE_MARK_HIGHLIGHT_CLASS =
-  "note-highlight rounded bg-yellow-200/90 px-0.5 dark:bg-yellow-500/35";
+/** Styled via globals.css `.note-html-view mark.note-highlight` */
+const NOTE_MARK_HIGHLIGHT_CLASS = "note-highlight";
 
 function renderInlineMarkdown(text: string, depth = 0): ReactNode {
   const src = migrateLegacyNoteMarkup(text);
@@ -102,10 +102,7 @@ function renderInlineMarkdown(text: string, depth = 0): ReactNode {
       );
     } else if (typeof highlightText === "string") {
       nodes.push(
-        <mark
-          key={`hi-${partIndex++}`}
-          className="rounded bg-yellow-200/90 px-0.5 dark:bg-yellow-500/35"
-        >
+        <mark key={`hi-${partIndex++}`} className="note-highlight">
           {renderInlineMarkdown(highlightText, depth + 1)}
         </mark>,
       );
@@ -285,6 +282,7 @@ export default function NotesPage() {
     italic: false,
     underline: false,
     strikeThrough: false,
+    highlight: false,
     unorderedList: false,
     orderedList: false,
     heading3: false,
@@ -619,6 +617,25 @@ export default function NotesPage() {
     return false;
   }, []);
 
+  const selectionInsideHighlight = useCallback(() => {
+    const root = editorRef.current;
+    const sel = window.getSelection();
+    if (!root || !sel?.anchorNode || !root.contains(sel.anchorNode)) return false;
+    let n: Node | null = sel.anchorNode;
+    if (n.nodeType === Node.TEXT_NODE) n = (n as Text).parentElement;
+    while (n && n !== root) {
+      if (
+        n instanceof HTMLElement &&
+        n.tagName === "MARK" &&
+        n.classList.contains("note-highlight")
+      ) {
+        return true;
+      }
+      n = n.parentElement;
+    }
+    return false;
+  }, []);
+
   /** Restore selection after Radix/toolbar clicks cleared it (required for execCommand + font size). */
   const restoreEditorSelection = useCallback((): boolean => {
     const root = editorRef.current;
@@ -658,6 +675,7 @@ export default function NotesPage() {
         italic: document.queryCommandState("italic"),
         underline: document.queryCommandState("underline"),
         strikeThrough: document.queryCommandState("strikeThrough"),
+        highlight: selectionInsideHighlight(),
         unorderedList: document.queryCommandState("insertUnorderedList"),
         orderedList: document.queryCommandState("insertOrderedList"),
         heading3,
@@ -665,7 +683,7 @@ export default function NotesPage() {
     } catch {
       // ignore
     }
-  }, [isEditing, selectionInEditor, selectionInsideHeading3]);
+  }, [isEditing, selectionInEditor, selectionInsideHeading3, selectionInsideHighlight]);
 
   useLayoutEffect(() => {
     if (!isEditing || !editorRef.current || !selectedNoteId) return;
@@ -799,7 +817,7 @@ export default function NotesPage() {
       const r = sel.getRangeAt(0);
       if (!root.contains(r.commonAncestorContainer)) return;
       const span = document.createElement("span");
-      span.style.fontSize = `${size}px`;
+      span.style.setProperty("font-size", `${size}px`, "important");
       if (r.collapsed) {
         span.appendChild(document.createTextNode("\u200b"));
         r.insertNode(span);
@@ -1444,11 +1462,21 @@ export default function NotesPage() {
                                     type="button"
                                     size="sm"
                                     variant="outline"
-                                    className="h-8 w-9 px-0"
+                                    className={cn(
+                                      "h-8 w-9 px-0",
+                                      fmtActive.highlight &&
+                                        "border-primary bg-primary/10",
+                                    )}
                                     title="Highlight selection"
                                     onClick={applyHighlightColor}
                                   >
-                                    <Highlighter className="h-3.5 w-3.5" />
+                                    <Highlighter
+                                      className={cn(
+                                        "h-3.5 w-3.5",
+                                        fmtActive.highlight &&
+                                          "text-primary",
+                                      )}
+                                    />
                                   </Button>
                                   <Button
                                     type="button"
@@ -1535,8 +1563,11 @@ export default function NotesPage() {
                                         }
                                       }}
                                       onValueChange={(v) => {
-                                        applyFontSizePx(Number(v));
                                         setCustomFontSize(v);
+                                        queueMicrotask(() => {
+                                          editorRef.current?.focus();
+                                          applyFontSizePx(Number(v));
+                                        });
                                       }}
                                     >
                                       <SelectTrigger
@@ -1594,7 +1625,10 @@ export default function NotesPage() {
                                           e.preventDefault();
                                           const n = Number(customFontSize);
                                           if (!Number.isFinite(n)) return;
-                                          applyFontSizePx(n);
+                                          queueMicrotask(() => {
+                                            editorRef.current?.focus();
+                                            applyFontSizePx(n);
+                                          });
                                         }}
                                       />
                                     </div>
@@ -1607,7 +1641,10 @@ export default function NotesPage() {
                                       onClick={() => {
                                         const n = Number(customFontSize);
                                         if (!Number.isFinite(n)) return;
-                                        applyFontSizePx(n);
+                                        queueMicrotask(() => {
+                                          editorRef.current?.focus();
+                                          applyFontSizePx(n);
+                                        });
                                       }}
                                     >
                                       Apply
