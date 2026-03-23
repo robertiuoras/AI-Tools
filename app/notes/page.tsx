@@ -32,6 +32,8 @@ import {
   Palette,
   Highlighter,
   Type,
+  Maximize2,
+  Minimize2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { linkifyText } from "@/lib/linkify";
@@ -376,6 +378,7 @@ export default function NotesPage() {
   const [newPageTitle, setNewPageTitle] = useState("");
   const [newNoteTitle, setNewNoteTitle] = useState("");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [noteBodyFullscreen, setNoteBodyFullscreen] = useState(false);
 
   const editorRef = useRef<HTMLDivElement | null>(null);
   const formatMenuRef = useRef<HTMLDivElement | null>(null);
@@ -424,6 +427,31 @@ export default function NotesPage() {
       setToken(session?.access_token ?? null);
     });
   }, []);
+
+  useEffect(() => {
+    setNoteBodyFullscreen(false);
+  }, [selectedNoteId]);
+
+  useEffect(() => {
+    if (!noteBodyFullscreen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [noteBodyFullscreen]);
+
+  useEffect(() => {
+    if (!noteBodyFullscreen) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setNoteBodyFullscreen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [noteBodyFullscreen]);
 
   /** Initial load: pages first (fast shell), then notes; avoids duplicate notes fetch on mount. */
   useEffect(() => {
@@ -1484,7 +1512,13 @@ export default function NotesPage() {
                     </>
                   )}
                 </div>
-                <div className="flex min-h-0 min-w-0 flex-1 flex-col space-y-2">
+                <div
+                  className={cn(
+                    "flex min-h-0 min-w-0 flex-1 flex-col space-y-2",
+                    noteBodyFullscreen &&
+                      "fixed inset-0 z-[100] box-border flex h-[100dvh] max-h-[100dvh] flex-col overflow-hidden bg-background p-4 shadow-2xl sm:p-6",
+                  )}
+                >
                   <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <div className="flex min-w-0 items-center gap-2">
                       <Label className="text-xs text-muted-foreground">
@@ -1772,6 +1806,38 @@ export default function NotesPage() {
                             )}
                           </div>
                         )}
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 shrink-0"
+                          title={
+                            noteBodyFullscreen
+                              ? "Exit expanded view"
+                              : "Expand note body"
+                          }
+                          aria-pressed={noteBodyFullscreen}
+                          onClick={() =>
+                            setNoteBodyFullscreen((open) => !open)
+                          }
+                        >
+                          {noteBodyFullscreen ? (
+                            <Minimize2
+                              className="h-3.5 w-3.5"
+                              aria-hidden
+                            />
+                          ) : (
+                            <Maximize2
+                              className="h-3.5 w-3.5"
+                              aria-hidden
+                            />
+                          )}
+                          <span className="sr-only">
+                            {noteBodyFullscreen
+                              ? "Exit expanded view"
+                              : "Expand note body"}
+                          </span>
+                        </Button>
                       </div>
                     </div>
                   </div>
@@ -1784,8 +1850,11 @@ export default function NotesPage() {
                       handlersRef={editorHandlersRef}
                       onSessionHydrated={onEditorSessionHydrated}
                       className={cn(
-                        "note-html-scroll min-h-[200px] max-h-[min(65vh,520px)] w-full min-w-0 max-w-full flex-1 cursor-text overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none [overflow-wrap:anywhere] focus-visible:ring-2 focus-visible:ring-ring sm:min-h-[240px] sm:max-h-[min(70vh,560px)]",
+                        "note-html-scroll w-full min-w-0 max-w-full flex-1 cursor-text overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none [overflow-wrap:anywhere] focus-visible:ring-2 focus-visible:ring-ring",
                         NOTE_HTML_VIEW_CLASS,
+                        noteBodyFullscreen
+                          ? "min-h-0 flex-1 max-h-none sm:min-h-0"
+                          : "min-h-[200px] max-h-[min(65vh,520px)] sm:min-h-[240px] sm:max-h-[min(70vh,560px)]",
                       )}
                     />
                   ) : (
@@ -1809,7 +1878,12 @@ export default function NotesPage() {
                           editorRef.current?.focus(),
                         );
                       }}
-                      className="note-html-scroll min-h-[200px] max-h-[min(65vh,520px)] w-full min-w-0 max-w-full flex-1 cursor-pointer select-text overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground [overflow-wrap:anywhere] sm:min-h-[240px] sm:max-h-[min(70vh,560px)]"
+                      className={cn(
+                        "note-html-scroll w-full min-w-0 max-w-full flex-1 cursor-pointer select-text overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground [overflow-wrap:anywhere]",
+                        noteBodyFullscreen
+                          ? "min-h-0 flex-1 max-h-none sm:min-h-0"
+                          : "min-h-[200px] max-h-[min(65vh,520px)] sm:min-h-[240px] sm:max-h-[min(70vh,560px)]",
+                      )}
                       aria-live="polite"
                     >
                       {renderReadNoteBody(selectedNote.content)}
