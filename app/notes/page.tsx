@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ClipboardEvent,
   type ReactNode,
 } from "react";
 import { supabase, type Note, type NotePage } from "@/lib/supabase";
@@ -54,6 +55,9 @@ const NUMBERED_LINE_RE = /^(\s*)\d+\.\s+/;
 
 /** Preset text colors for toolbar (6-char hex, no #). */
 const FONT_SIZE_OPTIONS = [12, 14, 16, 18, 24, 32] as const;
+
+const NOTE_MARK_HIGHLIGHT_CLASS =
+  "note-highlight rounded bg-yellow-200/90 px-0.5 dark:bg-yellow-500/35";
 
 function renderInlineMarkdown(text: string, depth = 0): ReactNode {
   const src = migrateLegacyNoteMarkup(text);
@@ -294,6 +298,8 @@ export default function NotesPage() {
 
   const editorRef = useRef<HTMLDivElement | null>(null);
   const formatMenuRef = useRef<HTMLDivElement | null>(null);
+  /** Last caret/selection inside the editor — Radix controls clear the live selection. */
+  const editorSelectionRef = useRef<Range | null>(null);
   /** Normalized body last written (or baseline when editor opened); skips redundant autosave UI + PUT. */
   const lastAutoSavedBodyRef = useRef<string | null>(null);
   const notesRef = useRef(notes);
@@ -461,7 +467,8 @@ export default function NotesPage() {
 
   const createPage = async () => {
     if (!token) return;
-    const title = newPageTitle.trim() || "Untitled Page";
+    const title = newPageTitle.trim();
+    if (!title) return;
     const res = await fetch("/api/notes/pages", {
       method: "POST",
       headers: authHeaders,
@@ -505,7 +512,8 @@ export default function NotesPage() {
 
   const createNote = async () => {
     if (!selectedPageId) return;
-    const title = newNoteTitle.trim() || "Untitled Note";
+    const title = newNoteTitle.trim();
+    if (!title) return;
     const res = await fetch("/api/notes", {
       method: "POST",
       headers: authHeaders,
@@ -611,6 +619,24 @@ export default function NotesPage() {
     return false;
   }, []);
 
+  /** Restore selection after Radix/toolbar clicks cleared it (required for execCommand + font size). */
+  const restoreEditorSelection = useCallback((): boolean => {
+    const root = editorRef.current;
+    if (!root) return false;
+    const sel = window.getSelection();
+    if (sel?.rangeCount) {
+      const r = sel.getRangeAt(0);
+      if (root.contains(r.commonAncestorContainer)) return true;
+    }
+    const saved = editorSelectionRef.current;
+    if (saved && root.contains(saved.commonAncestorContainer)) {
+      sel?.removeAllRanges();
+      sel?.addRange(saved.cloneRange());
+      return true;
+    }
+    return false;
+  }, []);
+
   const refreshFmt = useCallback(() => {
     if (!isEditing || !selectionInEditor()) return;
     try {
@@ -653,21 +679,39 @@ export default function NotesPage() {
 
   useEffect(() => {
     if (!isEditing) return;
-    document.addEventListener("selectionchange", refreshFmt);
-    return () => document.removeEventListener("selectionchange", refreshFmt);
+    const onSel = () => {
+      const root = editorRef.current;
+      const sel = window.getSelection();
+      if (!root || !sel || sel.rangeCount === 0) {
+        editorSelectionRef.current = null;
+      } else {
+        const r = sel.getRangeAt(0);
+        if (root.contains(r.commonAncestorContainer)) {
+          editorSelectionRef.current = r.cloneRange();
+        } else {
+          editorSelectionRef.current = null;
+        }
+      }
+      refreshFmt();
+    };
+    document.addEventListener("selectionchange", onSel);
+    return () => document.removeEventListener("selectionchange", onSel);
   }, [isEditing, refreshFmt]);
 
   const runFormatCommand = useCallback(
     (command: string, value?: string) => {
-      editorRef.current?.focus();
+      const root = editorRef.current;
+      root?.focus();
+      restoreEditorSelection();
       try {
         document.execCommand(command, false, value);
       } catch {
         /* ignore */
       }
+      root?.dispatchEvent(new Event("input", { bubbles: true }));
       refreshFmt();
     },
-    [refreshFmt],
+    [refreshFmt, restoreEditorSelection],
   );
 
   const normalizePanelHex = useCallback((raw: string): string | null => {
@@ -688,6 +732,7 @@ export default function NotesPage() {
       if (!full) return;
       setFormatPanelColor(full);
       editorRef.current?.focus();
+      restoreEditorSelection();
       try {
         document.execCommand("styleWithCSS", false, "true");
       } catch {
@@ -698,42 +743,61 @@ export default function NotesPage() {
       } catch {
         /* ignore */
       }
+      editorRef.current?.dispatchEvent(new Event("input", { bubbles: true }));
       refreshFmt();
     },
-    [normalizePanelHex, refreshFmt],
+    [normalizePanelHex, refreshFmt, restoreEditorSelection],
   );
 
   const applyHighlightColor = useCallback(() => {
-    editorRef.current?.focus();
-    try {
-      document.execCommand("styleWithCSS", false, "true");
-    } catch {
-      /* ignore */
-    }
-    let ok = false;
-    try {
-      ok = document.execCommand("hiliteColor", false, "#fef08a");
-    } catch {
-      /* ignore */
-    }
-    if (!ok) {
-      try {
-        document.execCommand("backColor", false, "#fef08a");
-      } catch {
-        /* ignore */
+    const root = editorRef.current;
+    root?.focus();
+    if (!restoreEditorSelection()) return;
+    const sel = window.getSelection();
+    if (!root || !sel || sel.rangeCount === 0) return;
+    const r = sel.getRangeAt(0);
+    if (!root.contains(r.commonAncestorContainer)) return;
+    const mark = document.createElement("mark");
+    mark.className = NOTE_MARK_HIGHLIGHT_CLASS;
+    if (r.collapsed) {
+      mark.appendChild(document.createTextNode("\u200b"));
+      r.insertNode(mark);
+      const z = mark.firstChild;
+      if (z) {
+        const nr = document.createRange();
+        nr.setStart(z, 1);
+        nr.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(nr);
       }
+    } else {
+      try {
+        r.surroundContents(mark);
+      } catch {
+        const frag = r.extractContents();
+        mark.appendChild(frag);
+        r.insertNode(mark);
+      }
+      sel.removeAllRanges();
+      const nr = document.createRange();
+      nr.selectNodeContents(mark);
+      nr.collapse(false);
+      sel.addRange(nr);
     }
+    root.dispatchEvent(new Event("input", { bubbles: true }));
     refreshFmt();
-  }, [refreshFmt]);
+  }, [refreshFmt, restoreEditorSelection]);
 
   const applyFontSizePx = useCallback(
     (px: number) => {
       const size = Math.min(100, Math.max(1, Math.round(Number(px)) || 16));
       const root = editorRef.current;
       root?.focus();
+      if (!restoreEditorSelection()) return;
       const sel = window.getSelection();
       if (!root || !sel || sel.rangeCount === 0) return;
       const r = sel.getRangeAt(0);
+      if (!root.contains(r.commonAncestorContainer)) return;
       const span = document.createElement("span");
       span.style.fontSize = `${size}px`;
       if (r.collapsed) {
@@ -761,17 +825,20 @@ export default function NotesPage() {
         nr.collapse(false);
         sel.addRange(nr);
       }
+      root.dispatchEvent(new Event("input", { bubbles: true }));
       refreshFmt();
     },
-    [refreshFmt],
+    [refreshFmt, restoreEditorSelection],
   );
 
   const wrapSelectionInCode = useCallback(() => {
     const root = editorRef.current;
     root?.focus();
+    if (!restoreEditorSelection()) return;
     const sel = window.getSelection();
     if (!root || !sel || sel.rangeCount === 0) return;
     const r = sel.getRangeAt(0);
+    if (!root.contains(r.commonAncestorContainer)) return;
     const code = document.createElement("code");
     code.className =
       "rounded bg-muted px-1 py-0.5 text-[0.9em] font-mono";
@@ -791,12 +858,15 @@ export default function NotesPage() {
     const nr = document.createRange();
     nr.selectNodeContents(code);
     sel.addRange(nr);
+    root.dispatchEvent(new Event("input", { bubbles: true }));
     refreshFmt();
-  }, [refreshFmt]);
+  }, [refreshFmt, restoreEditorSelection]);
 
   const toggleHeadingBlock = useCallback(() => {
     const root = editorRef.current;
-    root?.focus();
+    if (!root) return;
+    root.focus();
+    restoreEditorSelection();
     try {
       document.execCommand("styleWithCSS", false, "true");
     } catch {
@@ -824,8 +894,9 @@ export default function NotesPage() {
     } catch {
       /* ignore */
     }
+    root.dispatchEvent(new Event("input", { bubbles: true }));
     refreshFmt();
-  }, [refreshFmt, selectionInsideHeading3]);
+  }, [refreshFmt, selectionInsideHeading3, restoreEditorSelection]);
 
   const beginEditingNote = useCallback(() => {
     setEditorSession((s) => s + 1);
@@ -839,6 +910,31 @@ export default function NotesPage() {
       prev.map((n) => (n.id === selectedNoteId ? { ...n, content: html } : n)),
     );
   }, [selectedNoteId]);
+
+  const handleEditorPaste = useCallback(
+    (e: ClipboardEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      const text = e.clipboardData.getData("text/plain");
+      const root = editorRef.current;
+      if (!root) return;
+      root.focus();
+      try {
+        document.execCommand("insertText", false, text);
+      } catch {
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return;
+        const r = sel.getRangeAt(0);
+        if (!root.contains(r.commonAncestorContainer)) return;
+        r.deleteContents();
+        r.insertNode(document.createTextNode(text));
+        r.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(r);
+      }
+      root.dispatchEvent(new Event("input", { bubbles: true }));
+    },
+    [],
+  );
 
   if (!token) {
     return (
@@ -877,7 +973,12 @@ export default function NotesPage() {
                 value={newPageTitle}
                 onChange={(e) => setNewPageTitle(e.target.value)}
               />
-              <Button type="button" size="icon" onClick={createPage}>
+              <Button
+                type="button"
+                size="icon"
+                disabled={!newPageTitle.trim()}
+                onClick={createPage}
+              >
                 <Plus className="h-4 w-4" />
               </Button>
             </div>
@@ -988,7 +1089,7 @@ export default function NotesPage() {
                 type="button"
                 size="icon"
                 onClick={createNote}
-                disabled={!selectedPageId}
+                disabled={!selectedPageId || !newNoteTitle.trim()}
               >
                 <Plus className="h-4 w-4" />
               </Button>
@@ -1426,12 +1527,36 @@ export default function NotesPage() {
                                       Size (px)
                                     </span>
                                     <Select
+                                      onOpenChange={(open) => {
+                                        if (!open) {
+                                          requestAnimationFrame(() => {
+                                            editorRef.current?.focus();
+                                          });
+                                        }
+                                      }}
                                       onValueChange={(v) => {
                                         applyFontSizePx(Number(v));
                                         setCustomFontSize(v);
                                       }}
                                     >
-                                      <SelectTrigger className="h-8 w-[110px] text-xs">
+                                      <SelectTrigger
+                                        className="h-8 w-[110px] text-xs"
+                                        onMouseDown={(e) => e.preventDefault()}
+                                        onPointerDownCapture={() => {
+                                          const root = editorRef.current;
+                                          const sel = window.getSelection();
+                                          if (!root || !sel?.rangeCount) return;
+                                          const r = sel.getRangeAt(0);
+                                          if (
+                                            root.contains(
+                                              r.commonAncestorContainer,
+                                            )
+                                          ) {
+                                            editorSelectionRef.current =
+                                              r.cloneRange();
+                                          }
+                                        }}
+                                      >
                                         <SelectValue placeholder="Presets" />
                                       </SelectTrigger>
                                       <SelectContent>
@@ -1478,6 +1603,7 @@ export default function NotesPage() {
                                       variant="secondary"
                                       size="sm"
                                       className="h-8 shrink-0 text-xs"
+                                      onMouseDown={(e) => e.preventDefault()}
                                       onClick={() => {
                                         const n = Number(customFontSize);
                                         if (!Number.isFinite(n)) return;
@@ -1509,6 +1635,7 @@ export default function NotesPage() {
                         NOTE_HTML_VIEW_CLASS,
                       )}
                       onInput={syncEditorToState}
+                      onPaste={handleEditorPaste}
                       onMouseUp={refreshFmt}
                       onKeyUp={refreshFmt}
                       onBlur={() => {
