@@ -476,11 +476,110 @@ function linkifyPlainUrlsInHtml(html: string): string {
   return root.innerHTML;
 }
 
+const BLOCK_URL_PAIR_TAGS = new Set(["P", "DIV"]);
+
+/**
+ * Removes duplicate URL display when a plain-text block is immediately followed
+ * by the same URL as a single link (common after autosave + stale client HTML).
+ * Also drops a leading plain URL text node before an <a> with the same href in one block.
+ */
+function dedupeRedundantUrlPlainAndLink(html: string): string {
+  if (typeof document === "undefined") return html;
+  const doc = new DOMParser().parseFromString(
+    `<div id="dedupe-root">${html}</div>`,
+    "text/html",
+  );
+  const root = doc.getElementById("dedupe-root");
+  if (!root) return html;
+
+  const norm = (t: string) => t.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+
+  const urlsEquivalent = (a: string, b: string) => {
+    const x = trimUrlHref(norm(a));
+    const y = trimUrlHref(norm(b));
+    return x.length > 0 && x === y;
+  };
+
+  /** Same paragraph: "https://…" text node then <a href="https://…">…</a> */
+  for (const block of root.querySelectorAll("p, div")) {
+    if (!root.contains(block)) continue;
+    const fc = block.firstChild;
+    if (!fc || fc.nodeType !== Node.TEXT_NODE) continue;
+    const rawText = norm(fc.textContent ?? "");
+    if (!/^https?:\/\//i.test(rawText)) continue;
+    const ns = fc.nextSibling;
+    if (
+      !ns ||
+      ns.nodeType !== Node.ELEMENT_NODE ||
+      (ns as Element).tagName !== "A"
+    ) {
+      continue;
+    }
+    const a = ns as HTMLAnchorElement;
+    const href = a.getAttribute("href") ?? "";
+    if (!href.startsWith("http")) continue;
+    if (urlsEquivalent(rawText, href) && urlsEquivalent(rawText, norm(a.textContent ?? ""))) {
+      fc.remove();
+    }
+  }
+
+  /** Consecutive blocks (any depth): plain URL block, then block that is only the same link */
+  function tryRemovePlainUrlThenLinkPair(
+    a: Element,
+    b: Element | null,
+  ): boolean {
+    if (
+      !b ||
+      !BLOCK_URL_PAIR_TAGS.has(a.tagName) ||
+      !BLOCK_URL_PAIR_TAGS.has(b.tagName)
+    ) {
+      return false;
+    }
+    if (a.querySelector("a")) return false;
+    const t1 = norm(a.textContent ?? "");
+    if (!/^https?:\/\//i.test(t1)) return false;
+    const onlyA =
+      b.children.length === 1 && b.firstElementChild?.tagName === "A";
+    if (!onlyA) return false;
+    const link = b.firstElementChild as HTMLAnchorElement;
+    const href = link.getAttribute("href") ?? "";
+    if (!href.startsWith("http")) return false;
+    const t2 = norm(b.textContent ?? "");
+    const linkText = norm(link.textContent ?? "");
+    if (t1 !== t2 || linkText !== t2 || !urlsEquivalent(t1, href)) {
+      return false;
+    }
+    a.remove();
+    return true;
+  }
+
+  function dedupeBlockPairsDeep(parent: Element): void {
+    for (const child of [...parent.children]) {
+      dedupeBlockPairsDeep(child);
+    }
+    let el = parent.firstElementChild;
+    while (el) {
+      const next = el.nextElementSibling;
+      if (tryRemovePlainUrlThenLinkPair(el, next)) {
+        el = parent.firstElementChild;
+        continue;
+      }
+      el = next;
+    }
+  }
+
+  dedupeBlockPairsDeep(root);
+
+  return root.innerHTML;
+}
+
 /** Sanitize + remove duplicate paragraph/list patterns (safe for read view and editor load). */
 export function normalizeNoteHtmlStructure(html: string): string {
   let s = sanitizeNoteHtml(html);
   if (typeof document !== "undefined") {
     s = linkifyPlainUrlsInHtml(s);
+    s = sanitizeNoteHtml(s);
+    s = dedupeRedundantUrlPlainAndLink(s);
     s = sanitizeNoteHtml(s);
     s = removeDuplicateParagraphsBeforeMatchingList(s);
     s = removeDuplicateParagraphAfterList(s);

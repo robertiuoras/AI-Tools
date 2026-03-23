@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -9,7 +10,10 @@ import {
   useState,
   type ClipboardEvent,
   type KeyboardEvent,
+  type MutableRefObject,
   type ReactNode,
+  type Ref,
+  type RefObject,
 } from "react";
 import { supabase, type Note, type NotePage } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
@@ -271,6 +275,73 @@ function renderReadNoteBody(content: string): ReactNode {
   }
   return renderPreviewMarkdown(content);
 }
+
+/** Handlers updated each parent render via ref so the editor subtree can stay memoized. */
+type NoteEditorHandlers = {
+  onInput: () => void;
+  onPaste: (e: ClipboardEvent<HTMLDivElement>) => void;
+  onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => void;
+  onMouseUp: () => void;
+  onKeyUp: () => void;
+  onBlur: () => void;
+};
+
+type NoteBodyEditorProps = {
+  editorRef: RefObject<HTMLDivElement | null>;
+  noteId: string;
+  editorSession: number;
+  initialContent: string;
+  handlersRef: MutableRefObject<NoteEditorHandlers>;
+  onSessionHydrated: (normalizedBaseline: string) => void;
+  className: string;
+};
+
+/**
+ * Isolated from parent re-renders while typing. React reconciling a contentEditable
+ * on every keystroke (parent setState) can duplicate or corrupt DOM text; this memo
+ * only re-renders when the note or edit session changes.
+ */
+const NoteBodyEditor = memo(
+  function NoteBodyEditor({
+    editorRef,
+    noteId,
+    editorSession,
+    initialContent,
+    handlersRef,
+    onSessionHydrated,
+    className,
+  }: NoteBodyEditorProps) {
+    useLayoutEffect(() => {
+      const el = editorRef.current;
+      if (!el) return;
+      el.innerHTML = noteContentToEditorHtml(initialContent);
+      onSessionHydrated(normalizeNoteHtmlForSave(el.innerHTML));
+      // Only re-seed the editor when switching notes or starting a new edit session — not when parent note content updates from typing.
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: initialContent read only on noteId/editorSession change
+    }, [noteId, editorSession]);
+
+    return (
+      <div
+        ref={editorRef as Ref<HTMLDivElement>}
+        role="textbox"
+        tabIndex={0}
+        aria-multiline
+        aria-label="Note body editor"
+        contentEditable
+        suppressContentEditableWarning
+        className={className}
+        onInput={() => handlersRef.current.onInput()}
+        onPaste={(e) => handlersRef.current.onPaste(e)}
+        onKeyDown={(e) => handlersRef.current.onKeyDown(e)}
+        onMouseUp={() => handlersRef.current.onMouseUp()}
+        onKeyUp={() => handlersRef.current.onKeyUp()}
+        onBlur={() => handlersRef.current.onBlur()}
+      />
+    );
+  },
+  (prev, next) =>
+    prev.noteId === next.noteId && prev.editorSession === next.editorSession,
+);
 
 export default function NotesPage() {
   const [token, setToken] = useState<string | null>(null);
@@ -605,6 +676,13 @@ export default function NotesPage() {
             lastAutoSavedBodyRef.current = normalizeNoteHtmlForSave(
               editorRef.current.innerHTML,
             );
+            // Keep React state in sync with normalized DOM so read view never shows
+            // plain URL + linkified duplicate until the next full refresh.
+            setNotes((prev) =>
+              prev.map((n) =>
+                n.id === noteId ? { ...n, content: normalized } : n,
+              ),
+            );
           }
         }
       }
@@ -620,6 +698,9 @@ export default function NotesPage() {
     },
     [],
   );
+
+  const persistNoteBodyRef = useRef(persistNoteBody);
+  persistNoteBodyRef.current = persistNoteBody;
 
   useEffect(() => {
     if (!isEditing || !selectedNoteId) return;
@@ -727,16 +808,6 @@ export default function NotesPage() {
       // ignore
     }
   }, [isEditing, selectionInEditor, selectionInsideHeading3, selectionInsideHighlight]);
-
-  useLayoutEffect(() => {
-    if (!isEditing || !editorRef.current || !selectedNoteId) return;
-    const n = notesRef.current.find((x) => x.id === selectedNoteId);
-    if (!n) return;
-    editorRef.current.innerHTML = noteContentToEditorHtml(n.content);
-    lastAutoSavedBodyRef.current = normalizeNoteHtmlForSave(
-      editorRef.current.innerHTML,
-    );
-  }, [isEditing, editorSession, selectedNoteId]);
 
   useEffect(() => {
     if (!isEditing) return;
@@ -964,13 +1035,36 @@ export default function NotesPage() {
     setIsEditing(true);
   }, []);
 
+  const onEditorSessionHydrated = useCallback((baseline: string) => {
+    lastAutoSavedBodyRef.current = baseline;
+  }, []);
+
+  /** Uses refs so it stays valid when NoteBodyEditor is memoized and skips re-renders. */
   const syncEditorToState = useCallback(() => {
-    if (!selectedNoteId) return;
+    const id = selectedNoteIdRef.current;
+    if (!id) return;
     const html = editorRef.current?.innerHTML ?? "";
     setNotes((prev) =>
-      prev.map((n) => (n.id === selectedNoteId ? { ...n, content: html } : n)),
+      prev.map((n) => (n.id === id ? { ...n, content: html } : n)),
     );
-  }, [selectedNoteId]);
+  }, []);
+
+  const handleEditorBlur = useCallback(() => {
+    void (async () => {
+      const raw = editorRef.current?.innerHTML ?? "";
+      const normalized = normalizeNoteHtmlForSave(raw);
+      const sid = selectedNoteIdRef.current;
+      if (!sid) return;
+      setNotes((prev) =>
+        prev.map((n) =>
+          n.id === sid ? { ...n, content: normalized } : n,
+        ),
+      );
+      await persistNoteBodyRef.current(sid, normalized, true);
+      setIsEditing(false);
+      setFormatMenuOpen(false);
+    })();
+  }, []);
 
   const handleEditorKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
@@ -1011,6 +1105,23 @@ export default function NotesPage() {
     },
     [],
   );
+
+  const editorHandlersRef = useRef<NoteEditorHandlers>({
+    onInput: () => {},
+    onPaste: () => {},
+    onKeyDown: () => {},
+    onMouseUp: () => {},
+    onKeyUp: () => {},
+    onBlur: () => {},
+  });
+  editorHandlersRef.current = {
+    onInput: syncEditorToState,
+    onPaste: handleEditorPaste,
+    onKeyDown: handleEditorKeyDown,
+    onMouseUp: refreshFmt,
+    onKeyUp: refreshFmt,
+    onBlur: handleEditorBlur,
+  };
 
   if (!token) {
     return (
@@ -1665,44 +1776,17 @@ export default function NotesPage() {
                     </div>
                   </div>
                   {isEditing ? (
-                    <div
-                      ref={editorRef}
-                      role="textbox"
-                      tabIndex={0}
-                      aria-multiline
-                      aria-label="Note body editor"
-                      contentEditable
-                      suppressContentEditableWarning
+                    <NoteBodyEditor
+                      editorRef={editorRef}
+                      noteId={selectedNote.id}
+                      editorSession={editorSession}
+                      initialContent={selectedNote.content}
+                      handlersRef={editorHandlersRef}
+                      onSessionHydrated={onEditorSessionHydrated}
                       className={cn(
                         "note-html-scroll min-h-[200px] max-h-[min(65vh,520px)] w-full min-w-0 max-w-full flex-1 cursor-text overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none [overflow-wrap:anywhere] focus-visible:ring-2 focus-visible:ring-ring sm:min-h-[240px] sm:max-h-[min(70vh,560px)]",
                         NOTE_HTML_VIEW_CLASS,
                       )}
-                      onInput={syncEditorToState}
-                      onPaste={handleEditorPaste}
-                      onKeyDown={handleEditorKeyDown}
-                      onMouseUp={refreshFmt}
-                      onKeyUp={refreshFmt}
-                      onBlur={() => {
-                        void (async () => {
-                          const raw = editorRef.current?.innerHTML ?? "";
-                          const normalized =
-                            normalizeNoteHtmlForSave(raw);
-                          setNotes((prev) =>
-                            prev.map((n) =>
-                              n.id === selectedNote.id
-                                ? { ...n, content: normalized }
-                                : n,
-                            ),
-                          );
-                          await persistNoteBody(
-                            selectedNote.id,
-                            normalized,
-                            true,
-                          );
-                          setIsEditing(false);
-                          setFormatMenuOpen(false);
-                        })();
-                      }}
                     />
                   ) : (
                     <div
