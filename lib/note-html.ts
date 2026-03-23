@@ -1,4 +1,8 @@
-import { linkifyToHtmlString } from "./linkify-url";
+import {
+  LINKIFY_URL_REGEX,
+  linkifyToHtmlString,
+  trimUrlHref,
+} from "./linkify-url";
 
 /** Legacy bracket markers → ASCII markers (easier to type & regex). */
 export function migrateLegacyNoteMarkup(text: string): string {
@@ -368,10 +372,83 @@ function removeDuplicateParagraphAfterList(html: string): string {
   return root.innerHTML;
 }
 
+/**
+ * Wrap plain https? URLs in text nodes with <a> (skips existing links and code blocks).
+ */
+function linkifyPlainUrlsInHtml(html: string): string {
+  if (typeof document === "undefined") return html;
+  const doc = new DOMParser().parseFromString(
+    `<div id="note-linkify-root">${html}</div>`,
+    "text/html",
+  );
+  const root = doc.getElementById("note-linkify-root");
+  if (!root) return html;
+
+  const skipIfInside = new Set(["A", "CODE", "PRE", "SCRIPT", "STYLE"]);
+  const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      let el: Element | null = node.parentElement;
+      while (el) {
+        if (skipIfInside.has(el.tagName)) return NodeFilter.FILTER_REJECT;
+        el = el.parentElement;
+      }
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+
+  const batch: Text[] = [];
+  let n: Node | null;
+  while ((n = walker.nextNode())) {
+    batch.push(n as Text);
+  }
+
+  for (const textNode of batch) {
+    if (!textNode.parentNode) continue;
+    const text = textNode.textContent ?? "";
+    if (!text) continue;
+    const re = new RegExp(LINKIFY_URL_REGEX.source, "gi");
+    const matches = [...text.matchAll(re)];
+    if (matches.length === 0) continue;
+
+    const parent = textNode.parentNode;
+    if (!parent) continue;
+
+    const frag = doc.createDocumentFragment();
+    let last = 0;
+    for (const m of matches) {
+      const idx = m.index ?? 0;
+      if (idx > last) {
+        frag.appendChild(doc.createTextNode(text.slice(last, idx)));
+      }
+      const raw = m[0];
+      const href = trimUrlHref(raw);
+      if (href.length > 0) {
+        const a = doc.createElement("a");
+        a.setAttribute("href", href);
+        a.setAttribute("target", "_blank");
+        a.setAttribute("rel", "noopener noreferrer");
+        a.appendChild(doc.createTextNode(raw));
+        frag.appendChild(a);
+      } else {
+        frag.appendChild(doc.createTextNode(raw));
+      }
+      last = idx + raw.length;
+    }
+    if (last < text.length) {
+      frag.appendChild(doc.createTextNode(text.slice(last)));
+    }
+    parent.replaceChild(frag, textNode);
+  }
+
+  return root.innerHTML;
+}
+
 /** Sanitize + remove duplicate paragraph/list patterns (safe for read view and editor load). */
 export function normalizeNoteHtmlStructure(html: string): string {
   let s = sanitizeNoteHtml(html);
   if (typeof document !== "undefined") {
+    s = linkifyPlainUrlsInHtml(s);
+    s = sanitizeNoteHtml(s);
     s = removeDuplicateParagraphsBeforeMatchingList(s);
     s = removeDuplicateParagraphAfterList(s);
   }

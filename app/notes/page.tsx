@@ -16,13 +16,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Star,
   Plus,
   Trash2,
@@ -53,9 +46,6 @@ const INLINE_TOKEN_RE =
   /\*\*([^*]+)\*\*|\*([^*]+)\*|==([^=\n]+)==|__([^_]+)__|~~([^~]+)~~|`([^`]+)`|\{\{c#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\}\}([\s\S]*?)\{\{\/c\}\}|\{\{s(\d{1,3})\}\}([\s\S]*?)\{\{\/s\}\}/g;
 const BULLET_LINE_RE = /^(\s*)([-*•])\s+/;
 const NUMBERED_LINE_RE = /^(\s*)\d+\.\s+/;
-
-/** Preset text colors for toolbar (6-char hex, no #). */
-const FONT_SIZE_OPTIONS = [12, 14, 16, 18, 24, 32] as const;
 
 /** Styled via globals.css `.note-html-view mark.note-highlight` */
 const NOTE_MARK_HIGHLIGHT_CLASS = "note-highlight";
@@ -1232,9 +1222,9 @@ export default function NotesPage() {
             </div>
           </section>
 
-          <section className="min-w-0 cursor-default overflow-hidden rounded-xl border bg-card p-4">
+          <section className="flex min-h-0 min-w-0 cursor-default flex-col overflow-hidden rounded-xl border bg-card p-4 lg:max-h-[calc(100vh-7rem)]">
             {selectedNote ? (
-              <div className="flex min-w-0 max-w-full flex-col gap-4">
+              <div className="flex min-h-0 min-w-0 max-w-full flex-1 flex-col gap-4 overflow-hidden">
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
                   {editingMainTitle ? (
@@ -1331,7 +1321,7 @@ export default function NotesPage() {
                     </>
                   )}
                 </div>
-                <div className="min-w-0 space-y-2">
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col space-y-2">
                   <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <div className="flex min-w-0 items-center gap-2">
                       <Label className="text-xs text-muted-foreground">
@@ -1565,73 +1555,21 @@ export default function NotesPage() {
                                     onChange={applyForeColor}
                                   />
                                 </div>
-                                <div className="flex flex-col gap-2 border-t border-border/60 pt-2 sm:flex-row sm:flex-wrap sm:items-end">
-                                  <div className="flex flex-col gap-1">
-                                    <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                                      Size (px)
-                                    </span>
-                                    <Select
-                                      onOpenChange={(open) => {
-                                        if (!open) {
-                                          requestAnimationFrame(() => {
-                                            editorRef.current?.focus();
-                                          });
-                                        }
-                                      }}
-                                      onValueChange={(v) => {
-                                        setCustomFontSize(v);
-                                        queueMicrotask(() => {
-                                          editorRef.current?.focus();
-                                          applyFontSizePx(Number(v));
-                                        });
-                                      }}
-                                    >
-                                      <SelectTrigger
-                                        className="h-8 w-[110px] text-xs"
-                                        onMouseDown={(e) => e.preventDefault()}
-                                        onPointerDownCapture={() => {
-                                          const root = editorRef.current;
-                                          const sel = window.getSelection();
-                                          if (!root || !sel?.rangeCount) return;
-                                          const r = sel.getRangeAt(0);
-                                          if (
-                                            root.contains(
-                                              r.commonAncestorContainer,
-                                            )
-                                          ) {
-                                            editorSelectionRef.current =
-                                              r.cloneRange();
-                                          }
-                                        }}
-                                      >
-                                        <SelectValue placeholder="Presets" />
-                                      </SelectTrigger>
-                                      <SelectContent>
-                                        {FONT_SIZE_OPTIONS.map((px) => (
-                                          <SelectItem
-                                            key={px}
-                                            value={String(px)}
-                                          >
-                                            {px}px
-                                          </SelectItem>
-                                        ))}
-                                      </SelectContent>
-                                    </Select>
-                                  </div>
-                                  <div className="flex flex-1 flex-wrap items-end gap-1">
+                                <div className="flex flex-col gap-2 border-t border-border/60 pt-2">
+                                  <div className="flex flex-wrap items-end gap-2">
                                     <div className="flex min-w-0 flex-col gap-1">
                                       <Label
                                         htmlFor="note-custom-font-size"
-                                        className="text-[10px] text-muted-foreground"
+                                        className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
                                       >
-                                        Custom (1–100)
+                                        Font size (px)
                                       </Label>
                                       <Input
                                         id="note-custom-font-size"
                                         type="number"
                                         min={1}
                                         max={100}
-                                        className="h-8 w-20 text-xs"
+                                        className="h-8 w-24 text-xs"
                                         value={customFontSize}
                                         onChange={(e) =>
                                           setCustomFontSize(e.target.value)
@@ -1684,7 +1622,7 @@ export default function NotesPage() {
                       contentEditable
                       suppressContentEditableWarning
                       className={cn(
-                        "min-h-[280px] w-full min-w-0 max-w-full cursor-text overflow-x-hidden overflow-y-auto rounded-lg border bg-background px-3 py-2 text-sm text-foreground outline-none [overflow-wrap:anywhere] focus-visible:ring-2 focus-visible:ring-ring sm:min-h-[22rem]",
+                        "min-h-[200px] max-h-[min(65vh,520px)] w-full min-w-0 max-w-full flex-1 cursor-text overflow-x-hidden overflow-y-auto rounded-lg border bg-background px-3 py-2 text-sm text-foreground outline-none [overflow-wrap:anywhere] focus-visible:ring-2 focus-visible:ring-ring sm:min-h-[240px] sm:max-h-[min(70vh,560px)]",
                         NOTE_HTML_VIEW_CLASS,
                       )}
                       onInput={syncEditorToState}
@@ -1735,7 +1673,7 @@ export default function NotesPage() {
                           editorRef.current?.focus(),
                         );
                       }}
-                      className="min-h-[280px] w-full min-w-0 max-w-full cursor-pointer select-text overflow-x-hidden overflow-y-auto rounded-lg border bg-background px-3 py-2 text-sm text-foreground [overflow-wrap:anywhere] sm:min-h-[22rem]"
+                      className="min-h-[200px] max-h-[min(65vh,520px)] w-full min-w-0 max-w-full flex-1 cursor-pointer select-text overflow-x-hidden overflow-y-auto rounded-lg border bg-background px-3 py-2 text-sm text-foreground [overflow-wrap:anywhere] sm:min-h-[240px] sm:max-h-[min(70vh,560px)]"
                       aria-live="polite"
                     >
                       {renderReadNoteBody(selectedNote.content)}

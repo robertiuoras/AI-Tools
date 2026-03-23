@@ -30,7 +30,7 @@ export function linkifyToHtmlString(text: string): string {
     const raw = m[0];
     const href = trimUrlHref(raw);
     if (href.length > 0) {
-      out += `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" class="font-medium text-primary underline underline-offset-2 break-all">${escapeHtml(raw)}</a>`;
+      out += `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" class="font-medium text-blue-600 underline underline-offset-2 break-all dark:text-blue-400">${escapeHtml(raw)}</a>`;
     } else {
       out += escapeHtml(raw);
     }
