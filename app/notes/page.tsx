@@ -50,6 +50,27 @@ const NUMBERED_LINE_RE = /^(\s*)\d+\.\s+/;
 /** Styled via globals.css `.note-html-view mark.note-highlight` */
 const NOTE_MARK_HIGHLIGHT_CLASS = "note-highlight";
 
+const LS_LAST_PAGE_KEY = "notes:lastPageId";
+const LS_LAST_NOTE_KEY = "notes:lastNoteId";
+
+function readLs(key: string): string | null {
+  try {
+    if (typeof window === "undefined") return null;
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeLs(key: string, value: string): void {
+  try {
+    if (typeof window === "undefined") return;
+    localStorage.setItem(key, value);
+  } catch {
+    // ignore quota / private mode
+  }
+}
+
 function renderInlineMarkdown(text: string, depth = 0): ReactNode {
   const src = migrateLegacyNoteMarkup(text);
   if (depth > 8) {
@@ -352,13 +373,17 @@ export default function NotesPage() {
 
         setPages(Array.isArray(pageData) ? pageData : []);
         const firstPageId = pageData[0]?.id ?? null;
-        setSelectedPageId(firstPageId);
+        const pageIds = new Set(pageData.map((p) => p.id));
+        const savedPageId = readLs(LS_LAST_PAGE_KEY);
+        const initialPageId =
+          savedPageId && pageIds.has(savedPageId) ? savedPageId : firstPageId;
+        setSelectedPageId(initialPageId);
         setLoading(false);
 
-        if (firstPageId) {
+        if (initialPageId) {
           skipNextNotesFetchForPageRef.current = true;
           setNotesLoading(true);
-          const nr = await fetch(`/api/notes?pageId=${firstPageId}`, {
+          const nr = await fetch(`/api/notes?pageId=${initialPageId}`, {
             headers: authHeaders,
             signal: ac.signal,
           });
@@ -370,7 +395,12 @@ export default function NotesPage() {
             const data = (await nr.json()) as Note[];
             const list = Array.isArray(data) ? data : [];
             setNotes(list);
-            setSelectedNoteId(list[0]?.id ?? null);
+            const savedNoteId = readLs(LS_LAST_NOTE_KEY);
+            const initialNoteId =
+              savedNoteId && list.some((n) => n.id === savedNoteId)
+                ? savedNoteId
+                : list[0]?.id ?? null;
+            setSelectedNoteId(initialNoteId);
           }
           setNotesLoading(false);
         } else {
@@ -395,6 +425,14 @@ export default function NotesPage() {
       ac.abort();
     };
   }, [token, authHeaders]);
+
+  useEffect(() => {
+    if (selectedPageId) writeLs(LS_LAST_PAGE_KEY, selectedPageId);
+  }, [selectedPageId]);
+
+  useEffect(() => {
+    if (selectedNoteId) writeLs(LS_LAST_NOTE_KEY, selectedNoteId);
+  }, [selectedNoteId]);
 
   /** Switch page: single notes fetch with abort if user switches again. */
   useEffect(() => {
@@ -1636,7 +1674,7 @@ export default function NotesPage() {
                       contentEditable
                       suppressContentEditableWarning
                       className={cn(
-                        "min-h-[200px] max-h-[min(65vh,520px)] w-full min-w-0 max-w-full flex-1 cursor-text overflow-x-hidden overflow-y-auto rounded-lg border bg-background px-3 py-2 text-sm text-foreground outline-none [overflow-wrap:anywhere] focus-visible:ring-2 focus-visible:ring-ring sm:min-h-[240px] sm:max-h-[min(70vh,560px)]",
+                        "note-html-scroll min-h-[200px] max-h-[min(65vh,520px)] w-full min-w-0 max-w-full flex-1 cursor-text overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none [overflow-wrap:anywhere] focus-visible:ring-2 focus-visible:ring-ring sm:min-h-[240px] sm:max-h-[min(70vh,560px)]",
                         NOTE_HTML_VIEW_CLASS,
                       )}
                       onInput={syncEditorToState}
@@ -1687,7 +1725,7 @@ export default function NotesPage() {
                           editorRef.current?.focus(),
                         );
                       }}
-                      className="min-h-[200px] max-h-[min(65vh,520px)] w-full min-w-0 max-w-full flex-1 cursor-pointer select-text overflow-x-hidden overflow-y-auto rounded-lg border bg-background px-3 py-2 text-sm text-foreground [overflow-wrap:anywhere] sm:min-h-[240px] sm:max-h-[min(70vh,560px)]"
+                      className="note-html-scroll min-h-[200px] max-h-[min(65vh,520px)] w-full min-w-0 max-w-full flex-1 cursor-pointer select-text overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground [overflow-wrap:anywhere] sm:min-h-[240px] sm:max-h-[min(70vh,560px)]"
                       aria-live="polite"
                     >
                       {renderReadNoteBody(selectedNote.content)}
