@@ -372,6 +372,39 @@ function removeDuplicateParagraphAfterList(html: string): string {
   return root.innerHTML;
 }
 
+function isEmptyBlock(el: Element): boolean {
+  const tag = el.tagName;
+  if (tag !== "P" && tag !== "DIV") return false;
+  const text = (el.textContent ?? "").replace(/\u00a0/g, " ").trim();
+  if (text !== "") return false;
+  for (const c of el.childNodes) {
+    if (c.nodeType === Node.TEXT_NODE) {
+      if ((c.textContent ?? "").trim() !== "") return false;
+    } else if (c.nodeType === Node.ELEMENT_NODE) {
+      const ce = c as Element;
+      if (ce.tagName !== "BR") return false;
+    }
+  }
+  return true;
+}
+
+/** Remove leading empty <p>/<div> (only br/whitespace) to avoid white bar / stray breaks on first edit. */
+function stripLeadingEmptyParagraphs(html: string): string {
+  if (typeof document === "undefined") return html;
+  const doc = new DOMParser().parseFromString(`<div>${html}</div>`, "text/html");
+  const root = doc.body.firstElementChild;
+  if (!root) return html;
+  let guard = 0;
+  while (guard++ < 50 && root.firstElementChild) {
+    const first = root.firstElementChild;
+    if (!isEmptyBlock(first)) break;
+    first.remove();
+  }
+  const out = root.innerHTML.trim();
+  if (!out) return "<p><br></p>";
+  return out;
+}
+
 /**
  * Wrap plain https? URLs in text nodes with <a> (skips existing links and code blocks).
  */
@@ -451,6 +484,7 @@ export function normalizeNoteHtmlStructure(html: string): string {
     s = sanitizeNoteHtml(s);
     s = removeDuplicateParagraphsBeforeMatchingList(s);
     s = removeDuplicateParagraphAfterList(s);
+    s = stripLeadingEmptyParagraphs(s);
   }
   return s;
 }
@@ -460,7 +494,11 @@ export function noteContentToEditorHtml(content: string): string {
   const t = content.trim();
   if (!t) return "<p><br></p>";
   if (isProbablyHtml(content)) return normalizeNoteHtmlStructure(content);
-  return sanitizeNoteHtml(dslToHtml(content));
+  let s = sanitizeNoteHtml(dslToHtml(content));
+  if (typeof document !== "undefined") {
+    s = stripLeadingEmptyParagraphs(s);
+  }
+  return s;
 }
 
 /** Before persist: normalize empty-ish editor output. */

@@ -293,6 +293,8 @@ export default function NotesPage() {
   const lastAutoSavedBodyRef = useRef<string | null>(null);
   const notesRef = useRef(notes);
   notesRef.current = notes;
+  const selectedNoteIdRef = useRef<string | null>(null);
+  selectedNoteIdRef.current = selectedNoteId;
   const skipNextNotesFetchForPageRef = useRef(false);
 
   const flashCopied = useCallback((key: string) => {
@@ -551,6 +553,22 @@ export default function NotesPage() {
       );
       if (ok) {
         lastAutoSavedBodyRef.current = normalized;
+        if (
+          typeof document !== "undefined" &&
+          editorRef.current &&
+          selectedNoteIdRef.current === noteId &&
+          normalized !== content
+        ) {
+          const current = editorRef.current.innerHTML;
+          if (current === content) {
+            editorRef.current.innerHTML = normalized
+              ? normalized
+              : "<p><br></p>";
+            lastAutoSavedBodyRef.current = normalizeNoteHtmlForSave(
+              editorRef.current.innerHTML,
+            );
+          }
+        }
       }
       if (showIndicator) {
         if (ok) {
@@ -615,11 +633,7 @@ export default function NotesPage() {
     let n: Node | null = sel.anchorNode;
     if (n.nodeType === Node.TEXT_NODE) n = (n as Text).parentElement;
     while (n && n !== root) {
-      if (
-        n instanceof HTMLElement &&
-        n.tagName === "MARK" &&
-        n.classList.contains("note-highlight")
-      ) {
+      if (n instanceof HTMLElement && n.tagName === "MARK") {
         return true;
       }
       n = n.parentElement;
