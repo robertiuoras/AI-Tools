@@ -73,3 +73,12 @@
 .dark .note-html-view mark.note-highlight {
   background-color: rgba(250, 204, 21, 0.28);
 }
+/* Lists can inherit styles that muddy <mark>; keep highlight consistent in <li> */
+.note-html-view li mark.note-highlight {
+  background-color: #fef9c3 !important;
+  color: inherit !important;
+}
+.dark .note-html-view li mark.note-highlight {
+  background-color: rgba(254, 249, 195, 0.92) !important;
+  color: inherit !important;
+}

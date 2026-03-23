@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
   type ClipboardEvent,
+  type KeyboardEvent,
   type ReactNode,
 } from "react";
 import { supabase, type Note, type NotePage } from "@/lib/supabase";
@@ -41,9 +42,9 @@ import {
   migrateLegacyNoteMarkup,
   normalizeColorHex,
   isProbablyHtml,
-  sanitizeNoteHtml,
   noteContentToEditorHtml,
   normalizeNoteHtmlForSave,
+  normalizeNoteHtmlStructure,
   htmlToPlainText,
 } from "@/lib/note-html";
 import { NoteColorPicker } from "@/components/NoteColorPicker";
@@ -252,7 +253,7 @@ function renderReadNoteBody(content: string): ReactNode {
       <div
         className={NOTE_HTML_VIEW_CLASS}
         dangerouslySetInnerHTML={{
-          __html: sanitizeNoteHtml(content),
+          __html: normalizeNoteHtmlStructure(content),
         }}
       />
     );
@@ -928,6 +929,21 @@ export default function NotesPage() {
       prev.map((n) => (n.id === selectedNoteId ? { ...n, content: html } : n)),
     );
   }, [selectedNoteId]);
+
+  const handleEditorKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLDivElement>) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+      const k = e.key.toLowerCase();
+      if (k === "b" || k === "i" || k === "u") {
+        e.preventDefault();
+        if (k === "b") runFormatCommand("bold");
+        else if (k === "i") runFormatCommand("italic");
+        else runFormatCommand("underline");
+      }
+    },
+    [runFormatCommand],
+  );
 
   const handleEditorPaste = useCallback(
     (e: ClipboardEvent<HTMLDivElement>) => {
@@ -1673,6 +1689,7 @@ export default function NotesPage() {
                       )}
                       onInput={syncEditorToState}
                       onPaste={handleEditorPaste}
+                      onKeyDown={handleEditorKeyDown}
                       onMouseUp={refreshFmt}
                       onKeyUp={refreshFmt}
                       onBlur={() => {

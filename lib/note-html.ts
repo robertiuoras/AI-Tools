@@ -271,12 +271,54 @@ export function sanitizeNoteHtml(html: string): string {
   return root.innerHTML;
 }
 
-/** Editor / read view: legacy DSL → HTML, or pass-through sanitized HTML. */
-export function noteContentToEditorHtml(content: string): string {
-  const t = content.trim();
-  if (!t) return "<p><br></p>";
-  if (isProbablyHtml(content)) return sanitizeNoteHtml(content);
-  return sanitizeNoteHtml(dslToHtml(content));
+/**
+ * Consecutive <p> blocks immediately followed by <ul>/<ol> where each <li> matches each <p>
+ * (browser often leaves the old paragraphs when turning a block into a list).
+ */
+function removeDuplicateParagraphsBeforeMatchingList(html: string): string {
+  const doc = new DOMParser().parseFromString(`<div>${html}</div>`, "text/html");
+  const root = doc.body.firstElementChild;
+  if (!root) return html;
+  const norm = (t: string) =>
+    t.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+
+  let i = 0;
+  while (i < root.children.length) {
+    let j = i;
+    const ps: Element[] = [];
+    while (j < root.children.length && root.children[j]!.tagName === "P") {
+      ps.push(root.children[j]!);
+      j++;
+    }
+    if (ps.length === 0) {
+      i++;
+      continue;
+    }
+    if (j >= root.children.length) break;
+    const list = root.children[j];
+    if (!list || (list.tagName !== "UL" && list.tagName !== "OL")) {
+      i++;
+      continue;
+    }
+    const lis = [...list.children].filter((c) => c.tagName === "LI");
+    if (lis.length !== ps.length || lis.length === 0) {
+      i++;
+      continue;
+    }
+    let match = true;
+    for (let k = 0; k < ps.length; k++) {
+      if (norm(ps[k]!.textContent ?? "") !== norm(lis[k]!.textContent ?? "")) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      for (const p of ps) p.remove();
+      continue;
+    }
+    i++;
+  }
+  return root.innerHTML;
 }
 
 /** Collapse common contenteditable bug: extra <p> after list duplicating last item text. */
@@ -318,12 +360,27 @@ function removeDuplicateParagraphAfterList(html: string): string {
   return root.innerHTML;
 }
 
-/** Before persist: normalize empty-ish editor output. */
-export function normalizeNoteHtmlForSave(html: string): string {
+/** Sanitize + remove duplicate paragraph/list patterns (safe for read view and editor load). */
+export function normalizeNoteHtmlStructure(html: string): string {
   let s = sanitizeNoteHtml(html);
   if (typeof document !== "undefined") {
+    s = removeDuplicateParagraphsBeforeMatchingList(s);
     s = removeDuplicateParagraphAfterList(s);
   }
+  return s;
+}
+
+/** Editor / read view: legacy DSL → HTML, or pass-through sanitized HTML. */
+export function noteContentToEditorHtml(content: string): string {
+  const t = content.trim();
+  if (!t) return "<p><br></p>";
+  if (isProbablyHtml(content)) return normalizeNoteHtmlStructure(content);
+  return sanitizeNoteHtml(dslToHtml(content));
+}
+
+/** Before persist: normalize empty-ish editor output. */
+export function normalizeNoteHtmlForSave(html: string): string {
+  let s = normalizeNoteHtmlStructure(html);
   const tmp =
     typeof document !== "undefined"
       ? new DOMParser().parseFromString(`<div>${s}</div>`, "text/html").body
