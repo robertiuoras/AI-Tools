@@ -239,7 +239,7 @@ function renderPreviewMarkdown(text: string): ReactNode {
 }
 
 const NOTE_HTML_VIEW_CLASS =
-  "note-html-view min-h-0 space-y-2 text-sm [&_a]:font-medium [&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2 [&_a]:break-all [&_h3]:scroll-m-20 [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:tracking-tight [&_li]:my-0.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:whitespace-pre-wrap [&_ul]:list-disc [&_ul]:pl-5";
+  "note-html-view min-h-0 space-y-2 text-sm [&_h3]:scroll-m-20 [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:tracking-tight [&_li]:my-0.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:whitespace-pre-wrap [&_ul]:list-disc [&_ul]:pl-5";
 
 function renderReadNoteBody(content: string): ReactNode {
   const t = content.trim();

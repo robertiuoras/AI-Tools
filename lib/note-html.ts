@@ -249,6 +249,14 @@ function sanitizeElement(el: Element): void {
     el.removeAttribute(a.name);
   }
 
+  if (tag === "A") {
+    const href = el.getAttribute("href")?.trim();
+    if (href && /^https?:\/\//i.test(href)) {
+      el.setAttribute("target", "_blank");
+      el.setAttribute("rel", "noopener noreferrer");
+    }
+  }
+
   const children = [...el.children];
   for (const child of children) sanitizeElement(child);
 }

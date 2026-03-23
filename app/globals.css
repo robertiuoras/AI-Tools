@@ -63,17 +63,17 @@
   background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.05'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
 }
 
-/* Notes: light yellow highlight (DSL + rich editor; lib emits mark.note-highlight) */
+/* Notes: light yellow highlight (read + edit — !important beats UA default mark in contenteditable) */
 .note-html-view mark.note-highlight {
-  background-color: #fef9c3;
+  background-color: #fef9c3 !important;
   color: inherit;
   border-radius: 0.125rem;
   padding-inline: 0.125rem;
 }
 .dark .note-html-view mark.note-highlight {
-  background-color: rgba(250, 204, 21, 0.28);
+  background-color: rgba(250, 204, 21, 0.28) !important;
+  color: inherit;
 }
-/* Lists can inherit styles that muddy <mark>; keep highlight consistent in <li> */
 .note-html-view li mark.note-highlight {
   background-color: #fef9c3 !important;
   color: inherit !important;
@@ -81,4 +81,24 @@
 .dark .note-html-view li mark.note-highlight {
   background-color: rgba(254, 249, 195, 0.92) !important;
   color: inherit !important;
+}
+
+/* Notes: links — explicit blue (text-primary is not blue in this theme) + works in HTML + editor */
+.note-html-view a[href^="http"] {
+  color: rgb(37 99 235);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  cursor: pointer;
+}
+.dark .note-html-view a[href^="http"] {
+  color: rgb(96 165 250);
+}
+.note-html-view a[href^="http"]:hover {
+  color: rgb(29 78 216);
+}
+.dark .note-html-view a[href^="http"]:hover {
+  color: rgb(147 197 253);
 }
