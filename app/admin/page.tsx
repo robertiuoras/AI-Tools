@@ -572,14 +572,31 @@ export default function AdminPage() {
     }
   }
 
-  const handleVideoAnalyze = async () => {
-    if (!videoQuickAddUrl.trim()) {
+  /** Heuristic for paste-to-fetch (YouTube / TikTok). */
+  const isLikelyVideoUrlText = (s: string) => {
+    const t = s.trim().toLowerCase()
+    if (!t) return false
+    return (
+      t.includes('youtube.com') ||
+      t.includes('youtu.be') ||
+      t.includes('tiktok.com') ||
+      t.includes('vm.tiktok.com')
+    )
+  }
+
+  const runVideoAnalyzeFromUrl = async (
+    rawUrl: string,
+    options?: { clearQuickField?: boolean },
+  ) => {
+    const clearQuick = options?.clearQuickField !== false
+    if (!rawUrl.trim()) {
       addToast({ variant: 'warning', title: 'URL Required', description: 'Paste a YouTube or TikTok video URL.' })
       return
     }
+    if (videoAnalyzing) return
     setVideoAnalyzing(true)
     try {
-      let urlToFetch = videoQuickAddUrl.trim()
+      let urlToFetch = rawUrl.trim()
       if (!urlToFetch.startsWith('http://') && !urlToFetch.startsWith('https://')) {
         urlToFetch = `https://${urlToFetch}`
       }
@@ -613,7 +630,7 @@ export default function AdminPage() {
           : prev.category,
         tags: data.suggestedTags ?? prev.tags,
       }))
-      setVideoQuickAddUrl('')
+      if (clearQuick) setVideoQuickAddUrl('')
       window.scrollTo({ top: 0, behavior: 'smooth' })
     } catch (e) {
       addToast({
@@ -624,6 +641,10 @@ export default function AdminPage() {
     } finally {
       setVideoAnalyzing(false)
     }
+  }
+
+  const handleVideoAnalyze = () => {
+    void runVideoAnalyzeFromUrl(videoQuickAddUrl)
   }
 
   const resetVideoForm = () => {
@@ -2129,7 +2150,7 @@ export default function AdminPage() {
                   <Label className="font-semibold">Add Video by URL</Label>
                 </div>
                 <p className="text-sm text-muted-foreground mb-3">
-                  Paste a YouTube or TikTok video URL to auto-fill title, creator, thumbnail, description, and suggested category (YouTube: YOUTUBE_API_KEY; TikTok: oEmbed; optional OPENAI_API_KEY for category)
+                  Paste a YouTube or TikTok URL to auto-fetch and fill the form (same as Quick Add by URL for AI tools)—or type a URL and click Fetch info.
                 </p>
                 <div className="flex gap-2">
                   <Input
@@ -2137,6 +2158,13 @@ export default function AdminPage() {
                     value={videoQuickAddUrl}
                     onChange={(e) => setVideoQuickAddUrl(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleVideoAnalyze())}
+                    onPaste={(e) => {
+                      const text = e.clipboardData.getData('text/plain').trim()
+                      if (!isLikelyVideoUrlText(text)) return
+                      e.preventDefault()
+                      setVideoQuickAddUrl(text)
+                      void runVideoAnalyzeFromUrl(text, { clearQuickField: true })
+                    }}
                     disabled={videoAnalyzing || videoSubmitting}
                     className="flex-1"
                   />
@@ -2176,6 +2204,13 @@ export default function AdminPage() {
                   type="url"
                   value={videoFormData.url}
                   onChange={(e) => setVideoFormData({ ...videoFormData, url: e.target.value })}
+                  onPaste={(e) => {
+                    if (editingVideoId) return
+                    const text = e.clipboardData.getData('text/plain').trim()
+                    if (!isLikelyVideoUrlText(text)) return
+                    e.preventDefault()
+                    void runVideoAnalyzeFromUrl(text, { clearQuickField: false })
+                  }}
                   placeholder="https://www.youtube.com/watch?v=... or https://www.tiktok.com/..."
                   required
                 />

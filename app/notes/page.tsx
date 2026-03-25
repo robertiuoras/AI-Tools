@@ -453,6 +453,19 @@ export default function NotesPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [noteBodyFullscreen]);
 
+  useEffect(() => {
+    if (!formatMenuOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const el = formatMenuRef.current;
+      if (!el) return;
+      if (el.contains(e.target as Node)) return;
+      setFormatMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () =>
+      document.removeEventListener("pointerdown", onPointerDown, true);
+  }, [formatMenuOpen]);
+
   /** Initial load: pages first (fast shell), then notes; avoids duplicate notes fetch on mount. */
   useEffect(() => {
     if (!token) return;
@@ -1094,9 +1107,44 @@ export default function NotesPage() {
     })();
   }, []);
 
+  /** Cmd/Ctrl+\ — paste clipboard as plain text (no rich formatting). */
+  const pastePlainFromClipboard = useCallback(async () => {
+    const root = editorRef.current;
+    if (!root) return;
+    root.focus();
+    if (!restoreEditorSelection()) return;
+    let text: string;
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      return;
+    }
+    if (!text) return;
+    try {
+      document.execCommand("insertText", false, text);
+    } catch {
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const r = sel.getRangeAt(0);
+      if (!root.contains(r.commonAncestorContainer)) return;
+      r.deleteContents();
+      r.insertNode(document.createTextNode(text));
+      r.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+    root.dispatchEvent(new Event("input", { bubbles: true }));
+    refreshFmt();
+  }, [refreshFmt, restoreEditorSelection]);
+
   const handleEditorKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
       const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.key === "\\") {
+        e.preventDefault();
+        void pastePlainFromClipboard();
+        return;
+      }
       if (!mod) return;
       const k = e.key.toLowerCase();
       if (k === "b" || k === "i" || k === "u") {
@@ -1106,7 +1154,7 @@ export default function NotesPage() {
         else runFormatCommand("underline");
       }
     },
-    [runFormatCommand],
+    [runFormatCommand, pastePlainFromClipboard],
   );
 
   const handleEditorPaste = useCallback(
@@ -1594,7 +1642,16 @@ export default function NotesPage() {
                             {formatMenuOpen && (
                               <div
                                 className="absolute right-0 z-50 mt-1 w-[min(100vw-1rem,26rem)] max-h-[min(90vh,640px)] overflow-y-auto rounded-md border border-border bg-popover p-2 shadow-md"
-                                onMouseDown={(e) => e.preventDefault()}
+                                onMouseDown={(e) => {
+                                  if (
+                                    (e.target as HTMLElement).closest(
+                                      "input, textarea, select, label",
+                                    )
+                                  ) {
+                                    return;
+                                  }
+                                  e.preventDefault();
+                                }}
                               >
                                 <div className="mb-2 flex flex-wrap gap-1">
                                   <Button
@@ -1771,7 +1828,10 @@ export default function NotesPage() {
                                         onChange={(e) =>
                                           setCustomFontSize(e.target.value)
                                         }
+                                        onMouseDown={(e) => e.stopPropagation()}
+                                        onClick={(e) => e.stopPropagation()}
                                         onKeyDown={(e) => {
+                                          e.stopPropagation();
                                           if (e.key !== "Enter") return;
                                           e.preventDefault();
                                           const n = Number(customFontSize);

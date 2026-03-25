@@ -77,6 +77,18 @@
   color: hsl(222.2 47.4% 11.2%) !important;
 }
 
+/* Contenteditable: some UAs paint <mark> like default highlight until saved — force theme */
+.note-html-view[contenteditable="true"] mark,
+.note-html-view[contenteditable="true"] mark.note-highlight {
+  background-color: #fef9c3 !important;
+  color: hsl(222.2 47.4% 11.2%) !important;
+}
+.dark .note-html-view[contenteditable="true"] mark,
+.dark .note-html-view[contenteditable="true"] mark.note-highlight {
+  background-color: #fde047 !important;
+  color: hsl(222.2 47.4% 11.2%) !important;
+}
+
 /* Dark note body: visible scrollbar on dark backgrounds */
 .dark .note-html-scroll {
   scrollbar-width: thin;
