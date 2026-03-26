@@ -100,12 +100,32 @@ export const toolSchema = preprocessTool.transform((d) => ({
 
 export type ToolInput = z.infer<typeof toolObjectSchema> & { category: string }
 
-// Video-specific categories for the /videos page
+// Video-specific categories for the /videos page (keep in sync with analyze prompt in /api/videos/analyze)
 export const videoCategories = [
+  'AI & Tech',
+  'ASMR & Relaxation',
+  'Art & Creative',
+  'Beauty & Fashion',
+  'Business & Finance',
+  'Cars & Automotive',
+  'Comedy',
+  'DIY & Crafts',
+  'Education & Tutorials',
+  'Entertainment',
+  'Food & Cooking',
+  'Gaming',
+  'Health & Wellness',
   'Motivational',
-  'Cars',
-  'Money',
-  'AI',
+  'Music',
+  'Nature & Wildlife',
+  'News & Commentary',
+  'Parenting & Family',
+  'Podcasts & Interviews',
+  'Reviews & Unboxing',
+  'Science & Documentary',
+  'Shorts & Clips',
+  'Sports & Fitness',
+  'Travel & Lifestyle',
   'Other',
 ] as const
 

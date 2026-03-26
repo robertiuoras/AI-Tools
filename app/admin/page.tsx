@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { Button } from '@/components/ui/button'
@@ -179,6 +179,36 @@ export default function AdminPage() {
     tags: '',
     description: '',
   })
+
+  const videoFormDataRef = useRef(videoFormData)
+  const editingVideoIdRef = useRef<string | null>(editingVideoId)
+  videoFormDataRef.current = videoFormData
+  editingVideoIdRef.current = editingVideoId
+
+  const [videoAutoAddSeconds, setVideoAutoAddSeconds] = useState<number | null>(null)
+  const videoAutoAddIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
+    null,
+  )
+  const videoAutoAddSessionRef = useRef(0)
+  const submitVideoCoreRef = useRef<() => Promise<boolean>>(async () => false)
+  const startVideoAutoAddCountdownRef = useRef<() => void>(() => {})
+
+  const clearVideoAutoAdd = useCallback(() => {
+    if (videoAutoAddIntervalRef.current) {
+      clearInterval(videoAutoAddIntervalRef.current)
+      videoAutoAddIntervalRef.current = null
+    }
+    setVideoAutoAddSeconds(null)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (videoAutoAddIntervalRef.current) {
+        clearInterval(videoAutoAddIntervalRef.current)
+        videoAutoAddIntervalRef.current = null
+      }
+    }
+  }, [])
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -584,6 +614,114 @@ export default function AdminPage() {
     )
   }
 
+  const resetVideoForm = useCallback(() => {
+    clearVideoAutoAdd()
+    setVideoThumbImgError(false)
+    setVideoFormData({
+      title: '',
+      url: '',
+      category: 'Other',
+      source: 'youtube',
+      youtuberName: '',
+      subscriberCount: '',
+      channelThumbnailUrl: '',
+      channelVideoCount: '',
+      verified: false,
+      tags: '',
+      description: '',
+    })
+    setEditingVideoId(null)
+  }, [clearVideoAutoAdd])
+
+  const submitVideoCore = useCallback(async (): Promise<boolean> => {
+    const fd = videoFormDataRef.current
+    const editId = editingVideoIdRef.current
+    if (!fd.title.trim() || !fd.url.trim() || !fd.category) {
+      addToast({
+        variant: 'warning',
+        title: 'Missing fields',
+        description: 'Title, URL, and Category are required.',
+      })
+      return false
+    }
+    setVideoSubmitting(true)
+    try {
+      const payload: Record<string, unknown> = {
+        title: fd.title.trim(),
+        url: fd.url.trim(),
+        category: fd.category,
+        source: fd.source,
+        youtuberName: fd.youtuberName.trim() || null,
+        subscriberCount: fd.subscriberCount.trim()
+          ? parseInt(fd.subscriberCount, 10)
+          : null,
+        channelThumbnailUrl: fd.channelThumbnailUrl?.trim() || null,
+        channelVideoCount: fd.channelVideoCount.trim()
+          ? parseInt(fd.channelVideoCount, 10)
+          : null,
+        verified: fd.verified || null,
+        tags: fd.tags.trim() || null,
+        description: fd.description.trim() || null,
+      }
+      const url = editId ? `/api/videos/${editId}` : '/api/videos'
+      const method = editId ? 'PUT' : 'POST'
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        if (res.status === 409) {
+          addToast({
+            variant: 'error',
+            title: 'Duplicate URL',
+            description: data.message || 'This video URL already exists.',
+          })
+          return false
+        }
+        throw new Error(data.message || data.error || data.details || 'Failed to save video')
+      }
+      resetVideoForm()
+      await fetchVideos()
+      return true
+    } catch (err) {
+      addToast({
+        variant: 'error',
+        title: 'Failed to save video',
+        description: err instanceof Error ? err.message : 'Please try again.',
+      })
+      return false
+    } finally {
+      setVideoSubmitting(false)
+    }
+  }, [addToast, resetVideoForm])
+
+  const startVideoAutoAddCountdown = useCallback(() => {
+    clearVideoAutoAdd()
+    const mySession = videoAutoAddSessionRef.current
+    let left = 5
+    setVideoAutoAddSeconds(left)
+    videoAutoAddIntervalRef.current = setInterval(() => {
+      left -= 1
+      if (left <= 0) {
+        if (videoAutoAddIntervalRef.current) {
+          clearInterval(videoAutoAddIntervalRef.current)
+          videoAutoAddIntervalRef.current = null
+        }
+        setVideoAutoAddSeconds(null)
+        if (videoAutoAddSessionRef.current !== mySession) return
+        if (editingVideoIdRef.current) return
+        void submitVideoCoreRef.current()
+        return
+      }
+      setVideoAutoAddSeconds(left)
+    }, 1000)
+  }, [clearVideoAutoAdd])
+
+  submitVideoCoreRef.current = submitVideoCore
+  startVideoAutoAddCountdownRef.current = startVideoAutoAddCountdown
+
   const runVideoAnalyzeFromUrl = async (
     rawUrl: string,
     options?: { clearQuickField?: boolean },
@@ -594,6 +732,8 @@ export default function AdminPage() {
       return
     }
     if (videoAnalyzing) return
+    videoAutoAddSessionRef.current += 1
+    clearVideoAutoAdd()
     setVideoAnalyzing(true)
     try {
       let urlToFetch = rawUrl.trim()
@@ -632,6 +772,22 @@ export default function AdminPage() {
       }))
       if (clearQuick) setVideoQuickAddUrl('')
       window.scrollTo({ top: 0, behavior: 'smooth' })
+
+      addToast({
+        variant: 'success',
+        title: 'Video details loaded',
+        description: `Saving automatically in 5s — edit the form or press Cancel to stop.`,
+        duration: 6000,
+      })
+
+      const filledTitle = (data.title || '').trim()
+      const filledUrl = (data.url || urlToFetch).trim()
+      if (!editingVideoIdRef.current && filledTitle && filledUrl) {
+        window.setTimeout(() => {
+          if (editingVideoIdRef.current) return
+          startVideoAutoAddCountdownRef.current()
+        }, 50)
+      }
     } catch (e) {
       addToast({
         variant: 'error',
@@ -647,82 +803,14 @@ export default function AdminPage() {
     void runVideoAnalyzeFromUrl(videoQuickAddUrl)
   }
 
-  const resetVideoForm = () => {
-    setVideoThumbImgError(false)
-    setVideoFormData({
-      title: '',
-      url: '',
-      category: 'Other',
-      source: 'youtube',
-      youtuberName: '',
-      subscriberCount: '',
-      channelThumbnailUrl: '',
-      channelVideoCount: '',
-      verified: false,
-      tags: '',
-      description: '',
-    })
-    setEditingVideoId(null)
-  }
-
   const handleVideoSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!videoFormData.title.trim() || !videoFormData.url.trim() || !videoFormData.category) {
-      addToast({
-        variant: 'warning',
-        title: 'Missing fields',
-        description: 'Title, URL, and Category are required.',
-      })
-      return
-    }
-    setVideoSubmitting(true)
-    try {
-      const payload: Record<string, unknown> = {
-        title: videoFormData.title.trim(),
-        url: videoFormData.url.trim(),
-        category: videoFormData.category,
-        source: videoFormData.source,
-        youtuberName: videoFormData.youtuberName.trim() || null,
-        subscriberCount: videoFormData.subscriberCount.trim()
-          ? parseInt(videoFormData.subscriberCount, 10)
-          : null,
-        channelThumbnailUrl: videoFormData.channelThumbnailUrl?.trim() || null,
-        channelVideoCount: videoFormData.channelVideoCount.trim()
-          ? parseInt(videoFormData.channelVideoCount, 10)
-          : null,
-        verified: videoFormData.verified || null,
-        tags: videoFormData.tags.trim() || null,
-        description: videoFormData.description.trim() || null,
-      }
-      const url = editingVideoId ? `/api/videos/${editingVideoId}` : '/api/videos'
-      const method = editingVideoId ? 'PUT' : 'POST'
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-      const data = await res.json()
-      if (!res.ok) {
-        if (res.status === 409) {
-          addToast({ variant: 'error', title: 'Duplicate URL', description: data.message || 'This video URL already exists.' })
-          return
-        }
-        throw new Error(data.message || data.error || data.details || 'Failed to save video')
-      }
-      resetVideoForm()
-      await fetchVideos()
-    } catch (err) {
-      addToast({
-        variant: 'error',
-        title: 'Failed to save video',
-        description: err instanceof Error ? err.message : 'Please try again.',
-      })
-    } finally {
-      setVideoSubmitting(false)
-    }
+    clearVideoAutoAdd()
+    await submitVideoCore()
   }
 
   const handleEditVideo = (video: Video) => {
+    clearVideoAutoAdd()
     setEditingVideoId(video.id)
     setVideoThumbImgError(false)
     setVideoFormData({
@@ -2187,6 +2275,22 @@ export default function AdminPage() {
               </div>
             )}
             <form onSubmit={handleVideoSubmit} className="space-y-4">
+              {videoAutoAddSeconds !== null && !editingVideoId ? (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+                  <span>
+                    Saving this video automatically in <strong>{videoAutoAddSeconds}</strong>s — edit fields below or cancel.
+                  </span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0 border-amber-300 bg-white hover:bg-amber-100 dark:border-amber-700 dark:bg-transparent dark:hover:bg-amber-900/50"
+                    onClick={clearVideoAutoAdd}
+                  >
+                    Cancel auto-save
+                  </Button>
+                </div>
+              ) : null}
               <div className="space-y-2">
                 <Label htmlFor="video-title">Title *</Label>
                 <Input

@@ -22,11 +22,35 @@ import { CreatorAvatar } from "@/components/CreatorAvatar";
 type ViewMode = "videos" | "creators";
 
 const CATEGORY_EMOJI: Record<string, string> = {
+  "AI & Tech": "🤖",
+  "ASMR & Relaxation": "🌙",
+  "Art & Creative": "🎨",
+  "Beauty & Fashion": "💄",
+  "Business & Finance": "📊",
+  "Cars & Automotive": "🏎️",
+  Comedy: "😂",
+  "DIY & Crafts": "🔧",
+  "Education & Tutorials": "📚",
+  Entertainment: "🎬",
+  "Food & Cooking": "🍳",
+  Gaming: "🎮",
+  "Health & Wellness": "💪",
   Motivational: "🚀",
+  Music: "🎵",
+  "Nature & Wildlife": "🦁",
+  "News & Commentary": "📰",
+  "Parenting & Family": "👪",
+  "Podcasts & Interviews": "🎙️",
+  "Reviews & Unboxing": "📦",
+  "Science & Documentary": "🔬",
+  "Shorts & Clips": "⚡",
+  "Sports & Fitness": "⚽",
+  "Travel & Lifestyle": "✈️",
+  Other: "📌",
+  // Legacy DB values → still show a chip if data predates this list
   Cars: "🏎️",
   Money: "💰",
   AI: "🤖",
-  Other: "📌",
 };
 
 function formatSubs(count: number | null): string | null {
