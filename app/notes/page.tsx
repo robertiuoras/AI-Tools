@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
   type ClipboardEvent,
+  type FocusEvent,
   type KeyboardEvent,
   type MutableRefObject,
   type ReactNode,
@@ -285,7 +286,7 @@ type NoteEditorHandlers = {
   onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => void;
   onMouseUp: () => void;
   onKeyUp: () => void;
-  onBlur: () => void;
+  onBlur: (e: FocusEvent<HTMLDivElement>) => void;
 };
 
 type NoteBodyEditorProps = {
@@ -337,7 +338,7 @@ const NoteBodyEditor = memo(
         onKeyDown={(e) => handlersRef.current.onKeyDown(e)}
         onMouseUp={() => handlersRef.current.onMouseUp()}
         onKeyUp={() => handlersRef.current.onKeyUp()}
-        onBlur={() => handlersRef.current.onBlur()}
+        onBlur={(e) => handlersRef.current.onBlur(e)}
       />
     );
   },
@@ -1090,8 +1091,14 @@ export default function NotesPage() {
     );
   }, []);
 
-  const handleEditorBlur = useCallback(() => {
+  const handleEditorBlur = useCallback((e: FocusEvent<HTMLDivElement>) => {
+    const related = e.relatedTarget as Node | null;
+    if (related && formatMenuRef.current?.contains(related)) return;
+
     void (async () => {
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      if (formatMenuRef.current?.contains(document.activeElement)) return;
+
       const raw = editorRef.current?.innerHTML ?? "";
       const normalized = normalizeNoteHtmlForSave(raw);
       const sid = selectedNoteIdRef.current;
@@ -1910,7 +1917,7 @@ export default function NotesPage() {
                       handlersRef={editorHandlersRef}
                       onSessionHydrated={onEditorSessionHydrated}
                       className={cn(
-                        "note-html-scroll w-full min-w-0 max-w-full flex-1 cursor-text overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none [overflow-wrap:anywhere] focus-visible:ring-2 focus-visible:ring-ring",
+                        "note-html-scroll w-full min-w-0 max-w-full flex-1 cursor-text overflow-x-hidden overflow-y-auto rounded-lg bg-background px-3 py-2 text-sm text-foreground outline-none [overflow-wrap:anywhere] focus-visible:ring-2 focus-visible:ring-ring",
                         NOTE_HTML_VIEW_CLASS,
                         noteBodyFullscreen
                           ? "min-h-0 flex-1 max-h-none sm:min-h-0"
@@ -1939,7 +1946,7 @@ export default function NotesPage() {
                         );
                       }}
                       className={cn(
-                        "note-html-scroll w-full min-w-0 max-w-full flex-1 cursor-pointer select-text overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground [overflow-wrap:anywhere]",
+                        "note-html-scroll w-full min-w-0 max-w-full flex-1 cursor-pointer select-text overflow-x-hidden overflow-y-auto rounded-lg bg-background px-3 py-2 text-sm text-foreground [overflow-wrap:anywhere]",
                         noteBodyFullscreen
                           ? "min-h-0 flex-1 max-h-none sm:min-h-0"
                           : "min-h-[200px] max-h-[min(65vh,520px)] sm:min-h-[240px] sm:max-h-[min(70vh,560px)]",
