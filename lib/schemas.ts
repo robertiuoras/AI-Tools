@@ -29,19 +29,48 @@ export type Category = typeof categories[number]
 const categorySet = new Set<string>(categories)
 
 /**
+ * Map legacy tool category strings (before list renames) to current `categories` values.
+ * Extend as you audit the `tool` table or imports.
+ */
+export const LEGACY_TOOL_CATEGORY_ALIASES: Record<string, Category> = {
+  Video: 'Video Editing',
+  Audio: 'Music & Audio',
+  Voice: 'Voice & Audio',
+  Images: 'Image Generation',
+  Code: 'Code Assistants',
+}
+
+/**
  * Collapse bad data (e.g. "Video Editing|AI Automation|SaaS") to one known category.
- * Picks the first segment that matches our category list; otherwise first segment or Other.
+ * Picks the first segment that matches our category list; otherwise legacy alias or Other.
  */
 export function normalizeToolCategory(raw: string | null | undefined): string {
   if (raw == null || typeof raw !== 'string') return 'Other'
   const s = raw.trim()
   if (!s) return 'Other'
   if (categorySet.has(s)) return s
+  const lower = s.toLowerCase()
   const parts = s.split('|').map((p) => p.trim()).filter(Boolean)
   for (const p of parts) {
     if (categorySet.has(p)) return p
+    const pl = p.toLowerCase()
+    const legacy = LEGACY_TOOL_CATEGORY_ALIASES[p] ?? LEGACY_TOOL_CATEGORY_ALIASES[pl]
+    if (legacy && categorySet.has(legacy)) return legacy
+    for (const c of categories) {
+      if (c.toLowerCase() === pl) return c
+    }
   }
-  if (parts.length === 1) return parts[0]
+  if (parts.length === 1) {
+    const p0 = parts[0]
+    const legacy =
+      LEGACY_TOOL_CATEGORY_ALIASES[s] ??
+      LEGACY_TOOL_CATEGORY_ALIASES[lower]
+    if (legacy && categorySet.has(legacy)) return legacy
+    for (const c of categories) {
+      if (c.toLowerCase() === p0.toLowerCase()) return c
+    }
+    return p0
+  }
   return 'Other'
 }
 
@@ -130,6 +159,42 @@ export const videoCategories = [
 ] as const
 
 export type VideoCategory = typeof videoCategories[number]
+
+const videoCategorySet = new Set<string>(videoCategories)
+
+/**
+ * Map legacy DB values (renamed lists, typos, overly narrow labels) to current broad categories.
+ * Extend `LEGACY_VIDEO_CATEGORY_ALIASES` as you discover old values in Supabase.
+ */
+export const LEGACY_VIDEO_CATEGORY_ALIASES: Record<string, VideoCategory> = {
+  // Examples — adjust to match strings actually stored in your `video` table
+  'AI & Technology': 'AI & Tech',
+  Technology: 'AI & Tech',
+  Tech: 'AI & Tech',
+  Education: 'Education & Tutorials',
+  Tutorials: 'Education & Tutorials',
+  Tutorial: 'Education & Tutorials',
+  Documentary: 'Science & Documentary',
+  Fitness: 'Sports & Fitness',
+  Travel: 'Travel & Lifestyle',
+  Lifestyle: 'Travel & Lifestyle',
+}
+
+/** Collapse unknown/legacy video category strings to a valid `videoCategories` value. */
+export function normalizeVideoCategory(raw: string | null | undefined): VideoCategory {
+  if (raw == null || typeof raw !== 'string') return 'Other'
+  const s = raw.trim()
+  if (!s) return 'Other'
+  if (videoCategorySet.has(s)) return s as VideoCategory
+  const lower = s.toLowerCase()
+  for (const c of videoCategories) {
+    if (c.toLowerCase() === lower) return c
+  }
+  const mapped =
+    LEGACY_VIDEO_CATEGORY_ALIASES[s] ?? LEGACY_VIDEO_CATEGORY_ALIASES[lower]
+  if (mapped && videoCategorySet.has(mapped)) return mapped
+  return 'Other'
+}
 
 export const videoSources = ['youtube', 'tiktok'] as const
 export type VideoSource = (typeof videoSources)[number]

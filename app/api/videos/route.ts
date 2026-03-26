@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase";
-import { videoSchema } from "@/lib/schemas";
+import { normalizeVideoCategory, videoSchema } from "@/lib/schemas";
 
 export async function GET(request: NextRequest) {
   try {
@@ -62,6 +62,11 @@ export async function GET(request: NextRequest) {
         );
       });
     }
+
+    filtered = filtered.map((video: any) => ({
+      ...video,
+      category: normalizeVideoCategory(video.category),
+    }));
 
     return NextResponse.json(filtered);
   } catch (error) {

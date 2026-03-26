@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
-import { videoSchema } from "@/lib/schemas";
+import { normalizeVideoCategory, videoSchema } from "@/lib/schemas";
 
 export async function GET(
   _request: NextRequest,
@@ -19,7 +19,10 @@ export async function GET(
       return NextResponse.json({ error: "Video not found" }, { status: 404 });
     }
 
-    return NextResponse.json(video);
+    return NextResponse.json({
+      ...video,
+      category: normalizeVideoCategory((video as { category?: string }).category),
+    });
   } catch (error) {
     console.error("❌ Error fetching video:", error);
     return NextResponse.json(

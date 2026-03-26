@@ -57,6 +57,55 @@ const NUMBERED_LINE_RE = /^(\s*)\d+\.\s+/;
 /** Styled via globals.css `.note-html-view mark.note-highlight` */
 const NOTE_MARK_HIGHLIGHT_CLASS = "note-highlight";
 
+function unwrapElement(el: HTMLElement): void {
+  const parent = el.parentNode;
+  if (!parent) return;
+  while (el.firstChild) {
+    parent.insertBefore(el.firstChild, el);
+  }
+  parent.removeChild(el);
+  if (parent instanceof HTMLElement) parent.normalize();
+}
+
+function depthFromRoot(el: HTMLElement, root: HTMLElement): number {
+  let d = 0;
+  let n: Node | null = el;
+  while (n && n !== root) {
+    d++;
+    n = n.parentNode;
+  }
+  return d;
+}
+
+function collectMarksIntersectingRange(
+  root: HTMLElement,
+  range: Range,
+  highlightClass: string,
+): HTMLElement[] {
+  const out: HTMLElement[] = [];
+  root.querySelectorAll(`mark.${highlightClass}`).forEach((el) => {
+    if (el instanceof HTMLElement && range.intersectsNode(el)) {
+      out.push(el);
+    }
+  });
+  out.sort((a, b) => depthFromRoot(b, root) - depthFromRoot(a, root));
+  return out;
+}
+
+function collectCodesIntersectingRange(
+  root: HTMLElement,
+  range: Range,
+): HTMLElement[] {
+  const out: HTMLElement[] = [];
+  root.querySelectorAll("code").forEach((el) => {
+    if (el instanceof HTMLElement && range.intersectsNode(el)) {
+      out.push(el);
+    }
+  });
+  out.sort((a, b) => depthFromRoot(b, root) - depthFromRoot(a, root));
+  return out;
+}
+
 const LS_LAST_PAGE_KEY = "notes:lastPageId";
 const LS_LAST_NOTE_KEY = "notes:lastNoteId";
 
@@ -369,6 +418,7 @@ export default function NotesPage() {
     underline: false,
     strikeThrough: false,
     highlight: false,
+    inlineCode: false,
     unorderedList: false,
     orderedList: false,
     heading3: false,
@@ -794,7 +844,26 @@ export default function NotesPage() {
     let n: Node | null = sel.anchorNode;
     if (n.nodeType === Node.TEXT_NODE) n = (n as Text).parentElement;
     while (n && n !== root) {
-      if (n instanceof HTMLElement && n.tagName === "MARK") {
+      if (
+        n instanceof HTMLElement &&
+        n.tagName === "MARK" &&
+        n.classList.contains(NOTE_MARK_HIGHLIGHT_CLASS)
+      ) {
+        return true;
+      }
+      n = n.parentElement;
+    }
+    return false;
+  }, []);
+
+  const selectionInsideInlineCode = useCallback(() => {
+    const root = editorRef.current;
+    const sel = window.getSelection();
+    if (!root || !sel?.anchorNode || !root.contains(sel.anchorNode)) return false;
+    let n: Node | null = sel.anchorNode;
+    if (n.nodeType === Node.TEXT_NODE) n = (n as Text).parentElement;
+    while (n && n !== root) {
+      if (n instanceof HTMLElement && n.tagName === "CODE") {
         return true;
       }
       n = n.parentElement;
@@ -842,6 +911,7 @@ export default function NotesPage() {
         underline: document.queryCommandState("underline"),
         strikeThrough: document.queryCommandState("strikeThrough"),
         highlight: selectionInsideHighlight(),
+        inlineCode: selectionInsideInlineCode(),
         unorderedList: document.queryCommandState("insertUnorderedList"),
         orderedList: document.queryCommandState("insertOrderedList"),
         heading3,
@@ -849,7 +919,13 @@ export default function NotesPage() {
     } catch {
       // ignore
     }
-  }, [isEditing, selectionInEditor, selectionInsideHeading3, selectionInsideHighlight]);
+  }, [
+    isEditing,
+    selectionInEditor,
+    selectionInsideHeading3,
+    selectionInsideHighlight,
+    selectionInsideInlineCode,
+  ]);
 
   useEffect(() => {
     if (!isEditing) return;
@@ -872,11 +948,17 @@ export default function NotesPage() {
     return () => document.removeEventListener("selectionchange", onSel);
   }, [isEditing, refreshFmt]);
 
+  /** execCommand toggles most inline styles; keeps selection via restoreEditorSelection. */
   const runFormatCommand = useCallback(
     (command: string, value?: string) => {
       const root = editorRef.current;
       root?.focus();
       restoreEditorSelection();
+      try {
+        document.execCommand("styleWithCSS", false, "true");
+      } catch {
+        /* ignore */
+      }
       try {
         document.execCommand(command, false, value);
       } catch {
@@ -923,7 +1005,7 @@ export default function NotesPage() {
     [normalizePanelHex, refreshFmt, restoreEditorSelection],
   );
 
-  const applyHighlightColor = useCallback(() => {
+  const toggleHighlightColor = useCallback(() => {
     const root = editorRef.current;
     root?.focus();
     if (!restoreEditorSelection()) return;
@@ -931,6 +1013,21 @@ export default function NotesPage() {
     if (!root || !sel || sel.rangeCount === 0) return;
     const r = sel.getRangeAt(0);
     if (!root.contains(r.commonAncestorContainer)) return;
+
+    const marks = collectMarksIntersectingRange(
+      root,
+      r,
+      NOTE_MARK_HIGHLIGHT_CLASS,
+    );
+    if (marks.length > 0) {
+      for (const m of marks) {
+        unwrapElement(m);
+      }
+      root.dispatchEvent(new Event("input", { bubbles: true }));
+      refreshFmt();
+      return;
+    }
+
     const mark = document.createElement("mark");
     mark.className = NOTE_MARK_HIGHLIGHT_CLASS;
     if (r.collapsed) {
@@ -1005,7 +1102,7 @@ export default function NotesPage() {
     [refreshFmt, restoreEditorSelection],
   );
 
-  const wrapSelectionInCode = useCallback(() => {
+  const toggleInlineCode = useCallback(() => {
     const root = editorRef.current;
     root?.focus();
     if (!restoreEditorSelection()) return;
@@ -1013,6 +1110,17 @@ export default function NotesPage() {
     if (!root || !sel || sel.rangeCount === 0) return;
     const r = sel.getRangeAt(0);
     if (!root.contains(r.commonAncestorContainer)) return;
+
+    const codes = collectCodesIntersectingRange(root, r);
+    if (codes.length > 0) {
+      for (const c of codes) {
+        unwrapElement(c);
+      }
+      root.dispatchEvent(new Event("input", { bubbles: true }));
+      refreshFmt();
+      return;
+    }
+
     const code = document.createElement("code");
     code.className =
       "rounded bg-muted px-1 py-0.5 text-[0.9em] font-mono";
@@ -1670,7 +1778,7 @@ export default function NotesPage() {
                                       fmtActive.bold &&
                                         "border-primary bg-primary/10",
                                     )}
-                                    title="Bold"
+                                    title="Bold — click again to remove"
                                     onClick={() =>
                                       runFormatCommand("bold")
                                     }
@@ -1686,7 +1794,7 @@ export default function NotesPage() {
                                       fmtActive.italic &&
                                         "border-primary bg-primary/10",
                                     )}
-                                    title="Italic"
+                                    title="Italic — click again to remove"
                                     onClick={() =>
                                       runFormatCommand("italic")
                                     }
@@ -1702,7 +1810,7 @@ export default function NotesPage() {
                                       fmtActive.underline &&
                                         "border-primary bg-primary/10",
                                     )}
-                                    title="Underline"
+                                    title="Underline — click again to remove"
                                     onClick={() =>
                                       runFormatCommand("underline")
                                     }
@@ -1718,7 +1826,7 @@ export default function NotesPage() {
                                       fmtActive.strikeThrough &&
                                         "border-primary bg-primary/10",
                                     )}
-                                    title="Strikethrough"
+                                    title="Strikethrough — click again to remove"
                                     onClick={() =>
                                       runFormatCommand("strikeThrough")
                                     }
@@ -1734,8 +1842,8 @@ export default function NotesPage() {
                                       fmtActive.highlight &&
                                         "border-primary bg-primary/10",
                                     )}
-                                    title="Highlight selection"
-                                    onClick={applyHighlightColor}
+                                    title="Highlight — click again to remove"
+                                    onClick={toggleHighlightColor}
                                   >
                                     <Highlighter
                                       className={cn(
@@ -1754,7 +1862,7 @@ export default function NotesPage() {
                                       fmtActive.unorderedList &&
                                         "border-primary bg-primary/10",
                                     )}
-                                    title="Bullet list"
+                                    title="Bullet list — click again to turn off"
                                     onClick={() =>
                                       runFormatCommand(
                                         "insertUnorderedList",
@@ -1772,7 +1880,7 @@ export default function NotesPage() {
                                       fmtActive.orderedList &&
                                         "border-primary bg-primary/10",
                                     )}
-                                    title="Numbered list"
+                                    title="Numbered list — click again to turn off"
                                     onClick={() =>
                                       runFormatCommand("insertOrderedList")
                                     }
@@ -1797,9 +1905,13 @@ export default function NotesPage() {
                                     type="button"
                                     size="sm"
                                     variant="outline"
-                                    className="h-8 font-mono text-xs"
-                                    title="Inline code"
-                                    onClick={wrapSelectionInCode}
+                                    className={cn(
+                                      "h-8 font-mono text-xs",
+                                      fmtActive.inlineCode &&
+                                        "border-primary bg-primary/10",
+                                    )}
+                                    title="Inline code — click again to remove"
+                                    onClick={toggleInlineCode}
                                   >
                                     &lt;/&gt;
                                   </Button>
