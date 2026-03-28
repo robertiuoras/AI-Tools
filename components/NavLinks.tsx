@@ -3,6 +3,8 @@
 import type { ReactNode } from 'react'
 import Link from 'next/link'
 import { usePathname, useSearchParams } from 'next/navigation'
+import { useEffect, useState } from 'react'
+import { supabase } from '@/lib/supabase'
 import { cn } from '@/lib/utils'
 
 const HOVER_MS = 'duration-500'
@@ -61,12 +63,50 @@ function NavLabel({
 export function NavLinks() {
   const pathname = usePathname()
   const searchParams = useSearchParams()
+  const [isAdmin, setIsAdmin] = useState(false)
   const isToolsPage = pathname === '/'
   const isVideosPage = pathname === '/videos'
   const isPromptsPage =
     pathname === '/prompts' || pathname.startsWith('/prompts/')
   const isNotesPage = pathname === '/notes'
+  const isProjectsPage = pathname === '/projects'
   const isCreatorsView = isVideosPage && searchParams.get('view') === 'creators'
+
+  useEffect(() => {
+    let cancelled = false
+
+    const check = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+      const token = session?.access_token
+      if (!token) {
+        if (!cancelled) setIsAdmin(false)
+        return
+      }
+      try {
+        const res = await fetch('/api/auth/check', {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        const data = (await res.json()) as { role?: string }
+        if (!cancelled) setIsAdmin(data?.role === 'admin')
+      } catch {
+        if (!cancelled) setIsAdmin(false)
+      }
+    }
+
+    void check()
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(() => {
+      void check()
+    })
+
+    return () => {
+      cancelled = true
+      subscription.unsubscribe()
+    }
+  }, [])
 
   const linkBase =
     'group rounded-md px-4 py-2 text-sm font-semibold transition-colors ' +
@@ -169,6 +209,32 @@ export function NavLinks() {
           Notes
         </NavLabel>
       </Link>
+      {isAdmin ? (
+        <>
+          <span
+            className="text-muted-foreground/60 px-0.5 font-light"
+            aria-hidden
+          >
+            |
+          </span>
+          <Link
+            href="/projects"
+            className={cn(
+              linkBase,
+              isProjectsPage
+                ? 'bg-background text-foreground shadow-sm ring-1 ring-border/50'
+                : 'text-muted-foreground hover:bg-background/50',
+            )}
+          >
+            <NavLabel
+              active={isProjectsPage}
+              gradient={{ from: 'from-emerald-500', to: 'to-teal-600' }}
+            >
+              Projects
+            </NavLabel>
+          </Link>
+        </>
+      ) : null}
     </div>
   )
 }
