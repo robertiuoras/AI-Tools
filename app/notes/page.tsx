@@ -863,6 +863,15 @@ export default function NotesPage() {
   const updateNoteRef = useRef(updateNote);
   updateNoteRef.current = updateNote;
 
+  const stripEditorOnlyUi = useCallback((html: string) => {
+    if (typeof document === "undefined") return html;
+    const doc = new DOMParser().parseFromString(`<div>${html}</div>`, "text/html");
+    const root = doc.body.firstElementChild;
+    if (!root) return html;
+    root.querySelectorAll("[data-note-ui='1']").forEach((el) => el.remove());
+    return root.innerHTML;
+  }, []);
+
   const persistNoteBody = useCallback(
     async (noteId: string, content: string, showIndicator: boolean) => {
       const normalized = normalizeNoteHtmlForSave(stripEditorOnlyUi(content));
@@ -1370,15 +1379,6 @@ export default function NotesPage() {
     lastAutoSavedBodyRef.current = baseline;
   }, []);
 
-  const stripEditorOnlyUi = useCallback((html: string) => {
-    if (typeof document === "undefined") return html;
-    const doc = new DOMParser().parseFromString(`<div>${html}</div>`, "text/html");
-    const root = doc.body.firstElementChild;
-    if (!root) return html;
-    root.querySelectorAll("[data-note-ui='1']").forEach((el) => el.remove());
-    return root.innerHTML;
-  }, []);
-
   const ensureImageFigureUi = useCallback((figure: HTMLElement) => {
     figure.setAttribute("data-note-image", "1");
     figure.style.display = "block";
@@ -1617,26 +1617,14 @@ export default function NotesPage() {
       if (e.key === "Enter" && e.shiftKey) {
         const root = editorRef.current;
         if (!root) return;
-        const sel = window.getSelection();
-        const inEditor =
-          !!sel &&
-          sel.rangeCount > 0 &&
-          root.contains(sel.getRangeAt(0).commonAncestorContainer);
-        if (!inEditor) return;
-
-        // Shift+Enter should create a soft line break inside current list item/body block.
+        root.focus();
+        restoreEditorSelection();
         e.preventDefault();
         try {
-          document.execCommand("insertLineBreak");
+          // Make Shift+Enter behave like regular Enter (new list item in lists).
+          document.execCommand("insertParagraph");
         } catch {
-          const r = sel!.getRangeAt(0);
-          const br = document.createElement("br");
-          r.deleteContents();
-          r.insertNode(br);
-          r.setStartAfter(br);
-          r.collapse(true);
-          sel!.removeAllRanges();
-          sel!.addRange(r);
+          // ignore
         }
         root.dispatchEvent(new Event("input", { bubbles: true }));
         return;
@@ -1665,7 +1653,12 @@ export default function NotesPage() {
         else runFormatCommand("underline");
       }
     },
-    [removeSelectedImage, runFormatCommand, pastePlainFromClipboard],
+    [
+      removeSelectedImage,
+      restoreEditorSelection,
+      runFormatCommand,
+      pastePlainFromClipboard,
+    ],
   );
 
   const handleEditorPaste = useCallback(
