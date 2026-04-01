@@ -1614,6 +1614,15 @@ export default function NotesPage() {
     [allNotesForMentions],
   );
 
+  const removeSelectedImage = useCallback(() => {
+    const root = editorRef.current;
+    const figure = selectedImageFigureRef.current;
+    if (!root || !figure || !root.contains(figure)) return;
+    figure.remove();
+    selectedImageFigureRef.current = null;
+    root.dispatchEvent(new Event("input", { bubbles: true }));
+  }, []);
+
   const handleEditorKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
       if (e.key === "Enter" && e.shiftKey) {
@@ -1700,15 +1709,6 @@ export default function NotesPage() {
   const removeSelectedFormatting = useCallback(() => {
     runFormatCommand("removeFormat");
   }, [runFormatCommand]);
-
-  const removeSelectedImage = useCallback(() => {
-    const root = editorRef.current;
-    const figure = selectedImageFigureRef.current;
-    if (!root || !figure || !root.contains(figure)) return;
-    figure.remove();
-    selectedImageFigureRef.current = null;
-    root.dispatchEvent(new Event("input", { bubbles: true }));
-  }, []);
 
   const handleEditorContextMenu = useCallback(
     (e: MouseEvent<HTMLDivElement>) => {
