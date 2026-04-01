@@ -1391,7 +1391,9 @@ export default function NotesPage() {
       if (!img.getAttribute("loading")) img.setAttribute("loading", "lazy");
     }
 
-    let handle = figure.querySelector("[data-note-ui='1'][data-resize-handle='1']");
+    let handle = figure.querySelector(
+      "[data-note-ui='1'][data-resize-handle='1']",
+    ) as HTMLElement | null;
     if (!handle) {
       handle = document.createElement("span");
       handle.setAttribute("data-note-ui", "1");
