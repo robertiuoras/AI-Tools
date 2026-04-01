@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils'
 
 const HOVER_MS = 'duration-500'
 const HOVER_EASE = 'ease-out'
+const ADMIN_CACHE_KEY = 'auth:isAdmin'
 
 type GradientSpec = {
   from: string
@@ -63,7 +64,14 @@ function NavLabel({
 export function NavLinks() {
   const pathname = usePathname()
   const searchParams = useSearchParams()
-  const [isAdmin, setIsAdmin] = useState(false)
+  const [isAdmin, setIsAdmin] = useState(() => {
+    if (typeof window === 'undefined') return false
+    try {
+      return localStorage.getItem(ADMIN_CACHE_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
   const isToolsPage = pathname === '/'
   const isVideosPage = pathname === '/videos'
   const isPromptsPage =
@@ -82,6 +90,11 @@ export function NavLinks() {
       const token = session?.access_token
       if (!token) {
         if (!cancelled) setIsAdmin(false)
+        try {
+          localStorage.removeItem(ADMIN_CACHE_KEY)
+        } catch {
+          // ignore
+        }
         return
       }
       try {
@@ -89,7 +102,14 @@ export function NavLinks() {
           headers: { Authorization: `Bearer ${token}` },
         })
         const data = (await res.json()) as { role?: string }
-        if (!cancelled) setIsAdmin(data?.role === 'admin')
+        const admin = data?.role === 'admin'
+        if (!cancelled) setIsAdmin(admin)
+        try {
+          if (admin) localStorage.setItem(ADMIN_CACHE_KEY, '1')
+          else localStorage.removeItem(ADMIN_CACHE_KEY)
+        } catch {
+          // ignore
+        }
       } catch {
         if (!cancelled) setIsAdmin(false)
       }
