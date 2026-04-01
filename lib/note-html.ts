@@ -284,9 +284,12 @@ function sanitizeElement(el: Element): void {
     }
     if (name === "href" && tag === "A") {
       const v = a.value.trim();
-      if (!/^https?:\/\//i.test(v)) el.removeAttribute(a.name);
+      if (!/^https?:\/\//i.test(v) && !/^#note-[\w-]+$/i.test(v)) {
+        el.removeAttribute(a.name);
+      }
       continue;
     }
+    if (name === "data-note-id" && tag === "A") continue;
     if (name === "style" && (tag === "SPAN" || tag === "FONT" || tag === "MARK")) {
       const cleaned = sanitizeStyleValue(el.getAttribute("style") || "");
       if (cleaned) el.setAttribute("style", cleaned);

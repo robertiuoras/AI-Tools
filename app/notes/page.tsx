@@ -1614,6 +1614,34 @@ export default function NotesPage() {
 
   const handleEditorKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
+      if (e.key === "Enter" && e.shiftKey) {
+        const root = editorRef.current;
+        if (!root) return;
+        const sel = window.getSelection();
+        const inEditor =
+          !!sel &&
+          sel.rangeCount > 0 &&
+          root.contains(sel.getRangeAt(0).commonAncestorContainer);
+        if (!inEditor) return;
+
+        // Shift+Enter should create a soft line break inside current list item/body block.
+        e.preventDefault();
+        try {
+          document.execCommand("insertLineBreak");
+        } catch {
+          const r = sel!.getRangeAt(0);
+          const br = document.createElement("br");
+          r.deleteContents();
+          r.insertNode(br);
+          r.setStartAfter(br);
+          r.collapse(true);
+          sel!.removeAllRanges();
+          sel!.addRange(r);
+        }
+        root.dispatchEvent(new Event("input", { bubbles: true }));
+        return;
+      }
+
       if (
         (e.key === "Delete" || e.key === "Backspace") &&
         selectedImageFigureRef.current

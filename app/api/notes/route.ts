@@ -30,16 +30,16 @@ export async function GET(request: NextRequest) {
     const userId = await getUserId(request);
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const pageId = request.nextUrl.searchParams.get("pageId");
-    if (!pageId) return NextResponse.json({ error: "pageId is required" }, { status: 400 });
 
     const admin = supabaseAdmin as any;
-    const { data, error } = await admin
+    let query = admin
       .from("note")
       .select("*")
       .eq("userId", userId)
-      .eq("pageId", pageId)
       .order("favorite", { ascending: false })
       .order("updatedAt", { ascending: false });
+    if (pageId) query = query.eq("pageId", pageId);
+    const { data, error } = await query;
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json(Array.isArray(data) ? data : []);
