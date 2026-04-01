@@ -115,6 +115,7 @@ export default function AdminPage() {
   const [bulkUrls, setBulkUrls] = useState('')
   const [bulkProcessing, setBulkProcessing] = useState(false)
   const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0, currentUrl: '' })
+  const [reanalyzingToolId, setReanalyzingToolId] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [adminCategoryFilter, setAdminCategoryFilter] = useState<string>('all')
@@ -626,6 +627,96 @@ export default function AdminPage() {
         title: 'Failed to Delete Tool',
         description: 'Please try again.',
       })
+    }
+  }
+
+  const handleReanalyzeTool = async (tool: Tool) => {
+    const rawUrl = tool.url?.trim()
+    if (!rawUrl) {
+      addToast({
+        variant: 'warning',
+        title: 'Missing URL',
+        description: 'This tool has no URL to analyze.',
+      })
+      return
+    }
+    if (reanalyzingToolId) return
+    setReanalyzingToolId(tool.id)
+    try {
+      const analyzeRes = await fetch('/api/tools/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: rawUrl }),
+      })
+      const analyzeData = await analyzeRes.json().catch(() => ({}))
+      if (!analyzeRes.ok) {
+        throw new Error(
+          analyzeData?.error ||
+            analyzeData?.details ||
+            `Failed to analyze tool (${analyzeRes.status})`,
+        )
+      }
+
+      const nextCategories =
+        Array.isArray(analyzeData.categories) &&
+        analyzeData.categories.length > 0
+          ? sortSelectedCategories(
+              analyzeData.categories
+                .map((c: unknown) => String(c).trim())
+                .filter(Boolean),
+            )
+          : toolCategoryList(tool)
+
+      const payload = {
+        name: tool.name,
+        description:
+          typeof analyzeData.description === 'string' &&
+          analyzeData.description.trim()
+            ? analyzeData.description.trim()
+            : tool.description,
+        url: tool.url,
+        logoUrl:
+          typeof analyzeData.logoUrl === 'string' &&
+          analyzeData.logoUrl.trim()
+            ? analyzeData.logoUrl.trim()
+            : tool.logoUrl || null,
+        categories: nextCategories,
+        tags: tool.tags || null,
+        traffic: tool.traffic || null,
+        revenue: tool.revenue || null,
+        rating: tool.rating ?? null,
+        estimatedVisits: tool.estimatedVisits ?? null,
+      }
+
+      const updateRes = await fetch(`/api/tools/${tool.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const updateData = await updateRes.json().catch(() => ({}))
+      if (!updateRes.ok) {
+        throw new Error(
+          updateData?.error ||
+            updateData?.details ||
+            `Failed to update tool (${updateRes.status})`,
+        )
+      }
+
+      await fetchTools()
+      addToast({
+        variant: 'success',
+        title: 'Tool refreshed',
+        description: `Updated logo, info, and categories for ${tool.name}.`,
+      })
+    } catch (error) {
+      addToast({
+        variant: 'error',
+        title: 'Re-analyze failed',
+        description:
+          error instanceof Error ? error.message : 'Please try again.',
+      })
+    } finally {
+      setReanalyzingToolId(null)
     }
   }
 
@@ -2231,6 +2322,20 @@ export default function AdminPage() {
                       </div>
                     </div>
                     <div className="flex gap-2 flex-shrink-0">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => void handleReanalyzeTool(tool)}
+                        title="Re-analyze logo/info/categories"
+                        disabled={reanalyzingToolId !== null}
+                      >
+                        <RefreshCw
+                          className={cn(
+                            'h-4 w-4',
+                            reanalyzingToolId === tool.id && 'animate-spin',
+                          )}
+                        />
+                      </Button>
                       <Button
                         variant="ghost"
                         size="icon"

@@ -38,6 +38,12 @@ import {
   Maximize2,
   Minimize2,
   ImagePlus,
+  Bold,
+  Italic,
+  Underline as UnderlineIcon,
+  Strikethrough,
+  Eraser,
+  ClipboardPaste,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { linkifyText } from "@/lib/linkify";
@@ -2145,7 +2151,7 @@ export default function NotesPage() {
             </div>
           </section>
 
-          <section className="flex min-h-0 min-w-0 cursor-default flex-col overflow-hidden rounded-xl border bg-card p-4 lg:max-h-[calc(100vh-7rem)]">
+          <section className="flex min-h-0 min-w-0 cursor-default flex-col overflow-visible rounded-xl border bg-card p-4 lg:max-h-[calc(100vh-7rem)]">
             {selectedNote ? (
               <div className="flex min-h-0 min-w-0 max-w-full flex-1 flex-col gap-4 overflow-hidden">
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -2554,33 +2560,31 @@ export default function NotesPage() {
                             )}
                           </div>
                         )}
-                        <>
-                          <input
-                            ref={imageInputRef}
-                            type="file"
-                            accept="image/png,image/jpeg,image/webp,image/gif"
-                            className="hidden"
-                            onChange={(e) => {
-                              const f = e.target.files?.[0];
-                              if (f) void uploadImageFile(f);
-                              e.currentTarget.value = "";
-                            }}
-                          />
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            className="h-7 gap-1 px-2 text-xs"
-                            title="Insert image"
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={beginImageInsert}
-                          >
-                            <ImagePlus className="h-3.5 w-3.5" />
-                            Image
-                          </Button>
-                        </>
                         {isEditing && (
                           <>
+                            <input
+                              ref={imageInputRef}
+                              type="file"
+                              accept="image/png,image/jpeg,image/webp,image/gif"
+                              className="hidden"
+                              onChange={(e) => {
+                                const f = e.target.files?.[0];
+                                if (f) void uploadImageFile(f);
+                                e.currentTarget.value = "";
+                              }}
+                            />
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-7 gap-1 px-2 text-xs"
+                              title="Insert image"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={beginImageInsert}
+                            >
+                              <ImagePlus className="h-3.5 w-3.5" />
+                              Image
+                            </Button>
                             <select
                               value={mentionNoteId}
                               onChange={(e) => setMentionNoteId(e.target.value)}
@@ -2707,84 +2711,102 @@ export default function NotesPage() {
                   )}
                   {isEditing && contextMenu.open && (
                     <div
-                      className="fixed z-[120] min-w-[180px] rounded-md border border-border bg-popover p-1 shadow-lg"
+                      className="fixed z-[120] w-44 rounded-md border border-border bg-popover p-1 shadow-lg"
                       style={{ left: contextMenu.x, top: contextMenu.y }}
                       role="menu"
                     >
                       <button
                         type="button"
-                        className="w-full rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
                         onClick={() => {
                           setContextMenu((s) => ({ ...s, open: false }));
                           runFormatCommand("bold");
                         }}
                       >
+                        <Bold className="h-3.5 w-3.5" />
                         Bold
                       </button>
                       <button
                         type="button"
-                        className="w-full rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
                         onClick={() => {
                           setContextMenu((s) => ({ ...s, open: false }));
                           runFormatCommand("italic");
                         }}
                       >
+                        <Italic className="h-3.5 w-3.5" />
                         Italic
                       </button>
                       <button
                         type="button"
-                        className="w-full rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
                         onClick={() => {
                           setContextMenu((s) => ({ ...s, open: false }));
                           runFormatCommand("underline");
                         }}
                       >
+                        <UnderlineIcon className="h-3.5 w-3.5" />
                         Underline
                       </button>
                       <button
                         type="button"
-                        className="w-full rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
                         onClick={() => {
                           setContextMenu((s) => ({ ...s, open: false }));
                           runFormatCommand("strikeThrough");
                         }}
                       >
+                        <Strikethrough className="h-3.5 w-3.5" />
                         Strikethrough
                       </button>
                       <button
                         type="button"
-                        className="w-full rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
                         onClick={() => {
                           setContextMenu((s) => ({ ...s, open: false }));
                           void pastePlainFromClipboard();
                         }}
                       >
+                        <ClipboardPaste className="h-3.5 w-3.5" />
                         Paste as plain text
                       </button>
                       <button
                         type="button"
-                        className="w-full rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
                         onClick={() => {
                           setContextMenu((s) => ({ ...s, open: false }));
                           removeSelectedFormatting();
                         }}
                       >
+                        <Eraser className="h-3.5 w-3.5" />
                         Remove formatting
                       </button>
                       <button
                         type="button"
-                        className="w-full rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        onClick={() => {
+                          setContextMenu((s) => ({ ...s, open: false }));
+                          beginImageInsert();
+                        }}
+                      >
+                        <ImagePlus className="h-3.5 w-3.5" />
+                        Insert image from files
+                      </button>
+                      <button
+                        type="button"
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
                         onClick={() => {
                           setContextMenu((s) => ({ ...s, open: false }));
                           void pasteImageFromClipboard();
                         }}
                       >
+                        <ImagePlus className="h-3.5 w-3.5" />
                         Paste image from clipboard
                       </button>
                       {contextMenu.imageFigure && (
                         <button
                           type="button"
-                          className="w-full rounded px-2 py-1.5 text-left text-xs text-destructive hover:bg-muted"
+                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-destructive hover:bg-muted"
                           onClick={() => {
                             selectedImageFigureRef.current = contextMenu.imageFigure;
                             setContextMenu((s) => ({ ...s, open: false }));
