@@ -940,14 +940,6 @@ export default function NotesPage() {
     return () => clearInterval(id);
   }, [isEditing, selectedNoteId, persistNoteBody]);
 
-  useEffect(() => {
-    if (!isEditing) return;
-    const id = window.setTimeout(() => {
-      hydrateEditorImageFigures();
-    }, 0);
-    return () => window.clearTimeout(id);
-  }, [isEditing, editorSession, selectedNoteId, hydrateEditorImageFigures]);
-
   const deleteNote = async (noteId: string) => {
     const res = await fetch(`/api/notes/${noteId}`, {
       method: "DELETE",
@@ -1426,6 +1418,14 @@ export default function NotesPage() {
       if (el instanceof HTMLElement) ensureImageFigureUi(el);
     });
   }, [ensureImageFigureUi]);
+
+  useEffect(() => {
+    if (!isEditing) return;
+    const id = window.setTimeout(() => {
+      hydrateEditorImageFigures();
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [isEditing, editorSession, selectedNoteId, hydrateEditorImageFigures]);
 
   const getEditorAuthToken = useCallback(async () => {
     if (token) return token;
