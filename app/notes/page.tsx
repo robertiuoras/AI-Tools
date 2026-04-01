@@ -504,6 +504,7 @@ export default function NotesPage() {
   } | null>(null);
   const selectedImageFigureRef = useRef<HTMLElement | null>(null);
   const contextMenuOpenRef = useRef(false);
+  const openingContextMenuRef = useRef(false);
 
   const flashCopied = useCallback((key: string) => {
     setCopiedKey(key);
@@ -600,6 +601,7 @@ export default function NotesPage() {
 
   useEffect(() => {
     contextMenuOpenRef.current = contextMenu.open;
+    if (!contextMenu.open) openingContextMenuRef.current = false;
   }, [contextMenu.open]);
 
   useEffect(() => {
@@ -996,6 +998,14 @@ export default function NotesPage() {
       return next;
     });
     setDragNoteId(null);
+  };
+
+  const beginImageInsert = () => {
+    if (!isEditing) beginEditingNote();
+    requestAnimationFrame(() => {
+      editorRef.current?.focus();
+      imageInputRef.current?.click();
+    });
   };
 
   const selectionInEditor = useCallback(() => {
@@ -1502,11 +1512,13 @@ export default function NotesPage() {
     const related = e.relatedTarget as Node | null;
     if (related && formatMenuRef.current?.contains(related)) return;
     if (contextMenuOpenRef.current) return;
+    if (openingContextMenuRef.current) return;
 
     void (async () => {
       await new Promise<void>((r) => requestAnimationFrame(() => r()));
       if (formatMenuRef.current?.contains(document.activeElement)) return;
       if (contextMenuOpenRef.current) return;
+      if (openingContextMenuRef.current) return;
 
       const raw = editorRef.current?.innerHTML ?? "";
       const normalized = normalizeNoteHtmlForSave(stripEditorOnlyUi(raw));
@@ -1713,6 +1725,8 @@ export default function NotesPage() {
   const handleEditorContextMenu = useCallback(
     (e: MouseEvent<HTMLDivElement>) => {
       e.preventDefault();
+      openingContextMenuRef.current = true;
+      contextMenuOpenRef.current = true;
       const target = e.target as HTMLElement;
       const figure = target.closest("figure[data-note-image='1']");
       setContextMenu({
@@ -1731,6 +1745,8 @@ export default function NotesPage() {
   const openContextMenuFromReadBody = useCallback(
     (e: MouseEvent<HTMLDivElement>) => {
       e.preventDefault();
+      openingContextMenuRef.current = true;
+      contextMenuOpenRef.current = true;
       beginEditingNote();
       const x = e.clientX;
       const y = e.clientY;
@@ -1898,7 +1914,11 @@ export default function NotesPage() {
                 <div
                   key={p.id}
                   draggable
-                  onDragStart={() => setDragPageId(p.id)}
+                  onDragStart={(e) => {
+                    setDragPageId(p.id);
+                    e.dataTransfer.effectAllowed = "move";
+                    e.dataTransfer.setData("text/plain", p.id);
+                  }}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={() => handlePageDrop(p.id)}
                   onDragEnd={() => setDragPageId(null)}
@@ -2024,7 +2044,11 @@ export default function NotesPage() {
                 <div
                   key={n.id}
                   draggable
-                  onDragStart={() => setDragNoteId(n.id)}
+                  onDragStart={(e) => {
+                    setDragNoteId(n.id);
+                    e.dataTransfer.effectAllowed = "move";
+                    e.dataTransfer.setData("text/plain", n.id);
+                  }}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={() => handleNoteDrop(n.id)}
                   onDragEnd={() => setDragNoteId(null)}
@@ -2530,6 +2554,31 @@ export default function NotesPage() {
                             )}
                           </div>
                         )}
+                        <>
+                          <input
+                            ref={imageInputRef}
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp,image/gif"
+                            className="hidden"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) void uploadImageFile(f);
+                              e.currentTarget.value = "";
+                            }}
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 gap-1 px-2 text-xs"
+                            title="Insert image"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={beginImageInsert}
+                          >
+                            <ImagePlus className="h-3.5 w-3.5" />
+                            Image
+                          </Button>
+                        </>
                         {isEditing && (
                           <>
                             <select
@@ -2560,29 +2609,6 @@ export default function NotesPage() {
                               }}
                             >
                               @ Mention
-                            </Button>
-                            <input
-                              ref={imageInputRef}
-                              type="file"
-                              accept="image/png,image/jpeg,image/webp,image/gif"
-                              className="hidden"
-                              onChange={(e) => {
-                                const f = e.target.files?.[0];
-                                if (f) void uploadImageFile(f);
-                                e.currentTarget.value = "";
-                              }}
-                            />
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className="h-7 gap-1 px-2 text-xs"
-                              title="Insert image"
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={() => imageInputRef.current?.click()}
-                            >
-                              <ImagePlus className="h-3.5 w-3.5" />
-                              Image
                             </Button>
                           </>
                         )}
