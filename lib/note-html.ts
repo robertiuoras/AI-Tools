@@ -174,6 +174,8 @@ const ALLOWED_TAGS = new Set([
   "MARK",
   "CODE",
   "SPAN",
+  "FIGURE",
+  "IMG",
   "A",
   "FONT", // some browsers emit <font color> for foreColor
 ]);
@@ -200,6 +202,58 @@ function sanitizeStyleValue(style: string): string | null {
       /^font-size:\s*\d+(?:\.\d+)?(?:px|pt|rem|em)(?:\s*!important)?$/i.test(
         chunk,
       )
+    ) {
+      kept.push(chunk);
+    }
+  }
+  return kept.length ? kept.join("; ") : null;
+}
+
+function sanitizeFigureStyleValue(style: string): string | null {
+  const chunks = style
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const kept: string[] = [];
+  for (const chunk of chunks) {
+    if (/^width:\s*\d+(?:\.\d+)?px$/i.test(chunk)) {
+      kept.push(chunk);
+      continue;
+    }
+    if (/^max-width:\s*(?:\d+(?:\.\d+)?px|100%)$/i.test(chunk)) {
+      kept.push(chunk);
+      continue;
+    }
+    if (/^display:\s*block$/i.test(chunk)) {
+      kept.push(chunk);
+      continue;
+    }
+    if (/^position:\s*relative$/i.test(chunk)) {
+      kept.push(chunk);
+      continue;
+    }
+    if (
+      /^margin-(?:left|right|top|bottom):\s*-?\d+(?:\.\d+)?px$/i.test(chunk) ||
+      /^margin:\s*-?\d+(?:\.\d+)?px(?:\s+-?\d+(?:\.\d+)?px){0,3}$/i.test(chunk)
+    ) {
+      kept.push(chunk);
+    }
+  }
+  return kept.length ? kept.join("; ") : null;
+}
+
+function sanitizeImgStyleValue(style: string): string | null {
+  const chunks = style
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const kept: string[] = [];
+  for (const chunk of chunks) {
+    if (
+      /^width:\s*(?:\d+(?:\.\d+)?px|100%)$/i.test(chunk) ||
+      /^max-width:\s*(?:\d+(?:\.\d+)?px|100%)$/i.test(chunk) ||
+      /^height:\s*(?:auto|\d+(?:\.\d+)?px)$/i.test(chunk) ||
+      /^display:\s*block$/i.test(chunk)
     ) {
       kept.push(chunk);
     }
@@ -239,6 +293,27 @@ function sanitizeElement(el: Element): void {
       else el.removeAttribute("style");
       continue;
     }
+    if (name === "style" && tag === "FIGURE") {
+      const cleaned = sanitizeFigureStyleValue(el.getAttribute("style") || "");
+      if (cleaned) el.setAttribute("style", cleaned);
+      else el.removeAttribute("style");
+      continue;
+    }
+    if (name === "style" && tag === "IMG") {
+      const cleaned = sanitizeImgStyleValue(el.getAttribute("style") || "");
+      if (cleaned) el.setAttribute("style", cleaned);
+      else el.removeAttribute("style");
+      continue;
+    }
+    if (name === "src" && tag === "IMG") {
+      const v = a.value.trim();
+      if (/^https?:\/\//i.test(v)) continue;
+      el.removeAttribute(a.name);
+      continue;
+    }
+    if (name === "alt" && tag === "IMG") continue;
+    if (name === "loading" && tag === "IMG" && a.value === "lazy") continue;
+    if (name === "data-note-image" && tag === "FIGURE") continue;
     if (tag === "FONT" && name === "color") {
       const c = a.value.trim();
       if (/^#?[0-9a-fA-F]{3,8}$/i.test(c)) continue;

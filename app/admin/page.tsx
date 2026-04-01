@@ -122,6 +122,7 @@ export default function AdminPage() {
   const [adminRevenueFilter, setAdminRevenueFilter] = useState<
     'all' | 'free' | 'freemium' | 'paid' | 'enterprise' | 'unset'
   >('all')
+  const [customCategoryInput, setCustomCategoryInput] = useState('')
   const [isProcessing, setIsProcessing] = useState(false)
   const [lastRequestTime, setLastRequestTime] = useState<number>(0)
   const [cooldownRemaining, setCooldownRemaining] = useState<number>(0)
@@ -469,6 +470,22 @@ export default function AdminPage() {
     return [...sortedKnown, ...unknown]
   }
 
+  const availableAdminCategories = useMemo(() => {
+    const seen = new Set<string>(categories as readonly string[])
+    for (const tool of tools) {
+      for (const c of toolCategoryList(tool)) {
+        if (c?.trim()) seen.add(c.trim())
+      }
+    }
+    for (const c of formData.categories) {
+      if (c?.trim()) seen.add(c.trim())
+    }
+    if (adminCategoryFilter !== 'all' && adminCategoryFilter.trim()) {
+      seen.add(adminCategoryFilter.trim())
+    }
+    return sortSelectedCategories(Array.from(seen))
+  }, [tools, formData.categories, adminCategoryFilter])
+
   const toggleToolCategory = (cat: string) => {
     setFormData((prev) => {
       const has = prev.categories.includes(cat)
@@ -477,6 +494,16 @@ export default function AdminPage() {
         : sortSelectedCategories([...prev.categories, cat])
       return { ...prev, categories: next }
     })
+  }
+
+  const addCustomCategory = () => {
+    const raw = customCategoryInput.trim()
+    if (!raw) return
+    const existing = availableAdminCategories.find(
+      (c) => c.toLowerCase() === raw.toLowerCase(),
+    )
+    toggleToolCategory(existing ?? raw)
+    setCustomCategoryInput('')
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -1873,7 +1900,7 @@ export default function AdminPage() {
                 </p>
                 <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
                   <div className="grid max-h-52 grid-cols-1 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
-                    {categories.map((cat, catIdx) => {
+                    {availableAdminCategories.map((cat, catIdx) => {
                       const checked = formData.categories.includes(cat)
                       const fieldId = `admin-tool-cat-${catIdx}`
                       return (
@@ -1904,6 +1931,27 @@ export default function AdminPage() {
                         </label>
                       )
                     })}
+                  </div>
+                  <div className="mt-3 flex items-center gap-2">
+                    <Input
+                      value={customCategoryInput}
+                      onChange={(e) => setCustomCategoryInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          addCustomCategory()
+                        }
+                      }}
+                      placeholder="Add new category (e.g. Betting)"
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={addCustomCategory}
+                      disabled={!customCategoryInput.trim()}
+                    >
+                      Add
+                    </Button>
                   </div>
                 </div>
               </div>
@@ -2064,7 +2112,7 @@ export default function AdminPage() {
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="all">All categories</SelectItem>
-                          {categories.map((cat) => (
+                          {availableAdminCategories.map((cat) => (
                             <SelectItem key={cat} value={cat}>
                               {cat}
                             </SelectItem>

@@ -9,14 +9,6 @@ import {
   popularityScore,
 } from "@/lib/tool-popularity";
 
-/** Match sidebar category even when DB has pipe-separated junk (e.g. `Video Editing|SaaS`). */
-function applyCategoryFilter(query: any, category: string) {
-  const c = category.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  return query.or(
-    `category.eq."${c}",category.ilike."${c}|%",category.ilike."%|${c}|%",category.ilike."%|${c}"`,
-  );
-}
-
 function jsonbCountsToMap(obj: unknown): Map<string, number> {
   const m = new Map<string, number>();
   if (obj && typeof obj === "object") {
@@ -106,7 +98,10 @@ async function fetchMonthlyVoteCountMaps(
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
-    const category = searchParams.get("category");
+    const categories = searchParams
+      .getAll("category")
+      .map((c) => c.trim())
+      .filter(Boolean);
     const traffic = searchParams.getAll("traffic");
     const revenue = searchParams.getAll("revenue");
     const sort = searchParams.get("sort") || "popular";
@@ -142,10 +137,6 @@ export async function GET(request: NextRequest) {
     let query = admin.from("tool").select("*");
 
     // Apply filters
-    if (category) {
-      query = applyCategoryFilter(query, category);
-    }
-
     if (traffic.length > 0) {
       query = query.in("traffic", traffic);
     }
@@ -188,6 +179,14 @@ export async function GET(request: NextRequest) {
 
     // Search runs client-side on the home page (instant typing, no refetch per keystroke).
     let filteredTools = tools || [];
+
+    // Category filter is evaluated in memory so it correctly matches any item in categories[].
+    if (categories.length > 0) {
+      const needles = new Set(categories.map((c) => c.toLowerCase()));
+      filteredTools = filteredTools.filter((tool: any) =>
+        toolCategoryList(tool).some((c) => needles.has(c.toLowerCase())),
+      );
+    }
 
     // Filter by favorites if requested (single auth resolution via userIdPromise)
     if (favoritesOnly) {

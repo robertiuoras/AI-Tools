@@ -12,12 +12,12 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { categories } from '@/lib/schemas'
+import { categories as defaultCategories } from '@/lib/schemas'
 import { cn } from '@/lib/utils'
 
 interface FilterSidebarProps {
-  selectedCategory: string | null
-  onCategoryChange: (category: string | null) => void
+  selectedCategories: string[]
+  onCategoriesChange: (categories: string[]) => void
   selectedTraffic: string[]
   onTrafficChange: (traffic: string[]) => void
   selectedRevenue: string[]
@@ -25,6 +25,7 @@ interface FilterSidebarProps {
   favoritesOnly: boolean
   onFavoritesToggle: () => void
   user: any
+  availableCategories?: string[]
   className?: string
 }
 
@@ -32,8 +33,8 @@ const trafficOptions = ['low', 'medium', 'high', 'unknown'] as const
 const revenueOptions = ['free', 'freemium', 'paid', 'enterprise'] as const
 
 export function FilterSidebar({
-  selectedCategory,
-  onCategoryChange,
+  selectedCategories,
+  onCategoriesChange,
   selectedTraffic,
   onTrafficChange,
   selectedRevenue,
@@ -41,6 +42,7 @@ export function FilterSidebar({
   favoritesOnly,
   onFavoritesToggle,
   user,
+  availableCategories,
   className,
 }: FilterSidebarProps) {
   const [isOpen, setIsOpen] = useState(false)
@@ -62,13 +64,17 @@ export function FilterSidebar({
   }
 
   const clearAll = () => {
-    onCategoryChange(null)
+    onCategoriesChange([])
     onTrafficChange([])
     onRevenueChange([])
   }
 
   const hasActiveFilters =
-    selectedCategory || selectedTraffic.length > 0 || selectedRevenue.length > 0
+    selectedCategories.length > 0 || selectedTraffic.length > 0 || selectedRevenue.length > 0
+  const categoryOptions =
+    availableCategories && availableCategories.length > 0
+      ? availableCategories
+      : defaultCategories
 
   return (
     <>
@@ -81,7 +87,7 @@ export function FilterSidebar({
         Filters
         {hasActiveFilters && (
           <Badge variant="secondary" className="ml-2">
-            {[selectedCategory, ...selectedTraffic, ...selectedRevenue].filter(Boolean).length}
+            [...selectedCategories, ...selectedTraffic, ...selectedRevenue].filter(Boolean).length
           </Badge>
         )}
       </Button>
@@ -145,28 +151,32 @@ export function FilterSidebar({
                   <Label
                     className={cn(
                       'flex items-center space-x-2 cursor-pointer rounded-md p-2 hover:bg-accent',
-                      !selectedCategory && 'bg-accent'
+                      selectedCategories.length === 0 && 'bg-accent'
                     )}
                   >
                     <Checkbox
-                      checked={!selectedCategory}
-                      onCheckedChange={() => onCategoryChange(null)}
+                      checked={selectedCategories.length === 0}
+                      onCheckedChange={() => onCategoriesChange([])}
                     />
                     <span>All Categories</span>
                   </Label>
-                  {categories.map((category) => (
+                  {categoryOptions.map((category) => (
                     <Label
                       key={category}
                       className={cn(
                         'flex items-center space-x-2 cursor-pointer rounded-md p-2 hover:bg-accent',
-                        selectedCategory === category && 'bg-accent'
+                        selectedCategories.includes(category) && 'bg-accent'
                       )}
                     >
                       <Checkbox
-                        checked={selectedCategory === category}
-                        onCheckedChange={() =>
-                          onCategoryChange(selectedCategory === category ? null : category)
-                        }
+                        checked={selectedCategories.includes(category)}
+                        onCheckedChange={() => {
+                          if (selectedCategories.includes(category)) {
+                            onCategoriesChange(selectedCategories.filter((c) => c !== category))
+                          } else {
+                            onCategoriesChange([...selectedCategories, category])
+                          }
+                        }}
                       />
                       <span>{category}</span>
                     </Label>
@@ -221,17 +231,19 @@ export function FilterSidebar({
             <div className="mt-6 space-y-2">
               <h3 className="text-sm font-medium">Active Filters</h3>
               <div className="flex flex-wrap gap-2">
-                {selectedCategory && (
-                  <Badge variant="secondary" className="gap-1">
-                    {selectedCategory}
+                {selectedCategories.map((category) => (
+                  <Badge key={category} variant="secondary" className="gap-1">
+                    {category}
                     <button
-                      onClick={() => onCategoryChange(null)}
+                      onClick={() =>
+                        onCategoriesChange(selectedCategories.filter((c) => c !== category))
+                      }
                       className="ml-1 rounded-full hover:bg-background"
                     >
                       <X className="h-3 w-3" />
                     </button>
                   </Badge>
-                )}
+                ))}
                 {selectedTraffic.map((traffic) => (
                   <Badge key={traffic} variant="secondary" className="gap-1 capitalize">
                     {traffic}

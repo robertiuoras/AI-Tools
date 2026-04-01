@@ -36,6 +36,7 @@ import type { ToolCardLayout } from "@/components/ToolCard";
 import { supabase } from "@/lib/supabase";
 import type { Tool } from "@/lib/supabase";
 import { toolCategoryList } from "@/lib/tool-categories";
+import { categories as defaultCategories } from "@/lib/schemas";
 
 type SortOption = "alphabetical" | "newest" | "popular" | "traffic" | "traffic-low" | "upvotes";
 type SortOrder = "asc" | "desc";
@@ -65,7 +66,7 @@ function HomePageContent() {
   const [tools, setTools] = useState<Tool[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [selectedTraffic, setSelectedTraffic] = useState<string[]>([]);
   const [selectedRevenue, setSelectedRevenue] = useState<string[]>([]);
   const [sort, setSort] = useState<SortOption>("popular");
@@ -104,6 +105,20 @@ function HomePageContent() {
     const cats = tools.flatMap((t) => toolCategoryList(t));
     return Array.from(new Set([...names, ...cats]));
   }, [tools]);
+
+  const availableCategories = useMemo(() => {
+    const seen = new Set<string>();
+    for (const c of defaultCategories) seen.add(c);
+    for (const t of tools) {
+      for (const c of toolCategoryList(t)) {
+        if (c?.trim()) seen.add(c.trim());
+      }
+    }
+    for (const c of selectedCategories) {
+      if (c?.trim()) seen.add(c.trim());
+    }
+    return Array.from(seen).sort((a, b) => a.localeCompare(b));
+  }, [tools, selectedCategories]);
 
   /** Search filters in the browser — no network per keystroke (fast vs full refetch + loading). */
   const displayedTools = useMemo(() => {
@@ -245,7 +260,7 @@ function HomePageContent() {
     else setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (selectedCategory) params.append("category", selectedCategory);
+      selectedCategories.forEach((c) => params.append("category", c));
       selectedTraffic.forEach((t) => params.append("traffic", t));
       selectedRevenue.forEach((r) => params.append("revenue", r));
       params.append("sort", sort);
@@ -301,7 +316,7 @@ function HomePageContent() {
       setRefreshing(false);
     }
   }, [
-    selectedCategory,
+    selectedCategories,
     selectedTraffic,
     selectedRevenue,
     sort,
@@ -322,8 +337,8 @@ function HomePageContent() {
         <div className="flex flex-col gap-6 lg:flex-row">
           <div className="lg:w-80">
             <FilterSidebar
-              selectedCategory={selectedCategory}
-              onCategoryChange={setSelectedCategory}
+              selectedCategories={selectedCategories}
+              onCategoriesChange={setSelectedCategories}
               selectedTraffic={selectedTraffic}
               onTrafficChange={setSelectedTraffic}
               selectedRevenue={selectedRevenue}
@@ -331,6 +346,7 @@ function HomePageContent() {
               favoritesOnly={favoritesOnly}
               onFavoritesToggle={() => setFavoritesOnly(!favoritesOnly)}
               user={user}
+              availableCategories={availableCategories}
             />
           </div>
 

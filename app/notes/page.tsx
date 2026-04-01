@@ -11,7 +11,9 @@ import {
   type ClipboardEvent,
   type FocusEvent,
   type KeyboardEvent,
+  type MouseEvent,
   type MutableRefObject,
+  type PointerEvent,
   type ReactNode,
   type Ref,
   type RefObject,
@@ -35,6 +37,7 @@ import {
   Type,
   Maximize2,
   Minimize2,
+  ImagePlus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { linkifyText } from "@/lib/linkify";
@@ -306,7 +309,7 @@ function renderPreviewMarkdown(text: string): ReactNode {
 }
 
 const NOTE_HTML_VIEW_CLASS =
-  "note-html-view min-h-0 space-y-2 text-sm [&_h3]:scroll-m-20 [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:tracking-tight [&_li]:my-0.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:whitespace-pre-wrap [&_ul]:list-disc [&_ul]:pl-5";
+  "note-html-view min-h-0 space-y-2 text-sm [&_figure[data-note-image='1']]:max-w-full [&_figure[data-note-image='1']]:overflow-visible [&_figure[data-note-image='1']_img]:rounded-md [&_h3]:scroll-m-20 [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:tracking-tight [&_li]:my-0.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:whitespace-pre-wrap [&_ul]:list-disc [&_ul]:pl-5";
 
 function renderReadNoteBody(content: string): ReactNode {
   const t = content.trim();
@@ -333,6 +336,8 @@ type NoteEditorHandlers = {
   onInput: () => void;
   onPaste: (e: ClipboardEvent<HTMLDivElement>) => void;
   onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => void;
+  onContextMenu: (e: MouseEvent<HTMLDivElement>) => void;
+  onPointerDown: (e: PointerEvent<HTMLDivElement>) => void;
   onMouseUp: () => void;
   onKeyUp: () => void;
   onBlur: (e: FocusEvent<HTMLDivElement>) => void;
@@ -385,6 +390,8 @@ const NoteBodyEditor = memo(
         onInput={() => handlersRef.current.onInput()}
         onPaste={(e) => handlersRef.current.onPaste(e)}
         onKeyDown={(e) => handlersRef.current.onKeyDown(e)}
+        onContextMenu={(e) => handlersRef.current.onContextMenu(e)}
+        onPointerDown={(e) => handlersRef.current.onPointerDown(e)}
         onMouseUp={() => handlersRef.current.onMouseUp()}
         onKeyUp={() => handlersRef.current.onKeyUp()}
         onBlur={(e) => handlersRef.current.onBlur(e)}
@@ -430,9 +437,16 @@ export default function NotesPage() {
   const [newNoteTitle, setNewNoteTitle] = useState("");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [noteBodyFullscreen, setNoteBodyFullscreen] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{
+    open: boolean;
+    x: number;
+    y: number;
+    imageFigure: HTMLElement | null;
+  }>({ open: false, x: 0, y: 0, imageFigure: null });
 
   const editorRef = useRef<HTMLDivElement | null>(null);
   const formatMenuRef = useRef<HTMLDivElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   /** Last caret/selection inside the editor — Radix controls clear the live selection. */
   const editorSelectionRef = useRef<Range | null>(null);
   /** Normalized body last written (or baseline when editor opened); skips redundant autosave UI + PUT. */
@@ -442,6 +456,16 @@ export default function NotesPage() {
   const selectedNoteIdRef = useRef<string | null>(null);
   selectedNoteIdRef.current = selectedNoteId;
   const skipNextNotesFetchForPageRef = useRef(false);
+  const imageDragStateRef = useRef<{
+    mode: "move" | "resize";
+    figure: HTMLElement;
+    startX: number;
+    startY: number;
+    startWidth: number;
+    startMarginLeft: number;
+    startMarginTop: number;
+  } | null>(null);
+  const selectedImageFigureRef = useRef<HTMLElement | null>(null);
 
   const flashCopied = useCallback((key: string) => {
     setCopiedKey(key);
@@ -516,6 +540,17 @@ export default function NotesPage() {
     return () =>
       document.removeEventListener("pointerdown", onPointerDown, true);
   }, [formatMenuOpen]);
+
+  useEffect(() => {
+    if (!contextMenu.open) return;
+    const close = () => setContextMenu((s) => ({ ...s, open: false }));
+    window.addEventListener("pointerdown", close, true);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      window.removeEventListener("pointerdown", close, true);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [contextMenu.open]);
 
   /** Initial load: pages first (fast shell), then notes; avoids duplicate notes fetch on mount. */
   useEffect(() => {
@@ -739,7 +774,7 @@ export default function NotesPage() {
 
   const persistNoteBody = useCallback(
     async (noteId: string, content: string, showIndicator: boolean) => {
-      const normalized = normalizeNoteHtmlForSave(content);
+      const normalized = normalizeNoteHtmlForSave(stripEditorOnlyUi(content));
       if (
         lastAutoSavedBodyRef.current !== null &&
         normalized === lastAutoSavedBodyRef.current
@@ -788,7 +823,7 @@ export default function NotesPage() {
       }
       return ok;
     },
-    [],
+    [stripEditorOnlyUi],
   );
 
   const persistNoteBodyRef = useRef(persistNoteBody);
@@ -804,6 +839,14 @@ export default function NotesPage() {
     }, 4000);
     return () => clearInterval(id);
   }, [isEditing, selectedNoteId, persistNoteBody]);
+
+  useEffect(() => {
+    if (!isEditing) return;
+    const id = window.setTimeout(() => {
+      hydrateEditorImageFigures();
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [isEditing, editorSession, selectedNoteId, hydrateEditorImageFigures]);
 
   const deleteNote = async (noteId: string) => {
     const res = await fetch(`/api/notes/${noteId}`, {
@@ -1189,15 +1232,131 @@ export default function NotesPage() {
     lastAutoSavedBodyRef.current = baseline;
   }, []);
 
+  const stripEditorOnlyUi = useCallback((html: string) => {
+    if (typeof document === "undefined") return html;
+    const doc = new DOMParser().parseFromString(`<div>${html}</div>`, "text/html");
+    const root = doc.body.firstElementChild;
+    if (!root) return html;
+    root.querySelectorAll("[data-note-ui='1']").forEach((el) => el.remove());
+    return root.innerHTML;
+  }, []);
+
+  const ensureImageFigureUi = useCallback((figure: HTMLElement) => {
+    figure.setAttribute("data-note-image", "1");
+    figure.style.display = "block";
+    figure.style.position = "relative";
+    if (!figure.style.maxWidth) figure.style.maxWidth = "100%";
+    if (!figure.style.width) figure.style.width = "420px";
+    if (!figure.style.marginTop) figure.style.marginTop = "8px";
+    if (!figure.style.marginBottom) figure.style.marginBottom = "8px";
+    if (!figure.style.marginLeft) figure.style.marginLeft = "0px";
+    if (!figure.style.marginRight) figure.style.marginRight = "0px";
+
+    const img = figure.querySelector("img");
+    if (img) {
+      img.style.width = "100%";
+      img.style.height = "auto";
+      img.style.maxWidth = "100%";
+      img.style.display = "block";
+      if (!img.getAttribute("loading")) img.setAttribute("loading", "lazy");
+    }
+
+    let handle = figure.querySelector("[data-note-ui='1'][data-resize-handle='1']");
+    if (!handle) {
+      handle = document.createElement("span");
+      handle.setAttribute("data-note-ui", "1");
+      handle.setAttribute("data-resize-handle", "1");
+      handle.title = "Drag to resize";
+      handle.style.position = "absolute";
+      handle.style.right = "-5px";
+      handle.style.bottom = "-5px";
+      handle.style.width = "12px";
+      handle.style.height = "12px";
+      handle.style.borderRadius = "999px";
+      handle.style.background = "rgb(99 102 241)";
+      handle.style.border = "1px solid white";
+      handle.style.cursor = "nwse-resize";
+      handle.style.boxShadow = "0 0 0 1px rgba(0,0,0,0.15)";
+      figure.appendChild(handle);
+    }
+  }, []);
+
+  const hydrateEditorImageFigures = useCallback(() => {
+    const root = editorRef.current;
+    if (!root) return;
+    root.querySelectorAll("figure[data-note-image='1']").forEach((el) => {
+      if (el instanceof HTMLElement) ensureImageFigureUi(el);
+    });
+  }, [ensureImageFigureUi]);
+
+  const getEditorAuthToken = useCallback(async () => {
+    if (token) return token;
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    return session?.access_token ?? null;
+  }, [token]);
+
+  const insertImageIntoEditor = useCallback(
+    (imageUrl: string) => {
+      const root = editorRef.current;
+      if (!root) return;
+      root.focus();
+      restoreEditorSelection();
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const r = sel.getRangeAt(0);
+      if (!root.contains(r.commonAncestorContainer)) return;
+
+      const figure = document.createElement("figure");
+      const img = document.createElement("img");
+      img.src = imageUrl;
+      img.alt = "Note image";
+      img.style.width = "100%";
+      img.style.height = "auto";
+      img.style.maxWidth = "100%";
+      img.style.display = "block";
+      img.setAttribute("loading", "lazy");
+      ensureImageFigureUi(figure);
+      figure.appendChild(img);
+      r.deleteContents();
+      r.insertNode(figure);
+      r.setStartAfter(figure);
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+      root.dispatchEvent(new Event("input", { bubbles: true }));
+    },
+    [ensureImageFigureUi, restoreEditorSelection],
+  );
+
+  const uploadImageFile = useCallback(
+    async (file: File) => {
+      const bearer = await getEditorAuthToken();
+      if (!bearer) return;
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/notes/images", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${bearer}` },
+        body: fd,
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as { url?: string };
+      if (data.url) insertImageIntoEditor(data.url);
+    },
+    [getEditorAuthToken, insertImageIntoEditor],
+  );
+
   /** Uses refs so it stays valid when NoteBodyEditor is memoized and skips re-renders. */
   const syncEditorToState = useCallback(() => {
     const id = selectedNoteIdRef.current;
     if (!id) return;
-    const html = editorRef.current?.innerHTML ?? "";
+    const html = stripEditorOnlyUi(editorRef.current?.innerHTML ?? "");
     setNotes((prev) =>
       prev.map((n) => (n.id === id ? { ...n, content: html } : n)),
     );
-  }, []);
+  }, [stripEditorOnlyUi]);
 
   const handleEditorBlur = useCallback((e: FocusEvent<HTMLDivElement>) => {
     const related = e.relatedTarget as Node | null;
@@ -1208,7 +1367,7 @@ export default function NotesPage() {
       if (formatMenuRef.current?.contains(document.activeElement)) return;
 
       const raw = editorRef.current?.innerHTML ?? "";
-      const normalized = normalizeNoteHtmlForSave(raw);
+      const normalized = normalizeNoteHtmlForSave(stripEditorOnlyUi(raw));
       const sid = selectedNoteIdRef.current;
       if (!sid) return;
       setNotes((prev) =>
@@ -1252,8 +1411,34 @@ export default function NotesPage() {
     refreshFmt();
   }, [refreshFmt, restoreEditorSelection]);
 
+  const pasteImageFromClipboard = useCallback(async () => {
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const imageType = item.types.find((t) => t.startsWith("image/"));
+        if (!imageType) continue;
+        const blob = await item.getType(imageType);
+        const file = new File([blob], `pasted-${Date.now()}.${imageType.split("/")[1] ?? "png"}`, {
+          type: imageType,
+        });
+        await uploadImageFile(file);
+        return;
+      }
+    } catch {
+      // ignore clipboard permission / support issues
+    }
+  }, [uploadImageFile]);
+
   const handleEditorKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
+      if (
+        (e.key === "Delete" || e.key === "Backspace") &&
+        selectedImageFigureRef.current
+      ) {
+        e.preventDefault();
+        removeSelectedImage();
+        return;
+      }
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key === "\\") {
         e.preventDefault();
@@ -1269,11 +1454,20 @@ export default function NotesPage() {
         else runFormatCommand("underline");
       }
     },
-    [runFormatCommand, pastePlainFromClipboard],
+    [removeSelectedImage, runFormatCommand, pastePlainFromClipboard],
   );
 
   const handleEditorPaste = useCallback(
     (e: ClipboardEvent<HTMLDivElement>) => {
+      const imageItem = [...e.clipboardData.items].find((it) =>
+        it.type.startsWith("image/"),
+      );
+      if (imageItem) {
+        e.preventDefault();
+        const file = imageItem.getAsFile();
+        if (file) void uploadImageFile(file);
+        return;
+      }
       e.preventDefault();
       const text = e.clipboardData.getData("text/plain");
       const root = editorRef.current;
@@ -1294,6 +1488,102 @@ export default function NotesPage() {
       }
       root.dispatchEvent(new Event("input", { bubbles: true }));
     },
+    [uploadImageFile],
+  );
+
+  const removeSelectedFormatting = useCallback(() => {
+    runFormatCommand("removeFormat");
+  }, [runFormatCommand]);
+
+  const removeSelectedImage = useCallback(() => {
+    const root = editorRef.current;
+    const figure = selectedImageFigureRef.current;
+    if (!root || !figure || !root.contains(figure)) return;
+    figure.remove();
+    selectedImageFigureRef.current = null;
+    root.dispatchEvent(new Event("input", { bubbles: true }));
+  }, []);
+
+  const handleEditorContextMenu = useCallback(
+    (e: MouseEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      const target = e.target as HTMLElement;
+      const figure = target.closest("figure[data-note-image='1']");
+      setContextMenu({
+        open: true,
+        x: e.clientX,
+        y: e.clientY,
+        imageFigure: figure instanceof HTMLElement ? figure : null,
+      });
+      if (figure instanceof HTMLElement) {
+        selectedImageFigureRef.current = figure;
+      }
+    },
+    [],
+  );
+
+  const handleEditorPointerDown = useCallback(
+    (e: PointerEvent<HTMLDivElement>) => {
+      const root = editorRef.current;
+      if (!root) return;
+      const target = e.target as HTMLElement;
+      const handle = target.closest("[data-resize-handle='1']");
+      const figure = target.closest("figure[data-note-image='1']");
+      if (!(figure instanceof HTMLElement)) return;
+      selectedImageFigureRef.current = figure;
+
+      if (handle) {
+        e.preventDefault();
+        const width = Math.max(120, figure.getBoundingClientRect().width);
+        imageDragStateRef.current = {
+          mode: "resize",
+          figure,
+          startX: e.clientX,
+          startY: e.clientY,
+          startWidth: width,
+          startMarginLeft: parseFloat(figure.style.marginLeft || "0") || 0,
+          startMarginTop: parseFloat(figure.style.marginTop || "8") || 8,
+        };
+      } else if (target.tagName === "IMG" || target.closest("img")) {
+        e.preventDefault();
+        imageDragStateRef.current = {
+          mode: "move",
+          figure,
+          startX: e.clientX,
+          startY: e.clientY,
+          startWidth: Math.max(120, figure.getBoundingClientRect().width),
+          startMarginLeft: parseFloat(figure.style.marginLeft || "0") || 0,
+          startMarginTop: parseFloat(figure.style.marginTop || "8") || 8,
+        };
+      } else {
+        return;
+      }
+
+      const onMove = (ev: globalThis.PointerEvent) => {
+        const s = imageDragStateRef.current;
+        if (!s) return;
+        if (s.mode === "resize") {
+          const next = Math.max(120, Math.min(980, s.startWidth + (ev.clientX - s.startX)));
+          s.figure.style.width = `${next}px`;
+          s.figure.style.maxWidth = "100%";
+        } else {
+          const dx = ev.clientX - s.startX;
+          const dy = ev.clientY - s.startY;
+          s.figure.style.marginLeft = `${Math.max(-200, Math.min(400, s.startMarginLeft + dx))}px`;
+          s.figure.style.marginTop = `${Math.max(0, Math.min(200, s.startMarginTop + dy))}px`;
+        }
+      };
+
+      const onUp = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        imageDragStateRef.current = null;
+        root.dispatchEvent(new Event("input", { bubbles: true }));
+      };
+
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    },
     [],
   );
 
@@ -1301,6 +1591,8 @@ export default function NotesPage() {
     onInput: () => {},
     onPaste: () => {},
     onKeyDown: () => {},
+    onContextMenu: () => {},
+    onPointerDown: () => {},
     onMouseUp: () => {},
     onKeyUp: () => {},
     onBlur: () => {},
@@ -1309,6 +1601,8 @@ export default function NotesPage() {
     onInput: syncEditorToState,
     onPaste: handleEditorPaste,
     onKeyDown: handleEditorKeyDown,
+    onContextMenu: handleEditorContextMenu,
+    onPointerDown: handleEditorPointerDown,
     onMouseUp: refreshFmt,
     onKeyUp: refreshFmt,
     onBlur: handleEditorBlur,
@@ -1985,6 +2279,33 @@ export default function NotesPage() {
                             )}
                           </div>
                         )}
+                        {isEditing && (
+                          <>
+                            <input
+                              ref={imageInputRef}
+                              type="file"
+                              accept="image/png,image/jpeg,image/webp,image/gif"
+                              className="hidden"
+                              onChange={(e) => {
+                                const f = e.target.files?.[0];
+                                if (f) void uploadImageFile(f);
+                                e.currentTarget.value = "";
+                              }}
+                            />
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-7 gap-1 px-2 text-xs"
+                              title="Insert image"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => imageInputRef.current?.click()}
+                            >
+                              <ImagePlus className="h-3.5 w-3.5" />
+                              Image
+                            </Button>
+                          </>
+                        )}
                         <Button
                           type="button"
                           size="icon"
@@ -2066,6 +2387,97 @@ export default function NotesPage() {
                       aria-live="polite"
                     >
                       {renderReadNoteBody(selectedNote.content)}
+                    </div>
+                  )}
+                  {isEditing && contextMenu.open && (
+                    <div
+                      className="fixed z-[120] min-w-[180px] rounded-md border border-border bg-popover p-1 shadow-lg"
+                      style={{ left: contextMenu.x, top: contextMenu.y }}
+                      role="menu"
+                    >
+                      <button
+                        type="button"
+                        className="w-full rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        onClick={() => {
+                          setContextMenu((s) => ({ ...s, open: false }));
+                          runFormatCommand("bold");
+                        }}
+                      >
+                        Bold
+                      </button>
+                      <button
+                        type="button"
+                        className="w-full rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        onClick={() => {
+                          setContextMenu((s) => ({ ...s, open: false }));
+                          runFormatCommand("italic");
+                        }}
+                      >
+                        Italic
+                      </button>
+                      <button
+                        type="button"
+                        className="w-full rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        onClick={() => {
+                          setContextMenu((s) => ({ ...s, open: false }));
+                          runFormatCommand("underline");
+                        }}
+                      >
+                        Underline
+                      </button>
+                      <button
+                        type="button"
+                        className="w-full rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        onClick={() => {
+                          setContextMenu((s) => ({ ...s, open: false }));
+                          runFormatCommand("strikeThrough");
+                        }}
+                      >
+                        Strikethrough
+                      </button>
+                      <button
+                        type="button"
+                        className="w-full rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        onClick={() => {
+                          setContextMenu((s) => ({ ...s, open: false }));
+                          void pastePlainFromClipboard();
+                        }}
+                      >
+                        Paste as plain text
+                      </button>
+                      <button
+                        type="button"
+                        className="w-full rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        onClick={() => {
+                          setContextMenu((s) => ({ ...s, open: false }));
+                          removeSelectedFormatting();
+                        }}
+                      >
+                        Remove formatting
+                      </button>
+                      <button
+                        type="button"
+                        className="w-full rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        onClick={() => {
+                          setContextMenu((s) => ({ ...s, open: false }));
+                          void pasteImageFromClipboard();
+                        }}
+                      >
+                        Paste image from clipboard
+                      </button>
+                      {contextMenu.imageFigure && (
+                        <button
+                          type="button"
+                          className="w-full rounded px-2 py-1.5 text-left text-xs text-destructive hover:bg-muted"
+                          onClick={() => {
+                            selectedImageFigureRef.current = contextMenu.imageFigure;
+                            setContextMenu((s) => ({ ...s, open: false }));
+                            removeSelectedImage();
+                          }}
+                        >
+                          Delete image
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
