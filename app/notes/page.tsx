@@ -13,7 +13,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
   type MutableRefObject,
-  type PointerEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type Ref,
   type RefObject,
@@ -111,6 +111,8 @@ function collectCodesIntersectingRange(
 
 const LS_LAST_PAGE_KEY = "notes:lastPageId";
 const LS_LAST_NOTE_KEY = "notes:lastNoteId";
+const LS_PAGE_ORDER_KEY = "notes:pageOrder";
+const LS_NOTE_ORDER_KEY_PREFIX = "notes:noteOrder:";
 
 function readLs(key: string): string | null {
   try {
@@ -128,6 +130,35 @@ function writeLs(key: string, value: string): void {
   } catch {
     // ignore quota / private mode
   }
+}
+
+function readOrderIds(key: string): string[] {
+  const raw = readLs(key);
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    return arr.filter((x): x is string => typeof x === "string");
+  } catch {
+    return [];
+  }
+}
+
+function writeOrderIds(key: string, ids: string[]): void {
+  writeLs(key, JSON.stringify(ids));
+}
+
+function applySavedOrder<T extends { id: string }>(rows: T[], key: string): T[] {
+  const ids = readOrderIds(key);
+  if (ids.length === 0) return rows;
+  const rank = new Map<string, number>();
+  ids.forEach((id, idx) => rank.set(id, idx));
+  return [...rows].sort((a, b) => {
+    const ra = rank.has(a.id) ? rank.get(a.id)! : Number.MAX_SAFE_INTEGER;
+    const rb = rank.has(b.id) ? rank.get(b.id)! : Number.MAX_SAFE_INTEGER;
+    if (ra !== rb) return ra - rb;
+    return 0;
+  });
 }
 
 function renderInlineMarkdown(text: string, depth = 0): ReactNode {
@@ -336,8 +367,9 @@ type NoteEditorHandlers = {
   onInput: () => void;
   onPaste: (e: ClipboardEvent<HTMLDivElement>) => void;
   onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => void;
+  onClick: (e: MouseEvent<HTMLDivElement>) => void;
   onContextMenu: (e: MouseEvent<HTMLDivElement>) => void;
-  onPointerDown: (e: PointerEvent<HTMLDivElement>) => void;
+  onPointerDown: (e: ReactPointerEvent<HTMLDivElement>) => void;
   onMouseUp: () => void;
   onKeyUp: () => void;
   onBlur: (e: FocusEvent<HTMLDivElement>) => void;
@@ -390,6 +422,7 @@ const NoteBodyEditor = memo(
         onInput={() => handlersRef.current.onInput()}
         onPaste={(e) => handlersRef.current.onPaste(e)}
         onKeyDown={(e) => handlersRef.current.onKeyDown(e)}
+        onClick={(e) => handlersRef.current.onClick(e)}
         onContextMenu={(e) => handlersRef.current.onContextMenu(e)}
         onPointerDown={(e) => handlersRef.current.onPointerDown(e)}
         onMouseUp={() => handlersRef.current.onMouseUp()}
@@ -437,6 +470,10 @@ export default function NotesPage() {
   const [newNoteTitle, setNewNoteTitle] = useState("");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [noteBodyFullscreen, setNoteBodyFullscreen] = useState(false);
+  const [allNotesForMentions, setAllNotesForMentions] = useState<Note[]>([]);
+  const [mentionNoteId, setMentionNoteId] = useState<string>("");
+  const [dragPageId, setDragPageId] = useState<string | null>(null);
+  const [dragNoteId, setDragNoteId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{
     open: boolean;
     x: number;
@@ -466,6 +503,7 @@ export default function NotesPage() {
     startMarginTop: number;
   } | null>(null);
   const selectedImageFigureRef = useRef<HTMLElement | null>(null);
+  const contextMenuOpenRef = useRef(false);
 
   const flashCopied = useCallback((key: string) => {
     setCopiedKey(key);
@@ -517,6 +555,25 @@ export default function NotesPage() {
   }, [noteBodyFullscreen]);
 
   useEffect(() => {
+    if (!token) return;
+    const ac = new AbortController();
+    (async () => {
+      try {
+        const res = await fetch("/api/notes", {
+          headers: authHeaders,
+          signal: ac.signal,
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as Note[];
+        setAllNotesForMentions(Array.isArray(data) ? data : []);
+      } catch {
+        // ignore
+      }
+    })();
+    return () => ac.abort();
+  }, [token, authHeaders]);
+
+  useEffect(() => {
     if (!noteBodyFullscreen) return;
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -540,6 +597,10 @@ export default function NotesPage() {
     return () =>
       document.removeEventListener("pointerdown", onPointerDown, true);
   }, [formatMenuOpen]);
+
+  useEffect(() => {
+    contextMenuOpenRef.current = contextMenu.open;
+  }, [contextMenu.open]);
 
   useEffect(() => {
     if (!contextMenu.open) return;
@@ -569,7 +630,12 @@ export default function NotesPage() {
         const pageData = ((await res.json()) as NotePage[]) ?? [];
         if (!alive) return;
 
-        setPages(Array.isArray(pageData) ? pageData : []);
+        setPages(
+          applySavedOrder(
+            Array.isArray(pageData) ? pageData : [],
+            LS_PAGE_ORDER_KEY,
+          ),
+        );
         const firstPageId = pageData[0]?.id ?? null;
         const pageIds = new Set(pageData.map((p) => p.id));
         const savedPageId = readLs(LS_LAST_PAGE_KEY);
@@ -591,7 +657,10 @@ export default function NotesPage() {
             setSelectedNoteId(null);
           } else {
             const data = (await nr.json()) as Note[];
-            const list = Array.isArray(data) ? data : [];
+            const list = applySavedOrder(
+              Array.isArray(data) ? data : [],
+              `${LS_NOTE_ORDER_KEY_PREFIX}${initialPageId}`,
+            );
             setNotes(list);
             const savedNoteId = readLs(LS_LAST_NOTE_KEY);
             const initialNoteId =
@@ -657,7 +726,10 @@ export default function NotesPage() {
           return;
         }
         const data = (await res.json()) as Note[];
-        const list = Array.isArray(data) ? data : [];
+        const list = applySavedOrder(
+          Array.isArray(data) ? data : [],
+          `${LS_NOTE_ORDER_KEY_PREFIX}${selectedPageId}`,
+        );
         setNotes(list);
         setSelectedNoteId((prev) => {
           if (prev && list.some((n) => n.id === prev)) return prev;
@@ -690,6 +762,7 @@ export default function NotesPage() {
     setFormatMenuOpen(false);
     setEditingMainTitle(false);
     setEditingNoteRowId(null);
+    setMentionNoteId("");
   }, [selectedNoteId]);
 
   const createPage = async () => {
@@ -703,7 +776,11 @@ export default function NotesPage() {
     });
     if (!res.ok) return;
     const created = (await res.json()) as NotePage;
-    setPages((prev) => [created, ...prev]);
+    setPages((prev) => {
+      const next = [created, ...prev];
+      writeOrderIds(LS_PAGE_ORDER_KEY, next.map((p) => p.id));
+      return next;
+    });
     setSelectedPageId(created.id);
     setSelectedNoteId(null);
     setNewPageTitle("");
@@ -731,6 +808,7 @@ export default function NotesPage() {
     if (!res.ok) return;
     const remaining = pages.filter((p) => p.id !== pageId);
     setPages(remaining);
+    writeOrderIds(LS_PAGE_ORDER_KEY, remaining.map((p) => p.id));
     if (selectedPageId === pageId) {
       setSelectedPageId(remaining[0]?.id ?? null);
       setSelectedNoteId(null);
@@ -748,7 +826,17 @@ export default function NotesPage() {
     });
     if (!res.ok) return;
     const created = (await res.json()) as Note;
-    setNotes((prev) => [created, ...prev]);
+    setNotes((prev) => {
+      const next = [created, ...prev];
+      if (selectedPageId) {
+        writeOrderIds(
+          `${LS_NOTE_ORDER_KEY_PREFIX}${selectedPageId}`,
+          next.map((n) => n.id),
+        );
+      }
+      return next;
+    });
+    setAllNotesForMentions((prev) => [created, ...prev]);
     setSelectedNoteId(created.id);
     setNewNoteTitle("");
   };
@@ -766,6 +854,9 @@ export default function NotesPage() {
     if (!res.ok) return false;
     const updated = (await res.json()) as Note;
     setNotes((prev) => prev.map((n) => (n.id === noteId ? updated : n)));
+    setAllNotesForMentions((prev) =>
+      prev.map((n) => (n.id === noteId ? updated : n)),
+    );
     return true;
   };
 
@@ -856,7 +947,54 @@ export default function NotesPage() {
     if (!res.ok) return;
     const remaining = notes.filter((n) => n.id !== noteId);
     setNotes(remaining);
+    if (selectedPageId) {
+      writeOrderIds(
+        `${LS_NOTE_ORDER_KEY_PREFIX}${selectedPageId}`,
+        remaining.map((n) => n.id),
+      );
+    }
+    setAllNotesForMentions((prev) => prev.filter((n) => n.id !== noteId));
     if (selectedNoteId === noteId) setSelectedNoteId(remaining[0]?.id ?? null);
+  };
+
+  const reorderByDrag = <T extends { id: string }>(
+    list: T[],
+    fromId: string,
+    toId: string,
+  ) => {
+    if (!fromId || !toId || fromId === toId) return list;
+    const from = list.findIndex((x) => x.id === fromId);
+    const to = list.findIndex((x) => x.id === toId);
+    if (from < 0 || to < 0) return list;
+    const next = [...list];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    return next;
+  };
+
+  const handlePageDrop = (targetPageId: string) => {
+    if (!dragPageId || dragPageId === targetPageId) return;
+    setPages((prev) => {
+      const next = reorderByDrag(prev, dragPageId, targetPageId);
+      writeOrderIds(LS_PAGE_ORDER_KEY, next.map((p) => p.id));
+      return next;
+    });
+    setDragPageId(null);
+  };
+
+  const handleNoteDrop = (targetNoteId: string) => {
+    if (!dragNoteId || dragNoteId === targetNoteId) return;
+    setNotes((prev) => {
+      const next = reorderByDrag(prev, dragNoteId, targetNoteId);
+      if (selectedPageId) {
+        writeOrderIds(
+          `${LS_NOTE_ORDER_KEY_PREFIX}${selectedPageId}`,
+          next.map((n) => n.id),
+        );
+      }
+      return next;
+    });
+    setDragNoteId(null);
   };
 
   const selectionInEditor = useCallback(() => {
@@ -1361,10 +1499,12 @@ export default function NotesPage() {
   const handleEditorBlur = useCallback((e: FocusEvent<HTMLDivElement>) => {
     const related = e.relatedTarget as Node | null;
     if (related && formatMenuRef.current?.contains(related)) return;
+    if (contextMenuOpenRef.current) return;
 
     void (async () => {
       await new Promise<void>((r) => requestAnimationFrame(() => r()));
       if (formatMenuRef.current?.contains(document.activeElement)) return;
+      if (contextMenuOpenRef.current) return;
 
       const raw = editorRef.current?.innerHTML ?? "";
       const normalized = normalizeNoteHtmlForSave(stripEditorOnlyUi(raw));
@@ -1428,6 +1568,49 @@ export default function NotesPage() {
       // ignore clipboard permission / support issues
     }
   }, [uploadImageFile]);
+
+  const insertNoteMention = useCallback(
+    (noteId: string) => {
+      if (!noteId) return;
+      const root = editorRef.current;
+      if (!root) return;
+      const target = allNotesForMentions.find((n) => n.id === noteId);
+      if (!target) return;
+      root.focus();
+      restoreEditorSelection();
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const r = sel.getRangeAt(0);
+      if (!root.contains(r.commonAncestorContainer)) return;
+      const a = document.createElement("a");
+      a.href = `#note-${target.id}`;
+      a.setAttribute("data-note-id", target.id);
+      a.setAttribute("target", "_self");
+      a.setAttribute("rel", "noopener noreferrer");
+      a.textContent = `@${target.title}`;
+      r.deleteContents();
+      r.insertNode(a);
+      r.setStartAfter(a);
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+      root.dispatchEvent(new Event("input", { bubbles: true }));
+    },
+    [allNotesForMentions, restoreEditorSelection],
+  );
+
+  const jumpToMentionedNote = useCallback(
+    (noteId: string) => {
+      const target = allNotesForMentions.find((n) => n.id === noteId);
+      if (!target) return;
+      setSelectedPageId(target.pageId);
+      setSelectedNoteId(target.id);
+      setIsEditing(false);
+      setFormatMenuOpen(false);
+      setContextMenu((s) => ({ ...s, open: false }));
+    },
+    [allNotesForMentions],
+  );
 
   const handleEditorKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
@@ -1522,8 +1705,27 @@ export default function NotesPage() {
     [],
   );
 
+  const openContextMenuFromReadBody = useCallback(
+    (e: MouseEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      beginEditingNote();
+      const x = e.clientX;
+      const y = e.clientY;
+      requestAnimationFrame(() => {
+        editorRef.current?.focus();
+        setContextMenu({
+          open: true,
+          x,
+          y,
+          imageFigure: null,
+        });
+      });
+    },
+    [beginEditingNote],
+  );
+
   const handleEditorPointerDown = useCallback(
-    (e: PointerEvent<HTMLDivElement>) => {
+    (e: ReactPointerEvent<HTMLDivElement>) => {
       const root = editorRef.current;
       if (!root) return;
       const target = e.target as HTMLElement;
@@ -1587,10 +1789,23 @@ export default function NotesPage() {
     [],
   );
 
+  const handleEditorClick = useCallback(
+    (e: MouseEvent<HTMLDivElement>) => {
+      const target = e.target as HTMLElement;
+      const link = target.closest("a[data-note-id]");
+      if (!(link instanceof HTMLAnchorElement)) return;
+      e.preventDefault();
+      const noteId = link.getAttribute("data-note-id");
+      if (noteId) jumpToMentionedNote(noteId);
+    },
+    [jumpToMentionedNote],
+  );
+
   const editorHandlersRef = useRef<NoteEditorHandlers>({
     onInput: () => {},
     onPaste: () => {},
     onKeyDown: () => {},
+    onClick: () => {},
     onContextMenu: () => {},
     onPointerDown: () => {},
     onMouseUp: () => {},
@@ -1601,6 +1816,7 @@ export default function NotesPage() {
     onInput: syncEditorToState,
     onPaste: handleEditorPaste,
     onKeyDown: handleEditorKeyDown,
+    onClick: handleEditorClick,
     onContextMenu: handleEditorContextMenu,
     onPointerDown: handleEditorPointerDown,
     onMouseUp: refreshFmt,
@@ -1658,10 +1874,16 @@ export default function NotesPage() {
               {pages.map((p) => (
                 <div
                   key={p.id}
+                  draggable
+                  onDragStart={() => setDragPageId(p.id)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => handlePageDrop(p.id)}
+                  onDragEnd={() => setDragPageId(null)}
                   className={cn(
                     "flex cursor-default items-center gap-1 rounded-lg border px-1.5 py-1",
                     selectedPageId === p.id &&
                       "border-indigo-500 bg-indigo-500/10",
+                    dragPageId === p.id && "opacity-60",
                   )}
                 >
                   {editingPageId === p.id ? (
@@ -1778,10 +2000,16 @@ export default function NotesPage() {
               {notes.map((n) => (
                 <div
                   key={n.id}
+                  draggable
+                  onDragStart={() => setDragNoteId(n.id)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => handleNoteDrop(n.id)}
+                  onDragEnd={() => setDragNoteId(null)}
                   className={cn(
                     "flex cursor-default items-center gap-1 rounded-lg border px-1.5 py-1",
                     selectedNoteId === n.id &&
                       "border-violet-500 bg-violet-500/10",
+                    dragNoteId === n.id && "opacity-60",
                   )}
                 >
                   {editingNoteRowId === n.id ? (
@@ -2281,6 +2509,35 @@ export default function NotesPage() {
                         )}
                         {isEditing && (
                           <>
+                            <select
+                              value={mentionNoteId}
+                              onChange={(e) => setMentionNoteId(e.target.value)}
+                              className="h-7 max-w-[13rem] rounded-md border border-input bg-background px-2 text-xs"
+                              title="Mention another note"
+                            >
+                              <option value="">Mention note…</option>
+                              {allNotesForMentions
+                                .filter((n) => n.id !== selectedNote.id)
+                                .map((n) => (
+                                  <option key={n.id} value={n.id}>
+                                    {n.title}
+                                  </option>
+                                ))}
+                            </select>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-xs"
+                              disabled={!mentionNoteId}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => {
+                                insertNoteMention(mentionNoteId);
+                                setMentionNoteId("");
+                              }}
+                            >
+                              @ Mention
+                            </Button>
                             <input
                               ref={imageInputRef}
                               type="file"
@@ -2372,12 +2629,22 @@ export default function NotesPage() {
                         }
                       }}
                       onClick={(e) => {
+                        const link = (e.target as HTMLElement).closest(
+                          "a[data-note-id]",
+                        ) as HTMLAnchorElement | null;
+                        if (link) {
+                          e.preventDefault();
+                          const noteId = link.getAttribute("data-note-id");
+                          if (noteId) jumpToMentionedNote(noteId);
+                          return;
+                        }
                         if ((e.target as HTMLElement).closest("a")) return;
                         beginEditingNote();
                         requestAnimationFrame(() =>
                           editorRef.current?.focus(),
                         );
                       }}
+                      onContextMenu={openContextMenuFromReadBody}
                       className={cn(
                         "note-html-scroll w-full min-w-0 max-w-full flex-1 cursor-pointer select-text overflow-x-hidden overflow-y-auto rounded-lg bg-background px-3 py-2 text-sm text-foreground [overflow-wrap:anywhere]",
                         noteBodyFullscreen
