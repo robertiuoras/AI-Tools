@@ -10,6 +10,7 @@ import {
   useRef,
   useState,
   type ClipboardEvent,
+  type DragEvent,
   type FocusEvent,
   type KeyboardEvent,
   type MouseEvent,
@@ -130,12 +131,20 @@ function sortNotesFavoritesFirst(notes: Note[]): Note[] {
   return [...fav, ...rest];
 }
 
-/** Visual gap where a dragged row will land (preview slot). */
-function DndDropSlot() {
+/** Drop target for the preview gap (must receive drag events; `pointer-events-none` breaks drop). */
+function DndDropSlot({
+  onDragOver,
+  onDrop,
+}: {
+  onDragOver: (e: DragEvent<HTMLDivElement>) => void;
+  onDrop: (e: DragEvent<HTMLDivElement>) => void;
+}) {
   return (
     <div
-      className="pointer-events-none h-10 w-full shrink-0 rounded-lg border-2 border-dashed border-primary/50 bg-gradient-to-b from-primary/[0.12] to-muted/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
+      className="h-10 w-full shrink-0 cursor-grab rounded-lg border-2 border-dashed border-primary/50 bg-gradient-to-b from-primary/[0.12] to-muted/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
       aria-hidden
+      onDragOver={onDragOver}
+      onDrop={onDrop}
     />
   );
 }
@@ -245,6 +254,34 @@ type MentionContext = {
   caretRect: DOMRect;
 };
 
+/** Nearest block-level ancestor for @-mention (avoids matching @ in another paragraph when Range.toString omits newlines between blocks). */
+function getMentionBlockContainer(node: Node, root: HTMLElement): Node {
+  const blockTags = new Set([
+    "P",
+    "H1",
+    "H2",
+    "H3",
+    "H4",
+    "H5",
+    "H6",
+    "LI",
+    "BLOCKQUOTE",
+    "PRE",
+    "TD",
+    "TH",
+  ]);
+  let n: Node | null =
+    node.nodeType === Node.TEXT_NODE ? node.parentNode : node;
+  while (n && n !== root) {
+    if (n instanceof HTMLElement) {
+      if (blockTags.has(n.tagName)) return n;
+      if (n.tagName === "DIV" && n.parentNode === root) return n;
+    }
+    n = n.parentNode;
+  }
+  return root;
+}
+
 /** `@` + optional query at caret (for inline mention picker). */
 function getMentionContext(
   root: HTMLElement,
@@ -268,6 +305,14 @@ function getMentionContext(
 
   const replaceRange = getRangeForTextSpan(root, lastAt, text.length);
   if (!replaceRange) return null;
+
+  const atBlock = getMentionBlockContainer(replaceRange.startContainer, root);
+  const caretBlock = getMentionBlockContainer(
+    caretRange.startContainer,
+    root,
+  );
+  if (atBlock !== caretBlock) return null;
+
   const caretRect = caretRange.getBoundingClientRect();
   return { query, replaceRange, caretRect };
 }
@@ -2660,8 +2705,14 @@ export default function NotesPage() {
     onClick: handleEditorClick,
     onContextMenu: handleEditorContextMenu,
     onPointerDown: handleEditorPointerDown,
-    onMouseUp: refreshFmt,
-    onKeyUp: refreshFmt,
+    onMouseUp: () => {
+      refreshFmt();
+      queueMicrotask(() => refreshMentionPickerRef.current());
+    },
+    onKeyUp: () => {
+      refreshFmt();
+      queueMicrotask(() => refreshMentionPickerRef.current());
+    },
     onBlur: handleEditorBlur,
   };
 
@@ -2717,7 +2768,28 @@ export default function NotesPage() {
                   {dragPageId &&
                     dragPageId !== p.id &&
                     dragPageOver?.id === p.id &&
-                    dragPageOver.before && <DndDropSlot />}
+                    dragPageOver.before && (
+                      <DndDropSlot
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = "move";
+                          if (
+                            !dragPageIdRef.current ||
+                            dragPageIdRef.current === p.id
+                          )
+                            return;
+                          const o = { id: p.id, before: true };
+                          dragPageOverRef.current = o;
+                          setDragPageOver(o);
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          dragPageOverRef.current = { id: p.id, before: true };
+                          handlePageDrop(p.id);
+                        }}
+                      />
+                    )}
                   <div
                     draggable
                     onDragStart={(e) => {
@@ -2728,7 +2800,7 @@ export default function NotesPage() {
                       e.dataTransfer.effectAllowed = "move";
                       e.dataTransfer.setData("text/plain", p.id);
                     }}
-                    onDragOver={(e) => {
+                    onDragOverCapture={(e) => {
                       e.preventDefault();
                       e.dataTransfer.dropEffect = "move";
                       if (
@@ -2742,7 +2814,7 @@ export default function NotesPage() {
                       dragPageOverRef.current = o;
                       setDragPageOver(o);
                     }}
-                    onDrop={(ev) => {
+                    onDropCapture={(ev) => {
                       ev.preventDefault();
                       ev.stopPropagation();
                       handlePageDrop(p.id);
@@ -2756,7 +2828,7 @@ export default function NotesPage() {
                       }, 0);
                     }}
                     className={cn(
-                      "relative flex min-h-10 cursor-grab items-center gap-1 rounded-lg border px-1.5 py-1 transition-[box-shadow,transform,opacity,border-color] duration-150 [&_input]:cursor-text [&_button]:cursor-pointer active:cursor-grabbing",
+                      "relative flex min-h-10 cursor-grab items-center gap-1 rounded-lg border px-1.5 py-1 transition-[box-shadow,transform,opacity,border-color] duration-150 [&_input]:cursor-text [&_button]:cursor-grab active:cursor-grabbing",
                       "hover:border-primary/35 hover:bg-muted/30",
                       selectedPageId === p.id &&
                         "border-indigo-500 bg-indigo-500/10",
@@ -2795,7 +2867,7 @@ export default function NotesPage() {
                     <>
                       <button
                         type="button"
-                        className="min-w-0 flex-1 cursor-pointer truncate text-left text-sm"
+                        className="min-w-0 flex-1 cursor-grab truncate text-left text-sm"
                         onClick={() => {
                           setSelectedPageId(p.id);
                           setSelectedNoteId(null);
@@ -2821,7 +2893,7 @@ export default function NotesPage() {
                   )}
                   <button
                     type="button"
-                    className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                    className="shrink-0 cursor-grab rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
                     title="Copy page title"
                     onClick={() => void copyText(p.title, `page-${p.id}`)}
                   >
@@ -2833,6 +2905,7 @@ export default function NotesPage() {
                   </button>
                   <button
                     type="button"
+                    className="cursor-grab"
                     onClick={() => updatePage(p.id, { favorite: !p.favorite })}
                   >
                     <Star
@@ -2844,7 +2917,11 @@ export default function NotesPage() {
                       )}
                     />
                   </button>
-                  <button type="button" onClick={() => deletePage(p.id)}>
+                  <button
+                    type="button"
+                    className="cursor-grab"
+                    onClick={() => deletePage(p.id)}
+                  >
                     <Trash2 className="h-4 w-4 text-destructive" />
                   </button>
                 </div>
@@ -2856,7 +2933,28 @@ export default function NotesPage() {
                 dragPageOver.id === pages[pages.length - 1]!.id &&
                 !dragPageOver.before &&
                 dragPageId !== pages[pages.length - 1]!.id && (
-                  <DndDropSlot />
+                  <DndDropSlot
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      const lastId = pages[pages.length - 1]!.id;
+                      if (
+                        !dragPageIdRef.current ||
+                        dragPageIdRef.current === lastId
+                      )
+                        return;
+                      const o = { id: lastId, before: false };
+                      dragPageOverRef.current = o;
+                      setDragPageOver(o);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const lastId = pages[pages.length - 1]!.id;
+                      dragPageOverRef.current = { id: lastId, before: false };
+                      handlePageDrop(lastId);
+                    }}
+                  />
                 )}
             </div>
           </section>
@@ -2946,7 +3044,28 @@ export default function NotesPage() {
                   {dragNoteId &&
                     dragNoteId !== n.id &&
                     dragNoteOver?.id === n.id &&
-                    dragNoteOver.before && <DndDropSlot />}
+                    dragNoteOver.before && (
+                      <DndDropSlot
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = "move";
+                          if (
+                            !dragNoteIdRef.current ||
+                            dragNoteIdRef.current === n.id
+                          )
+                            return;
+                          const o = { id: n.id, before: true };
+                          dragNoteOverRef.current = o;
+                          setDragNoteOver(o);
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          dragNoteOverRef.current = { id: n.id, before: true };
+                          handleNoteDrop(n.id);
+                        }}
+                      />
+                    )}
                   <div
                     draggable
                     onDragStart={(e) => {
@@ -2967,7 +3086,7 @@ export default function NotesPage() {
                       e.dataTransfer.effectAllowed = "move";
                       e.dataTransfer.setData("text/plain", n.id);
                     }}
-                    onDragOver={(e) => {
+                    onDragOverCapture={(e) => {
                       e.preventDefault();
                       e.dataTransfer.dropEffect = "move";
                       if (
@@ -2981,7 +3100,7 @@ export default function NotesPage() {
                       dragNoteOverRef.current = o;
                       setDragNoteOver(o);
                     }}
-                    onDrop={(ev) => {
+                    onDropCapture={(ev) => {
                       ev.preventDefault();
                       ev.stopPropagation();
                       handleNoteDrop(n.id);
@@ -2995,7 +3114,7 @@ export default function NotesPage() {
                       }, 0);
                     }}
                     className={cn(
-                      "relative flex min-h-10 cursor-grab items-center gap-1 rounded-lg border px-1.5 py-1 transition-[box-shadow,transform,opacity,border-color] duration-150 [&_input]:cursor-text [&_button]:cursor-pointer active:cursor-grabbing",
+                      "relative flex min-h-10 cursor-grab items-center gap-1 rounded-lg border px-1.5 py-1 transition-[box-shadow,transform,opacity,border-color] duration-150 [&_input]:cursor-text [&_button]:cursor-grab active:cursor-grabbing",
                       "hover:border-primary/35 hover:bg-muted/30",
                       selectedNoteId === n.id &&
                         "border-violet-500 bg-violet-500/10",
@@ -3036,7 +3155,7 @@ export default function NotesPage() {
                     <>
                       <button
                         type="button"
-                        className="min-w-0 flex-1 cursor-pointer truncate text-left text-sm"
+                        className="min-w-0 flex-1 cursor-grab truncate text-left text-sm"
                         onClick={() => setSelectedNoteId(n.id)}
                       >
                         <span className="block truncate">{n.title}</span>
@@ -3067,7 +3186,7 @@ export default function NotesPage() {
                   )}
                   <button
                     type="button"
-                    className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                    className="shrink-0 cursor-grab rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
                     title="Copy note title"
                     onClick={() => void copyText(n.title, `note-title-${n.id}`)}
                   >
@@ -3079,6 +3198,7 @@ export default function NotesPage() {
                   </button>
                   <button
                     type="button"
+                    className="cursor-grab"
                     onClick={() => {
                       const next = !n.favorite;
                       setNotes((prev) => {
@@ -3111,7 +3231,11 @@ export default function NotesPage() {
                       )}
                     />
                   </button>
-                  <button type="button" onClick={() => deleteNote(n.id)}>
+                  <button
+                    type="button"
+                    className="cursor-grab"
+                    onClick={() => deleteNote(n.id)}
+                  >
                     <Trash2 className="h-4 w-4 text-destructive" />
                   </button>
                 </div>
@@ -3123,7 +3247,28 @@ export default function NotesPage() {
                 dragNoteOver.id === notes[notes.length - 1]!.id &&
                 !dragNoteOver.before &&
                 dragNoteId !== notes[notes.length - 1]!.id && (
-                  <DndDropSlot />
+                  <DndDropSlot
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      const lastId = notes[notes.length - 1]!.id;
+                      if (
+                        !dragNoteIdRef.current ||
+                        dragNoteIdRef.current === lastId
+                      )
+                        return;
+                      const o = { id: lastId, before: false };
+                      dragNoteOverRef.current = o;
+                      setDragNoteOver(o);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const lastId = notes[notes.length - 1]!.id;
+                      dragNoteOverRef.current = { id: lastId, before: false };
+                      handleNoteDrop(lastId);
+                    }}
+                  />
                 )}
             </div>
           </section>
