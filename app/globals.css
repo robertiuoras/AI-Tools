@@ -147,6 +147,24 @@
 .note-html-view a[href^="http"]:hover {
   color: rgb(29 78 216);
 }
+
+/* Notes editor: image resize/rotate handles — only when figure is selected */
+.note-html-scroll figure[data-note-image="1"] [data-note-image-handle="1"] {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+.note-html-scroll figure[data-note-image="1"][data-note-image-selected="1"] {
+  outline: 2px solid rgb(99 102 241);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.note-html-scroll
+  figure[data-note-image="1"][data-note-image-selected="1"]
+  [data-note-image-handle="1"] {
+  opacity: 1;
+  pointer-events: auto;
+}
 .dark .note-html-view a[href^="http"]:hover {
   color: rgb(147 197 253);
 }

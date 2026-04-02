@@ -273,6 +273,11 @@ function sanitizeFigureStyleValue(style: string): string | null {
       /^margin:\s*-?\d+(?:\.\d+)?px(?:\s+-?\d+(?:\.\d+)?px){0,3}$/i.test(chunk)
     ) {
       kept.push(chunk);
+      continue;
+    }
+    if (/^transform:\s*rotate\(\s*-?\d+(?:\.\d+)?deg\s*\)$/i.test(chunk)) {
+      kept.push(chunk);
+      continue;
     }
   }
   return kept.length ? kept.join("; ") : null;
@@ -290,6 +295,14 @@ function sanitizeImgStyleValue(style: string): string | null {
       /^max-width:\s*(?:\d+(?:\.\d+)?px|100%)$/i.test(chunk) ||
       /^height:\s*(?:auto|\d+(?:\.\d+)?px)$/i.test(chunk) ||
       /^display:\s*block$/i.test(chunk)
+    ) {
+      kept.push(chunk);
+      continue;
+    }
+    if (
+      /^clip-path:\s*inset\(\s*[\d.]+%\s+[\d.]+%\s+[\d.]+%\s+[\d.]+%\s*\)$/i.test(
+        chunk,
+      )
     ) {
       kept.push(chunk);
     }

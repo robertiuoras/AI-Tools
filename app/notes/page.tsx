@@ -66,6 +66,7 @@ import {
   Search,
   ArrowDown,
   ArrowUp,
+  Crop,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { linkifyText } from "@/lib/linkify";
@@ -80,6 +81,45 @@ import {
 } from "@/lib/note-html";
 import { NoteColorPicker } from "@/components/NoteColorPicker";
 import { useToast } from "@/components/ui/toaster";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+
+function parseInsetClipFromImg(img: HTMLImageElement): {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+} {
+  const style = img.style.clipPath || "";
+  const m = style.match(
+    /inset\(\s*([\d.]+)%\s+([\d.]+)%\s+([\d.]+)%\s+([\d.]+)%\s*\)/i,
+  );
+  if (!m) return { top: 0, right: 0, bottom: 0, left: 0 };
+  return {
+    top: Number(m[1]),
+    right: Number(m[2]),
+    bottom: Number(m[3]),
+    left: Number(m[4]),
+  };
+}
+
+function getFigureRotateDeg(figure: HTMLElement): number {
+  const t = figure.style.transform || "";
+  const m = t.match(/rotate\(\s*(-?\d+(?:\.\d+)?)\s*deg\s*\)/i);
+  return m ? Number(m[1]) : 0;
+}
+
+function unwrapAngleDelta(a: number): number {
+  let d = a;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return d;
+}
 
 const INLINE_TOKEN_RE =
   /\*\*([^*]+)\*\*|\*([^*]+)\*|==([^=\n]+)==|__([^_]+)__|~~([^~]+)~~|`([^`]+)`|\{\{c#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\}\}([\s\S]*?)\{\{\/c\}\}|\{\{s(\d{1,3})\}\}([\s\S]*?)\{\{\/s\}\}/g;
@@ -735,6 +775,15 @@ export default function NotesPage() {
     progress: number;
     phase: "upload" | "decode";
   }>({ active: false, progress: 0, phase: "upload" });
+  /** Bumps when an image figure is selected so toolbar can show move/crop actions. */
+  const [imageSelectionEpoch, setImageSelectionEpoch] = useState(0);
+  const [imageCropOpen, setImageCropOpen] = useState(false);
+  const [cropSides, setCropSides] = useState({
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+  });
   const [contextMenu, setContextMenu] = useState<{
     open: boolean;
     x: number;
@@ -770,13 +819,18 @@ export default function NotesPage() {
   selectedNoteIdRef.current = selectedNoteId;
   const skipNextNotesFetchForPageRef = useRef(false);
   const imageDragStateRef = useRef<{
-    mode: "move" | "resize";
+    mode: "move" | "pending-move" | "resize" | "rotate";
+    corner?: "nw" | "ne" | "sw" | "se";
     figure: HTMLElement;
     startX: number;
     startY: number;
     startWidth: number;
     startMarginLeft: number;
     startMarginTop: number;
+    startRotateDeg?: number;
+    centerX?: number;
+    centerY?: number;
+    startPointerAngleRad?: number;
   } | null>(null);
   const selectedImageFigureRef = useRef<HTMLElement | null>(null);
   const contextMenuOpenRef = useRef(false);
@@ -1336,6 +1390,10 @@ export default function NotesPage() {
       if (!parent) return;
       while (el.firstChild) parent.insertBefore(el.firstChild, el);
       parent.removeChild(el);
+    });
+    root.querySelectorAll("figure[data-note-image='1']").forEach((el) => {
+      if (el instanceof HTMLElement)
+        el.removeAttribute("data-note-image-selected");
     });
     return root.innerHTML;
   }, []);
@@ -2176,27 +2234,87 @@ export default function NotesPage() {
       if (!img.getAttribute("loading")) img.setAttribute("loading", "lazy");
     }
 
-    let handle = figure.querySelector(
-      "[data-note-ui='1'][data-resize-handle='1']",
-    ) as HTMLElement | null;
-    if (!handle) {
-      handle = document.createElement("span");
-      handle.setAttribute("data-note-ui", "1");
-      handle.setAttribute("data-resize-handle", "1");
-      handle.title = "Drag to resize";
-      handle.style.position = "absolute";
-      handle.style.right = "4px";
-      handle.style.bottom = "4px";
-      handle.style.width = "20px";
-      handle.style.height = "20px";
-      handle.style.zIndex = "3";
-      handle.style.borderRadius = "999px";
-      handle.style.background = "rgb(99 102 241)";
-      handle.style.border = "1px solid white";
-      handle.style.cursor = "nwse-resize";
-      handle.style.boxShadow = "0 0 0 1px rgba(0,0,0,0.15)";
-      figure.appendChild(handle);
+    figure.querySelectorAll("[data-note-ui='1']").forEach((el) => el.remove());
+
+    const corners: Array<{
+      corner: "nw" | "ne" | "sw" | "se";
+      title: string;
+      cursor: string;
+      top?: string;
+      left?: string;
+      right?: string;
+      bottom?: string;
+    }> = [
+      {
+        corner: "nw",
+        title: "Resize",
+        cursor: "nwse-resize",
+        top: "4px",
+        left: "4px",
+      },
+      {
+        corner: "ne",
+        title: "Resize",
+        cursor: "nesw-resize",
+        top: "4px",
+        right: "4px",
+      },
+      {
+        corner: "sw",
+        title: "Resize",
+        cursor: "nesw-resize",
+        bottom: "4px",
+        left: "4px",
+      },
+      {
+        corner: "se",
+        title: "Resize",
+        cursor: "nwse-resize",
+        bottom: "4px",
+        right: "4px",
+      },
+    ];
+
+    for (const c of corners) {
+      const h = document.createElement("span");
+      h.setAttribute("data-note-ui", "1");
+      h.setAttribute("data-note-image-handle", "1");
+      h.setAttribute("data-resize-corner", c.corner);
+      h.title = c.title;
+      h.style.position = "absolute";
+      h.style.width = "10px";
+      h.style.height = "10px";
+      h.style.zIndex = "4";
+      h.style.borderRadius = "999px";
+      h.style.background = "rgb(99 102 241)";
+      h.style.border = "1px solid white";
+      h.style.boxShadow = "0 0 0 1px rgba(0,0,0,0.15)";
+      h.style.cursor = c.cursor;
+      if (c.top) h.style.top = c.top;
+      if (c.left) h.style.left = c.left;
+      if (c.right) h.style.right = c.right;
+      if (c.bottom) h.style.bottom = c.bottom;
+      figure.appendChild(h);
     }
+
+    const rot = document.createElement("span");
+    rot.setAttribute("data-note-ui", "1");
+    rot.setAttribute("data-note-image-handle", "1");
+    rot.setAttribute("data-rotate-handle", "1");
+    rot.title = "Drag to rotate";
+    rot.style.position = "absolute";
+    rot.style.top = "-14px";
+    rot.style.left = "50%";
+    rot.style.width = "12px";
+    rot.style.height = "12px";
+    rot.style.marginLeft = "-6px";
+    rot.style.zIndex = "4";
+    rot.style.borderRadius = "999px";
+    rot.style.background = "rgb(99 102 241)";
+    rot.style.border = "1px solid white";
+    rot.style.cursor = "grab";
+    rot.style.boxShadow = "0 0 0 1px rgba(0,0,0,0.15)";
+    figure.appendChild(rot);
   }, []);
 
   const hydrateEditorImageFigures = useCallback(() => {
@@ -2583,12 +2701,75 @@ export default function NotesPage() {
     [findInNoteQuery, isEditing, selectedNoteId],
   );
 
+  const clearImageSelection = useCallback(() => {
+    const root = editorRef.current;
+    if (root) {
+      root
+        .querySelectorAll("figure[data-note-image-selected='1']")
+        .forEach((el) => {
+          if (el instanceof HTMLElement)
+            el.removeAttribute("data-note-image-selected");
+        });
+    }
+    selectedImageFigureRef.current = null;
+    setImageSelectionEpoch(0);
+  }, []);
+
+  const selectImageFigure = useCallback(
+    (figure: HTMLElement) => {
+      clearImageSelection();
+      selectedImageFigureRef.current = figure;
+      figure.setAttribute("data-note-image-selected", "1");
+      ensureImageFigureUi(figure);
+      setImageSelectionEpoch((n) => n + 1);
+    },
+    [clearImageSelection, ensureImageFigureUi],
+  );
+
+  const moveImageFigureUp = useCallback((figure: HTMLElement) => {
+    const parent = figure.parentNode;
+    if (!parent) return;
+    const prev = figure.previousElementSibling;
+    if (prev) parent.insertBefore(figure, prev);
+  }, []);
+
+  const moveImageFigureDown = useCallback((figure: HTMLElement) => {
+    const parent = figure.parentNode;
+    if (!parent) return;
+    const next = figure.nextElementSibling;
+    if (next) parent.insertBefore(next, figure);
+  }, []);
+
+  const openImageCropDialog = useCallback(() => {
+    const fig = selectedImageFigureRef.current;
+    const img = fig?.querySelector("img");
+    if (!(img instanceof HTMLImageElement)) return;
+    setCropSides(parseInsetClipFromImg(img));
+    setImageCropOpen(true);
+  }, []);
+
+  const applyImageCrop = useCallback(() => {
+    const fig = selectedImageFigureRef.current;
+    const img = fig?.querySelector("img");
+    if (!(img instanceof HTMLImageElement)) return;
+    const { top, right, bottom, left } = cropSides;
+    img.style.clipPath = `inset(${top}% ${right}% ${bottom}% ${left}%)`;
+    setImageCropOpen(false);
+    editorRef.current?.dispatchEvent(new Event("input", { bubbles: true }));
+  }, [cropSides]);
+
   const removeSelectedImage = useCallback(() => {
     const root = editorRef.current;
     const figure = selectedImageFigureRef.current;
-    if (!root || !figure || !root.contains(figure)) return;
+    if (!figure) return;
+    if (!root || !root.contains(figure)) {
+      selectedImageFigureRef.current = null;
+      setImageSelectionEpoch(0);
+      return;
+    }
     figure.remove();
     selectedImageFigureRef.current = null;
+    setImageSelectionEpoch(0);
     root.dispatchEvent(new Event("input", { bubbles: true }));
   }, []);
 
@@ -2641,13 +2822,31 @@ export default function NotesPage() {
         return;
       }
 
-      if (
-        (e.key === "Delete" || e.key === "Backspace") &&
-        selectedImageFigureRef.current
-      ) {
-        e.preventDefault();
-        removeSelectedImage();
+      if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        const fig = selectedImageFigureRef.current;
+        const root = editorRef.current;
+        if (fig && root?.contains(fig)) {
+          e.preventDefault();
+          if (e.key === "ArrowUp") moveImageFigureUp(fig);
+          else moveImageFigureDown(fig);
+          root.dispatchEvent(new Event("input", { bubbles: true }));
+        }
         return;
+      }
+
+      if (e.key === "Delete" || e.key === "Backspace") {
+        const fig = selectedImageFigureRef.current;
+        if (fig) {
+          const root = editorRef.current;
+          if (!root?.contains(fig)) {
+            selectedImageFigureRef.current = null;
+            setImageSelectionEpoch(0);
+          } else {
+            e.preventDefault();
+            removeSelectedImage();
+            return;
+          }
+        }
       }
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key === "\\") {
@@ -2693,6 +2892,8 @@ export default function NotesPage() {
       runUndo,
       runRedo,
       toggleHighlightColor,
+      moveImageFigureUp,
+      moveImageFigureDown,
     ],
   );
 
@@ -2756,10 +2957,10 @@ export default function NotesPage() {
         imageFigure: figure instanceof HTMLElement ? figure : null,
       });
       if (figure instanceof HTMLElement) {
-        selectedImageFigureRef.current = figure;
+        selectImageFigure(figure);
       }
     },
-    [],
+    [selectImageFigure],
   );
 
   const openContextMenuFromReadBody = useCallback(
@@ -2788,17 +2989,80 @@ export default function NotesPage() {
       const root = editorRef.current;
       if (!root) return;
       const target = e.target as HTMLElement;
-      const handle = target.closest("[data-resize-handle='1']");
       const figure = target.closest("figure[data-note-image='1']");
-      if (!(figure instanceof HTMLElement)) return;
-      selectedImageFigureRef.current = figure;
+      if (!(figure instanceof HTMLElement)) {
+        clearImageSelection();
+        return;
+      }
 
-      if (handle) {
-        e.preventDefault();
-        figure.style.cursor = "nwse-resize";
+      e.preventDefault();
+      root.focus();
+
+      const cornerEl = target.closest(
+        "[data-resize-corner]",
+      ) as HTMLElement | null;
+      const rotateEl = target.closest("[data-rotate-handle='1']");
+
+      const corner = cornerEl?.getAttribute("data-resize-corner") as
+        | "nw"
+        | "ne"
+        | "sw"
+        | "se"
+        | null
+        | undefined;
+
+      selectImageFigure(figure);
+
+      if (rotateEl) {
+        const rect = figure.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        const startPointerAngleRad = Math.atan2(
+          e.clientY - cy,
+          e.clientX - cx,
+        );
+        imageDragStateRef.current = {
+          mode: "rotate",
+          figure,
+          startX: e.clientX,
+          startY: e.clientY,
+          startWidth: Math.max(120, rect.width),
+          startMarginLeft: parseFloat(figure.style.marginLeft || "0") || 0,
+          startMarginTop: parseFloat(figure.style.marginTop || "8") || 8,
+          startRotateDeg: getFigureRotateDeg(figure),
+          centerX: cx,
+          centerY: cy,
+          startPointerAngleRad,
+        };
+        figure.style.cursor = "grabbing";
+        const onMove = (ev: globalThis.PointerEvent) => {
+          const s = imageDragStateRef.current;
+          if (!s || s.mode !== "rotate") return;
+          const cx0 = s.centerX!;
+          const cy0 = s.centerY!;
+          const a0 = s.startPointerAngleRad!;
+          const a1 = Math.atan2(ev.clientY - cy0, ev.clientX - cx0);
+          const deltaDeg = unwrapAngleDelta(a1 - a0) * (180 / Math.PI);
+          const nextDeg = (s.startRotateDeg ?? 0) + deltaDeg;
+          s.figure.style.transform = `rotate(${nextDeg}deg)`;
+        };
+        const onUp = () => {
+          window.removeEventListener("pointermove", onMove);
+          window.removeEventListener("pointerup", onUp);
+          imageDragStateRef.current = null;
+          figure.style.cursor = "grab";
+          root.dispatchEvent(new Event("input", { bubbles: true }));
+        };
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+        return;
+      }
+
+      if (corner) {
         const width = Math.max(120, figure.getBoundingClientRect().width);
         imageDragStateRef.current = {
           mode: "resize",
+          corner,
           figure,
           startX: e.clientX,
           startY: e.clientY,
@@ -2806,28 +3070,63 @@ export default function NotesPage() {
           startMarginLeft: parseFloat(figure.style.marginLeft || "0") || 0,
           startMarginTop: parseFloat(figure.style.marginTop || "8") || 8,
         };
-      } else {
-        e.preventDefault();
-        figure.style.cursor = "grabbing";
-        imageDragStateRef.current = {
-          mode: "move",
-          figure,
-          startX: e.clientX,
-          startY: e.clientY,
-          startWidth: Math.max(120, figure.getBoundingClientRect().width),
-          startMarginLeft: parseFloat(figure.style.marginLeft || "0") || 0,
-          startMarginTop: parseFloat(figure.style.marginTop || "8") || 8,
+        figure.style.cursor = "nwse-resize";
+        const onMove = (ev: globalThis.PointerEvent) => {
+          const s = imageDragStateRef.current;
+          if (!s || s.mode !== "resize") return;
+          const dx = ev.clientX - s.startX;
+          const c = s.corner;
+          if (c === "se" || c === "ne") {
+            const w = Math.max(120, Math.min(980, s.startWidth + dx));
+            s.figure.style.width = `${w}px`;
+            s.figure.style.maxWidth = "100%";
+          } else {
+            const w = Math.max(120, Math.min(980, s.startWidth - dx));
+            s.figure.style.width = `${w}px`;
+            s.figure.style.maxWidth = "100%";
+            s.figure.style.marginLeft = `${s.startMarginLeft + (s.startWidth - w)}px`;
+          }
         };
+        const onUp = () => {
+          window.removeEventListener("pointermove", onMove);
+          window.removeEventListener("pointerup", onUp);
+          imageDragStateRef.current = null;
+          figure.style.cursor = "grab";
+          root.dispatchEvent(new Event("input", { bubbles: true }));
+        };
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+        return;
       }
+
+      imageDragStateRef.current = {
+        mode: "pending-move",
+        figure,
+        startX: e.clientX,
+        startY: e.clientY,
+        startWidth: Math.max(120, figure.getBoundingClientRect().width),
+        startMarginLeft: parseFloat(figure.style.marginLeft || "0") || 0,
+        startMarginTop: parseFloat(figure.style.marginTop || "8") || 8,
+      };
 
       const onMove = (ev: globalThis.PointerEvent) => {
         const s = imageDragStateRef.current;
         if (!s) return;
-        if (s.mode === "resize") {
-          const next = Math.max(120, Math.min(980, s.startWidth + (ev.clientX - s.startX)));
-          s.figure.style.width = `${next}px`;
-          s.figure.style.maxWidth = "100%";
-        } else {
+        if (s.mode === "pending-move") {
+          const dx = ev.clientX - s.startX;
+          const dy = ev.clientY - s.startY;
+          if (Math.hypot(dx, dy) > 6) {
+            s.startMarginLeft =
+              parseFloat(s.figure.style.marginLeft || "0") || 0;
+            s.startMarginTop =
+              parseFloat(s.figure.style.marginTop || "8") || 8;
+            s.startX = ev.clientX;
+            s.startY = ev.clientY;
+            s.mode = "move";
+            s.figure.style.cursor = "grabbing";
+          } else return;
+        }
+        if (s.mode === "move") {
           const dx = ev.clientX - s.startX;
           const dy = ev.clientY - s.startY;
           s.figure.style.marginLeft = `${Math.max(-200, Math.min(400, s.startMarginLeft + dx))}px`;
@@ -2838,15 +3137,16 @@ export default function NotesPage() {
       const onUp = () => {
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
+        const s = imageDragStateRef.current;
         imageDragStateRef.current = null;
-        figure.style.cursor = "grab";
+        if (s?.figure) s.figure.style.cursor = "grab";
         root.dispatchEvent(new Event("input", { bubbles: true }));
       };
 
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
     },
-    [],
+    [clearImageSelection, selectImageFigure],
   );
 
   const handleEditorClick = useCallback(
@@ -4081,6 +4381,66 @@ export default function NotesPage() {
                               <ImagePlus className="h-3.5 w-3.5" />
                               Image
                             </Button>
+                            {imageSelectionEpoch > 0 && (
+                              <>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 w-7 shrink-0 px-0"
+                                  title="Move image up in document (Alt+↑)"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => {
+                                    const fig = selectedImageFigureRef.current;
+                                    const root = editorRef.current;
+                                    if (!fig || !root?.contains(fig)) return;
+                                    moveImageFigureUp(fig);
+                                    root.dispatchEvent(
+                                      new Event("input", { bubbles: true }),
+                                    );
+                                    editorRef.current?.focus();
+                                  }}
+                                >
+                                  <ArrowUp className="h-3.5 w-3.5" />
+                                  <span className="sr-only">Move image up</span>
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 w-7 shrink-0 px-0"
+                                  title="Move image down in document (Alt+↓)"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => {
+                                    const fig = selectedImageFigureRef.current;
+                                    const root = editorRef.current;
+                                    if (!fig || !root?.contains(fig)) return;
+                                    moveImageFigureDown(fig);
+                                    root.dispatchEvent(
+                                      new Event("input", { bubbles: true }),
+                                    );
+                                    editorRef.current?.focus();
+                                  }}
+                                >
+                                  <ArrowDown className="h-3.5 w-3.5" />
+                                  <span className="sr-only">
+                                    Move image down
+                                  </span>
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 gap-1 px-2 text-xs"
+                                  title="Crop selected image"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={openImageCropDialog}
+                                >
+                                  <Crop className="h-3.5 w-3.5" />
+                                  Crop
+                                </Button>
+                              </>
+                            )}
                             <span
                               className="hidden sm:inline text-[10px] text-muted-foreground"
                               title="Type @ in the note to link another note"
@@ -4470,6 +4830,58 @@ export default function NotesPage() {
           </div>
         </div>
       )}
+      <Dialog open={imageCropOpen} onOpenChange={setImageCropOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Crop image</DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-muted-foreground">
+            Trim each edge as a percentage (inset). Lower values show more of
+            the image; higher values crop more.
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            {(
+              ["top", "right", "bottom", "left"] as const
+            ).map((side) => (
+              <div key={side} className="space-y-1">
+                <Label className="text-xs capitalize">{side}</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={45}
+                  step={0.5}
+                  className="h-8 text-xs"
+                  value={cropSides[side]}
+                  onChange={(e) => {
+                    const v = Math.min(
+                      45,
+                      Math.max(0, Number(e.target.value) || 0),
+                    );
+                    setCropSides((s) => ({ ...s, [side]: v }));
+                  }}
+                />
+              </div>
+            ))}
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setCropSides({ top: 0, right: 0, bottom: 0, left: 0 });
+              }}
+            >
+              Reset
+            </Button>
+            <Button type="button" variant="outline" onClick={() => setImageCropOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={applyImageCrop}>
+              Apply
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {typeof document !== "undefined" &&
         mentionPickerOpen &&
         mentionPickerPos &&
