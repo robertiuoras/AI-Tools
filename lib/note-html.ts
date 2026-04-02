@@ -351,6 +351,28 @@ function sanitizeElement(el: Element): void {
       continue;
     }
     if (name === "data-note-id" && tag === "A") continue;
+    if (name === "data-mention-color" && tag === "A" && el.hasAttribute("data-note-id")) {
+      const href = el.getAttribute("href")?.trim() ?? "";
+      if (href.startsWith("#note-")) {
+        const v = a.value.trim();
+        if (/^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(v)) continue;
+      }
+      el.removeAttribute(a.name);
+      continue;
+    }
+    if (
+      name === "style" &&
+      tag === "A" &&
+      el.hasAttribute("data-note-id")
+    ) {
+      const href = el.getAttribute("href")?.trim() ?? "";
+      if (href.startsWith("#note-")) {
+        const cleaned = sanitizeStyleValue(el.getAttribute("style") || "");
+        if (cleaned) el.setAttribute("style", cleaned);
+        else el.removeAttribute("style");
+        continue;
+      }
+    }
     if (name === "style" && (tag === "SPAN" || tag === "FONT" || tag === "MARK")) {
       const cleaned = sanitizeStyleValue(el.getAttribute("style") || "");
       if (cleaned) el.setAttribute("style", cleaned);
