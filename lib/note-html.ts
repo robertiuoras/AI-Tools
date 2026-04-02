@@ -178,6 +178,7 @@ const ALLOWED_TAGS = new Set([
   "IMG",
   "A",
   "FONT", // some browsers emit <font color> for foreColor
+  "INPUT", // task lists: type="checkbox" only (sanitized below)
 ]);
 
 function sanitizeStyleValue(style: string): string | null {
@@ -202,6 +203,41 @@ function sanitizeStyleValue(style: string): string | null {
       /^font-size:\s*\d+(?:\.\d+)?(?:px|pt|rem|em)(?:\s*!important)?$/i.test(
         chunk,
       )
+    ) {
+      kept.push(chunk);
+      continue;
+    }
+    // contenteditable + execCommand("styleWithCSS", true) uses spans with these
+    // instead of <strong>/<em>/<u>/<s> in many browsers
+    if (
+      /^font-weight:\s*(normal|bold|bolder|lighter|[1-9]00)(?:\s*!important)?$/i.test(
+        chunk,
+      )
+    ) {
+      kept.push(chunk);
+      continue;
+    }
+    if (
+      /^font-style:\s*(normal|italic|oblique)(?:\s*!important)?$/i.test(chunk)
+    ) {
+      kept.push(chunk);
+      continue;
+    }
+    if (
+      /^text-decoration-line:\s*(none|underline|line-through|overline)(?:\s|$)/i.test(
+        chunk,
+      )
+    ) {
+      kept.push(chunk);
+      continue;
+    }
+    if (
+      /^text-decoration:\s*(none|underline|line-through|overline)(?:\s|$)/i.test(
+        chunk,
+      ) ||
+      (/^text-decoration:\s*/i.test(chunk) &&
+        /\b(underline|line-through)\b/i.test(chunk) &&
+        !/url\s*\(/i.test(chunk))
     ) {
       kept.push(chunk);
     }
@@ -267,6 +303,31 @@ function sanitizeElement(el: Element): void {
     el.remove();
     return;
   }
+  if (tag === "INPUT") {
+    const typ = el.getAttribute("type")?.toLowerCase();
+    if (typ !== "checkbox") {
+      el.remove();
+      return;
+    }
+    for (const a of [...el.attributes]) {
+      const name = a.name.toLowerCase();
+      if (name === "type") continue;
+      if (name === "checked") continue;
+      if (name === "contenteditable" && a.value === "false") continue;
+      if (
+        name === "class" &&
+        a.value.trim().split(/\s+/).includes("note-task-checkbox")
+      ) {
+        el.setAttribute("class", "note-task-checkbox");
+        continue;
+      }
+      el.removeAttribute(a.name);
+    }
+    if (el.getAttribute("contenteditable") !== "false") {
+      el.setAttribute("contenteditable", "false");
+    }
+    return;
+  }
   if (!ALLOWED_TAGS.has(tag)) {
     const parent = el.parentNode;
     if (!parent) return;
@@ -324,6 +385,20 @@ function sanitizeElement(el: Element): void {
       continue;
     }
     if (name === "class" && (tag === "CODE" || tag === "MARK" || tag === "H3")) {
+      continue;
+    }
+    if (name === "class" && tag === "A" && el.hasAttribute("data-note-id")) {
+      const cls = a.value.trim();
+      if (cls === "note-mention") continue;
+    }
+    if (name === "class" && tag === "UL") {
+      const cls = a.value.trim().split(/\s+/).filter(Boolean);
+      if (cls.includes("note-task-list")) {
+        el.setAttribute("class", "note-task-list");
+        continue;
+      }
+    }
+    if (name === "data-note-task-list" && tag === "UL" && a.value === "1") {
       continue;
     }
     if (name === "target" && tag === "A" && a.value === "_blank") continue;

@@ -18,6 +18,7 @@ import {
   type Ref,
   type RefObject,
 } from "react";
+import { createPortal } from "react-dom";
 import { supabase, type Note, type NotePage } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -44,6 +45,7 @@ import {
   Strikethrough,
   Eraser,
   ClipboardPaste,
+  ListChecks,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { linkifyText } from "@/lib/linkify";
@@ -65,6 +67,20 @@ const NUMBERED_LINE_RE = /^(\s*)\d+\.\s+/;
 
 /** Styled via globals.css `.note-html-view mark.note-highlight` */
 const NOTE_MARK_HIGHLIGHT_CLASS = "note-highlight";
+
+/** Tooltip for format toolbar: optional Ctrl/⌘ shortcut on hover. */
+function formatShortcutTooltip(
+  label: string,
+  opts?: { key?: string; extra?: string },
+): string {
+  if (opts?.extra) return `${label} — ${opts.extra}`;
+  if (opts?.key) {
+    if (typeof navigator === "undefined") return `${label} — Ctrl+${opts.key}`;
+    const mac = /Mac|iPhone|iPad/i.test(navigator.platform);
+    return mac ? `${label} — ⌘${opts.key}` : `${label} — Ctrl+${opts.key}`;
+  }
+  return `${label} — click again to toggle`;
+}
 
 function unwrapElement(el: HTMLElement): void {
   const parent = el.parentNode;
@@ -113,6 +129,89 @@ function collectCodesIntersectingRange(
   });
   out.sort((a, b) => depthFromRoot(b, root) - depthFromRoot(a, root));
   return out;
+}
+
+/** Character offsets in `root` text (Range.toString order) → DOM Range. */
+function getRangeForTextSpan(
+  root: HTMLElement,
+  startChar: number,
+  endChar: number,
+): Range | null {
+  if (endChar < startChar) return null;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let pos = 0;
+  let startNode: Text | null = null;
+  let startOff = 0;
+  let endNode: Text | null = null;
+  let endOff = 0;
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    const t = node as Text;
+    const len = t.length;
+    if (pos + len > startChar && startNode === null) {
+      startNode = t;
+      startOff = Math.max(0, startChar - pos);
+    }
+    if (pos + len >= endChar) {
+      endNode = t;
+      endOff = Math.min(len, endChar - pos);
+      break;
+    }
+    pos += len;
+  }
+  if (!startNode || !endNode) return null;
+  const r = document.createRange();
+  r.setStart(startNode, startOff);
+  r.setEnd(endNode, endOff);
+  return r;
+}
+
+function isInsideNoteMentionAnchor(node: Node, root: HTMLElement): boolean {
+  let el: Node | null = node.nodeType === Node.TEXT_NODE ? node.parentNode : node;
+  while (el && el !== root) {
+    if (
+      el instanceof HTMLElement &&
+      el.tagName === "A" &&
+      el.hasAttribute("data-note-id")
+    ) {
+      return true;
+    }
+    el = el.parentNode;
+  }
+  return false;
+}
+
+type MentionContext = {
+  query: string;
+  replaceRange: Range;
+  caretRect: DOMRect;
+};
+
+/** `@` + optional query at caret (for inline mention picker). */
+function getMentionContext(
+  root: HTMLElement,
+  caretRange: Range,
+): MentionContext | null {
+  if (!root.contains(caretRange.commonAncestorContainer)) return null;
+  if (isInsideNoteMentionAnchor(caretRange.commonAncestorContainer, root)) {
+    return null;
+  }
+
+  const pre = document.createRange();
+  pre.selectNodeContents(root);
+  pre.setEnd(caretRange.endContainer, caretRange.endOffset);
+  const text = pre.toString();
+  const lastAt = text.lastIndexOf("@");
+  if (lastAt === -1) return null;
+  const beforeChar = lastAt === 0 ? "\n" : text[lastAt - 1];
+  if (beforeChar !== "\n" && !/\s/.test(beforeChar)) return null;
+  const query = text.slice(lastAt + 1);
+  if (query.includes("\n")) return null;
+
+  const replaceRange = getRangeForTextSpan(root, lastAt, text.length);
+  if (!replaceRange) return null;
+  const caretRect = caretRange.getBoundingClientRect();
+  return { query, replaceRange, caretRect };
 }
 
 const LS_LAST_PAGE_KEY = "notes:lastPageId";
@@ -346,9 +445,12 @@ function renderPreviewMarkdown(text: string): ReactNode {
 }
 
 const NOTE_HTML_VIEW_CLASS =
-  "note-html-view min-h-0 space-y-2 text-sm [&_figure[data-note-image='1']]:max-w-full [&_figure[data-note-image='1']]:overflow-visible [&_figure[data-note-image='1']_img]:rounded-md [&_h3]:scroll-m-20 [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:tracking-tight [&_li]:my-0.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:whitespace-pre-wrap [&_ul]:list-disc [&_ul]:pl-5";
+  "note-html-view min-h-0 space-y-2 text-sm [&_figure[data-note-image='1']]:max-w-full [&_figure[data-note-image='1']]:overflow-visible [&_figure[data-note-image='1']_img]:rounded-md [&_h3]:scroll-m-20 [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:tracking-tight [&_li]:my-0.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:whitespace-pre-wrap [&_ul]:list-disc [&_ul]:pl-5 [&_ul.note-task-list]:list-none [&_ul.note-task-list]:pl-0 [&_ul.note-task-list_li]:flex [&_ul.note-task-list_li]:items-start [&_ul.note-task-list_li]:gap-2 [&_ul.note-task-list_li]:my-0.5 [&_ul.note-task-list_.note-task-checkbox]:mt-0.5 [&_ul.note-task-list_.note-task-checkbox]:shrink-0 [&_a.note-mention]:font-medium [&_a.note-mention]:text-primary [&_a.note-mention]:underline [&_a.note-mention]:decoration-primary/60";
 
-function renderReadNoteBody(content: string): ReactNode {
+function renderReadNoteBody(
+  content: string,
+  htmlRef?: MutableRefObject<HTMLDivElement | null>,
+): ReactNode {
   const t = content.trim();
   if (!t) {
     return (
@@ -358,6 +460,7 @@ function renderReadNoteBody(content: string): ReactNode {
   if (isProbablyHtml(content)) {
     return (
       <div
+        ref={htmlRef ? (el) => { htmlRef.current = el; } : undefined}
         className={NOTE_HTML_VIEW_CLASS}
         dangerouslySetInnerHTML={{
           __html: normalizeNoteHtmlStructure(content),
@@ -457,6 +560,12 @@ export default function NotesPage() {
   const [editingNoteRowId, setEditingNoteRowId] = useState<string | null>(null);
   const [editingMainTitle, setEditingMainTitle] = useState(false);
   const [formatMenuOpen, setFormatMenuOpen] = useState(false);
+  const [formatColorExpanded, setFormatColorExpanded] = useState(false);
+  const [formatMenuCoords, setFormatMenuCoords] = useState<{
+    bottom: number;
+    right: number;
+    maxH: number;
+  } | null>(null);
   const [editorSession, setEditorSession] = useState(0);
   const [fmtActive, setFmtActive] = useState({
     bold: false,
@@ -467,6 +576,7 @@ export default function NotesPage() {
     inlineCode: false,
     unorderedList: false,
     orderedList: false,
+    taskList: false,
     heading3: false,
   });
   /** Synced color well + hex field in Format panel (6-char #RRGGBB). */
@@ -477,7 +587,14 @@ export default function NotesPage() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [noteBodyFullscreen, setNoteBodyFullscreen] = useState(false);
   const [allNotesForMentions, setAllNotesForMentions] = useState<Note[]>([]);
-  const [mentionNoteId, setMentionNoteId] = useState<string>("");
+  const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState("");
+  const [mentionHighlightIndex, setMentionHighlightIndex] = useState(0);
+  const [mentionPickerPos, setMentionPickerPos] = useState<{
+    top: number;
+    left: number;
+    maxH: number;
+  } | null>(null);
   const [dragPageId, setDragPageId] = useState<string | null>(null);
   const [dragNoteId, setDragNoteId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{
@@ -488,7 +605,12 @@ export default function NotesPage() {
   }>({ open: false, x: 0, y: 0, imageFigure: null });
 
   const editorRef = useRef<HTMLDivElement | null>(null);
-  const formatMenuRef = useRef<HTMLDivElement | null>(null);
+  const formatMenuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const formatMenuPanelRef = useRef<HTMLDivElement | null>(null);
+  const readNoteHtmlRef = useRef<HTMLDivElement | null>(null);
+  const mentionPickerRef = useRef<HTMLDivElement | null>(null);
+  const refreshMentionPickerRef = useRef<() => void>(() => {});
+  const lastMentionQueryForHighlightRef = useRef<string>("");
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   /** Last caret/selection inside the editor — Radix controls clear the live selection. */
   const editorSelectionRef = useRef<Range | null>(null);
@@ -533,6 +655,14 @@ export default function NotesPage() {
     () => notes.find((n) => n.id === selectedNoteId) ?? null,
     [notes, selectedNoteId],
   );
+
+  const filteredMentionNotes = useMemo(() => {
+    const q = mentionQuery.trim().toLowerCase();
+    return allNotesForMentions
+      .filter((n) => n.id !== selectedNoteId)
+      .filter((n) => !q || n.title.toLowerCase().includes(q))
+      .slice(0, 50);
+  }, [allNotesForMentions, selectedNoteId, mentionQuery]);
 
   const authHeaders = useMemo<Record<string, string>>(
     () => ({
@@ -592,12 +722,45 @@ export default function NotesPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [noteBodyFullscreen]);
 
+  const updateFormatMenuPosition = useCallback(() => {
+    const btn = formatMenuButtonRef.current;
+    if (!btn) return;
+    const r = btn.getBoundingClientRect();
+    setFormatMenuCoords({
+      bottom: window.innerHeight - r.top + 8,
+      right: window.innerWidth - r.right,
+      maxH: Math.min(
+        0.5 * window.innerHeight,
+        Math.max(160, r.top - 16),
+      ),
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!formatMenuOpen) {
+      setFormatMenuCoords(null);
+      return;
+    }
+    updateFormatMenuPosition();
+    const onResize = () => updateFormatMenuPosition();
+    window.addEventListener("resize", onResize);
+    window.addEventListener("scroll", onResize, true);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("scroll", onResize, true);
+    };
+  }, [formatMenuOpen, formatColorExpanded, updateFormatMenuPosition]);
+
+  useEffect(() => {
+    if (!formatMenuOpen) setFormatColorExpanded(false);
+  }, [formatMenuOpen]);
+
   useEffect(() => {
     if (!formatMenuOpen) return;
     const onPointerDown = (e: PointerEvent) => {
-      const el = formatMenuRef.current;
-      if (!el) return;
-      if (el.contains(e.target as Node)) return;
+      const t = e.target as Node;
+      if (formatMenuButtonRef.current?.contains(t)) return;
+      if (formatMenuPanelRef.current?.contains(t)) return;
       setFormatMenuOpen(false);
     };
     document.addEventListener("pointerdown", onPointerDown, true);
@@ -765,12 +928,14 @@ export default function NotesPage() {
   }, [selectedPageId]);
 
   useEffect(() => {
+    setMentionPickerOpen(false);
+    setMentionQuery("");
+    lastMentionQueryForHighlightRef.current = "";
     if (!selectedNoteId) return;
     setIsEditing(false);
     setFormatMenuOpen(false);
     setEditingMainTitle(false);
     setEditingNoteRowId(null);
-    setMentionNoteId("");
   }, [selectedNoteId]);
 
   const createPage = async () => {
@@ -948,6 +1113,82 @@ export default function NotesPage() {
     return () => clearInterval(id);
   }, [isEditing, selectedNoteId, persistNoteBody]);
 
+  useEffect(() => {
+    if (!isEditing) return;
+    const root = editorRef.current;
+    if (!root) return;
+    const onCheckboxChange = (e: Event) => {
+      const t = e.target as HTMLInputElement;
+      if (t?.tagName !== "INPUT" || t.type !== "checkbox") return;
+      if (!root.contains(t)) return;
+      root.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    root.addEventListener("change", onCheckboxChange);
+    return () => root.removeEventListener("change", onCheckboxChange);
+  }, [isEditing, selectedNoteId]);
+
+  useEffect(() => {
+    if (isEditing) return;
+    const el = readNoteHtmlRef.current;
+    if (!el) return;
+    const onCheckboxChange = (e: Event) => {
+      const t = e.target as HTMLInputElement;
+      if (t?.tagName !== "INPUT" || t.type !== "checkbox") return;
+      if (!el.contains(t)) return;
+      const sid = selectedNoteIdRef.current;
+      if (!sid) return;
+      const raw = el.innerHTML;
+      const normalized = normalizeNoteHtmlForSave(raw);
+      setNotes((prev) =>
+        prev.map((n) => (n.id === sid ? { ...n, content: normalized } : n)),
+      );
+      void persistNoteBodyRef.current(sid, normalized, true);
+    };
+    el.addEventListener("change", onCheckboxChange);
+    return () => el.removeEventListener("change", onCheckboxChange);
+  }, [isEditing, selectedNoteId]);
+
+  useEffect(() => {
+    if (!isEditing) {
+      setMentionPickerOpen(false);
+      lastMentionQueryForHighlightRef.current = "";
+      return;
+    }
+    const onSel = () => {
+      queueMicrotask(() => refreshMentionPickerRef.current());
+    };
+    document.addEventListener("selectionchange", onSel);
+    return () => document.removeEventListener("selectionchange", onSel);
+  }, [isEditing]);
+
+  useEffect(() => {
+    if (!mentionPickerOpen) return;
+    setMentionHighlightIndex((i) =>
+      Math.min(i, Math.max(0, filteredMentionNotes.length - 1)),
+    );
+  }, [filteredMentionNotes.length, mentionPickerOpen]);
+
+  useEffect(() => {
+    if (!mentionPickerOpen) return;
+    const el = document.querySelector(
+      `[data-mention-index="${mentionHighlightIndex}"]`,
+    );
+    el?.scrollIntoView({ block: "nearest" });
+  }, [mentionHighlightIndex, mentionPickerOpen]);
+
+  useEffect(() => {
+    if (!mentionPickerOpen) return;
+    const onDoc = (ev: Event) => {
+      const t = ev.target as Node;
+      if (mentionPickerRef.current?.contains(t)) return;
+      if (editorRef.current?.contains(t)) return;
+      setMentionPickerOpen(false);
+      lastMentionQueryForHighlightRef.current = "";
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [mentionPickerOpen]);
+
   const deleteNote = async (noteId: string) => {
     const res = await fetch(`/api/notes/${noteId}`, {
       method: "DELETE",
@@ -1069,6 +1310,25 @@ export default function NotesPage() {
     return false;
   }, []);
 
+  const selectionInsideTaskList = useCallback(() => {
+    const root = editorRef.current;
+    const sel = window.getSelection();
+    if (!root || !sel?.anchorNode || !root.contains(sel.anchorNode)) return false;
+    let n: Node | null = sel.anchorNode;
+    if (n.nodeType === Node.TEXT_NODE) n = (n as Text).parentElement;
+    while (n && n !== root) {
+      if (
+        n instanceof HTMLElement &&
+        n.tagName === "UL" &&
+        n.getAttribute("data-note-task-list") === "1"
+      ) {
+        return true;
+      }
+      n = n.parentElement;
+    }
+    return false;
+  }, []);
+
   /** Restore selection after Radix/toolbar clicks cleared it (required for execCommand + font size). */
   const restoreEditorSelection = useCallback((): boolean => {
     const root = editorRef.current;
@@ -1112,6 +1372,7 @@ export default function NotesPage() {
         inlineCode: selectionInsideInlineCode(),
         unorderedList: document.queryCommandState("insertUnorderedList"),
         orderedList: document.queryCommandState("insertOrderedList"),
+        taskList: selectionInsideTaskList(),
         heading3,
       });
     } catch {
@@ -1123,6 +1384,7 @@ export default function NotesPage() {
     selectionInsideHeading3,
     selectionInsideHighlight,
     selectionInsideInlineCode,
+    selectionInsideTaskList,
   ]);
 
   useEffect(() => {
@@ -1167,6 +1429,43 @@ export default function NotesPage() {
     },
     [refreshFmt, restoreEditorSelection],
   );
+
+  const insertTaskList = useCallback(() => {
+    const root = editorRef.current;
+    if (!root) return;
+    root.focus();
+    restoreEditorSelection();
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const r = sel.getRangeAt(0);
+    if (!root.contains(r.commonAncestorContainer)) return;
+
+    const ul = document.createElement("ul");
+    ul.setAttribute("data-note-task-list", "1");
+    ul.className = "note-task-list";
+
+    const li = document.createElement("li");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.setAttribute("contenteditable", "false");
+    cb.className = "note-task-checkbox";
+
+    const span = document.createElement("span");
+    span.appendChild(document.createTextNode("\u200b"));
+
+    li.appendChild(cb);
+    li.appendChild(span);
+    ul.appendChild(li);
+
+    r.deleteContents();
+    r.insertNode(ul);
+    r.setStart(span, 0);
+    r.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r);
+    root.dispatchEvent(new Event("input", { bubbles: true }));
+    refreshFmt();
+  }, [refreshFmt, restoreEditorSelection]);
 
   const normalizePanelHex = useCallback((raw: string): string | null => {
     let h = raw.replace(/^#/, "").trim();
@@ -1504,6 +1803,52 @@ export default function NotesPage() {
     [getEditorAuthToken, insertImageIntoEditor],
   );
 
+  const refreshMentionPicker = useCallback(() => {
+    if (!isEditing) {
+      setMentionPickerOpen(false);
+      lastMentionQueryForHighlightRef.current = "";
+      return;
+    }
+    const root = editorRef.current;
+    if (!root) {
+      setMentionPickerOpen(false);
+      return;
+    }
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) {
+      setMentionPickerOpen(false);
+      return;
+    }
+    const caret = sel.getRangeAt(0);
+    const ctx = getMentionContext(root, caret);
+    if (!ctx) {
+      setMentionPickerOpen(false);
+      lastMentionQueryForHighlightRef.current = "";
+      return;
+    }
+    if (ctx.query !== lastMentionQueryForHighlightRef.current) {
+      lastMentionQueryForHighlightRef.current = ctx.query;
+      setMentionHighlightIndex(0);
+    }
+    setMentionQuery(ctx.query);
+    setMentionPickerOpen(true);
+    const rect = ctx.caretRect;
+    const margin = 8;
+    const maxH = Math.min(
+      260,
+      Math.max(120, window.innerHeight - rect.bottom - margin * 2),
+    );
+    let top = rect.bottom + 4;
+    if (top + maxH > window.innerHeight - margin) {
+      top = Math.max(margin, rect.top - 4 - maxH);
+    }
+    let left = Math.min(rect.left, window.innerWidth - 288 - margin);
+    left = Math.max(margin, left);
+    setMentionPickerPos({ top, left, maxH });
+  }, [isEditing]);
+
+  refreshMentionPickerRef.current = refreshMentionPicker;
+
   /** Uses refs so it stays valid when NoteBodyEditor is memoized and skips re-renders. */
   const syncEditorToState = useCallback(() => {
     const id = selectedNoteIdRef.current;
@@ -1512,17 +1857,23 @@ export default function NotesPage() {
     setNotes((prev) =>
       prev.map((n) => (n.id === id ? { ...n, content: html } : n)),
     );
+    queueMicrotask(() => refreshMentionPickerRef.current());
   }, [stripEditorOnlyUi]);
 
   const handleEditorBlur = useCallback((e: FocusEvent<HTMLDivElement>) => {
     const related = e.relatedTarget as Node | null;
-    if (related && formatMenuRef.current?.contains(related)) return;
+    if (related && formatMenuPanelRef.current?.contains(related)) return;
+    if (related && formatMenuButtonRef.current?.contains(related)) return;
+    if (related && mentionPickerRef.current?.contains(related)) return;
     if (contextMenuOpenRef.current) return;
     if (openingContextMenuRef.current) return;
 
     void (async () => {
       await new Promise<void>((r) => requestAnimationFrame(() => r()));
-      if (formatMenuRef.current?.contains(document.activeElement)) return;
+      if (formatMenuPanelRef.current?.contains(document.activeElement))
+        return;
+      if (formatMenuButtonRef.current?.contains(document.activeElement))
+        return;
       if (contextMenuOpenRef.current) return;
       if (openingContextMenuRef.current) return;
 
@@ -1589,7 +1940,7 @@ export default function NotesPage() {
     }
   }, [uploadImageFile]);
 
-  const insertNoteMention = useCallback(
+  const insertNoteMentionFromPicker = useCallback(
     (noteId: string) => {
       if (!noteId) return;
       const root = editorRef.current;
@@ -1597,32 +1948,50 @@ export default function NotesPage() {
       const target = allNotesForMentions.find((n) => n.id === noteId);
       if (!target) return;
       root.focus();
-      restoreEditorSelection();
       const sel = window.getSelection();
       if (!sel || sel.rangeCount === 0) return;
-      const r = sel.getRangeAt(0);
-      if (!root.contains(r.commonAncestorContainer)) return;
+      const caret = sel.getRangeAt(0);
+      const ctx = getMentionContext(root, caret);
+      if (!ctx) return;
+      const r = ctx.replaceRange.cloneRange();
+      r.deleteContents();
       const a = document.createElement("a");
       a.href = `#note-${target.id}`;
       a.setAttribute("data-note-id", target.id);
-      a.setAttribute("target", "_self");
       a.setAttribute("rel", "noopener noreferrer");
+      a.className = "note-mention";
       a.textContent = `@${target.title}`;
-      r.deleteContents();
       r.insertNode(a);
-      r.setStartAfter(a);
+      const space = document.createTextNode(" ");
+      a.after(space);
+      r.setStart(space, 1);
       r.collapse(true);
       sel.removeAllRanges();
       sel.addRange(r);
+      lastMentionQueryForHighlightRef.current = "";
+      setMentionPickerOpen(false);
+      setMentionQuery("");
       root.dispatchEvent(new Event("input", { bubbles: true }));
     },
-    [allNotesForMentions, restoreEditorSelection],
+    [allNotesForMentions],
   );
+
+  const insertNoteMentionFromPickerRef = useRef(insertNoteMentionFromPicker);
+  insertNoteMentionFromPickerRef.current = insertNoteMentionFromPicker;
+
+  const mentionPickerOpenRef = useRef(false);
+  const filteredMentionNotesRef = useRef(filteredMentionNotes);
+  const mentionHighlightIndexRef = useRef(mentionHighlightIndex);
+  mentionPickerOpenRef.current = mentionPickerOpen;
+  filteredMentionNotesRef.current = filteredMentionNotes;
+  mentionHighlightIndexRef.current = mentionHighlightIndex;
 
   const jumpToMentionedNote = useCallback(
     (noteId: string) => {
       const target = allNotesForMentions.find((n) => n.id === noteId);
       if (!target) return;
+      setMentionPickerOpen(false);
+      lastMentionQueryForHighlightRef.current = "";
       setSelectedPageId(target.pageId);
       setSelectedNoteId(target.id);
       setIsEditing(false);
@@ -1643,6 +2012,37 @@ export default function NotesPage() {
 
   const handleEditorKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
+      if (mentionPickerOpenRef.current) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setMentionPickerOpen(false);
+          lastMentionQueryForHighlightRef.current = "";
+          return;
+        }
+        const list = filteredMentionNotesRef.current;
+        const hi = mentionHighlightIndexRef.current;
+        if (list.length > 0) {
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setMentionHighlightIndex((i) => (i + 1) % list.length);
+            return;
+          }
+          if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setMentionHighlightIndex(
+              (i) => (i - 1 + list.length) % list.length,
+            );
+            return;
+          }
+          if (e.key === "Enter" || (e.key === "Tab" && !e.shiftKey)) {
+            e.preventDefault();
+            const n = list[hi];
+            if (n) insertNoteMentionFromPickerRef.current(n.id);
+            return;
+          }
+        }
+      }
+
       if (e.key === "Enter" && e.shiftKey) {
         const root = editorRef.current;
         if (!root) return;
@@ -2306,242 +2706,313 @@ export default function NotesPage() {
                         </Button>
 
                         {isEditing && (
-                          <div className="relative" ref={formatMenuRef}>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className={cn(
-                                "h-7 gap-1 px-2 text-xs",
-                                formatMenuOpen &&
-                                  "border-primary ring-1 ring-primary/30",
-                              )}
-                              title="Text formatting"
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={() => setFormatMenuOpen((o) => !o)}
-                            >
-                              <Type className="h-3.5 w-3.5" />
-                              Format
-                              <ChevronDown
+                          <>
+                            <div className="relative">
+                              <Button
+                                ref={formatMenuButtonRef}
+                                type="button"
+                                size="sm"
+                                variant="outline"
                                 className={cn(
-                                  "h-3.5 w-3.5 transition-transform",
-                                  formatMenuOpen && "rotate-180",
+                                  "h-7 gap-1 px-2 text-xs",
+                                  formatMenuOpen &&
+                                    "border-primary ring-1 ring-primary/30",
                                 )}
-                              />
-                            </Button>
-                            {formatMenuOpen && (
-                              <div
-                                className="absolute right-0 z-50 mt-1 w-[min(100vw-1rem,26rem)] max-h-[min(90vh,640px)] overflow-y-auto rounded-md border border-border bg-popover p-2 shadow-md"
-                                onMouseDown={(e) => {
-                                  if (
-                                    (e.target as HTMLElement).closest(
-                                      "input, textarea, select, label",
-                                    )
-                                  ) {
-                                    return;
-                                  }
-                                  e.preventDefault();
-                                }}
+                                title={
+                                  typeof navigator !== "undefined" &&
+                                  /Mac|iPhone|iPad/i.test(navigator.platform)
+                                    ? "Formatting (opens above). Shortcuts: ⌘B, ⌘I, ⌘U"
+                                    : "Formatting (opens above). Shortcuts: Ctrl+B, Ctrl+I, Ctrl+U"
+                                }
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => setFormatMenuOpen((o) => !o)}
                               >
-                                <div className="mb-2 flex flex-wrap gap-1">
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    className={cn(
-                                      "h-8 w-9 px-0",
-                                      fmtActive.bold &&
-                                        "border-primary bg-primary/10",
-                                    )}
-                                    title="Bold — click again to remove"
-                                    onClick={() =>
-                                      runFormatCommand("bold")
-                                    }
-                                  >
-                                    <span className="font-bold">B</span>
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    className={cn(
-                                      "h-8 w-9 px-0 italic",
-                                      fmtActive.italic &&
-                                        "border-primary bg-primary/10",
-                                    )}
-                                    title="Italic — click again to remove"
-                                    onClick={() =>
-                                      runFormatCommand("italic")
-                                    }
-                                  >
-                                    I
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    className={cn(
-                                      "h-8 w-9 px-0 underline",
-                                      fmtActive.underline &&
-                                        "border-primary bg-primary/10",
-                                    )}
-                                    title="Underline — click again to remove"
-                                    onClick={() =>
-                                      runFormatCommand("underline")
-                                    }
-                                  >
-                                    U
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    className={cn(
-                                      "h-8 w-9 px-0 line-through",
-                                      fmtActive.strikeThrough &&
-                                        "border-primary bg-primary/10",
-                                    )}
-                                    title="Strikethrough — click again to remove"
-                                    onClick={() =>
-                                      runFormatCommand("strikeThrough")
-                                    }
-                                  >
-                                    S
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    className={cn(
-                                      "h-8 w-9 px-0",
-                                      fmtActive.highlight &&
-                                        "border-primary bg-primary/10",
-                                    )}
-                                    title="Highlight — click again to remove"
-                                    onClick={toggleHighlightColor}
-                                  >
-                                    <Highlighter
-                                      className={cn(
-                                        "h-3.5 w-3.5",
-                                        fmtActive.highlight &&
-                                          "text-primary",
-                                      )}
-                                    />
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    className={cn(
-                                      "h-8 w-9 px-0",
-                                      fmtActive.unorderedList &&
-                                        "border-primary bg-primary/10",
-                                    )}
-                                    title="Bullet list — click again to turn off"
-                                    onClick={() =>
-                                      runFormatCommand(
-                                        "insertUnorderedList",
+                                <Type className="h-3.5 w-3.5" />
+                                Format
+                                <ChevronDown
+                                  className={cn(
+                                    "h-3.5 w-3.5 transition-transform",
+                                    formatMenuOpen && "rotate-180",
+                                  )}
+                                />
+                              </Button>
+                            </div>
+                            {typeof document !== "undefined" &&
+                              formatMenuOpen &&
+                              formatMenuCoords &&
+                              createPortal(
+                                <div
+                                  ref={formatMenuPanelRef}
+                                  className="z-[150] flex w-[min(17rem,calc(100vw-1rem))] flex-col overflow-y-auto overflow-x-hidden rounded-md border border-border bg-popover p-1.5 text-popover-foreground shadow-lg"
+                                  style={{
+                                    position: "fixed",
+                                    bottom: formatMenuCoords.bottom,
+                                    right: formatMenuCoords.right,
+                                    maxHeight: formatMenuCoords.maxH,
+                                  }}
+                                  onMouseDown={(e) => {
+                                    if (
+                                      (e.target as HTMLElement).closest(
+                                        "input, textarea, select, label, button",
                                       )
+                                    ) {
+                                      return;
                                     }
-                                  >
-                                    •
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    className={cn(
-                                      "h-8 min-w-9 px-1 text-xs",
-                                      fmtActive.orderedList &&
-                                        "border-primary bg-primary/10",
-                                    )}
-                                    title="Numbered list — click again to turn off"
-                                    onClick={() =>
-                                      runFormatCommand("insertOrderedList")
-                                    }
-                                  >
-                                    1.
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    className={cn(
-                                      "h-8 px-2 text-xs",
-                                      fmtActive.heading3 &&
-                                        "border-primary bg-primary/10",
-                                    )}
-                                    title="Heading — click again to remove"
-                                    onClick={toggleHeadingBlock}
-                                  >
-                                    H3
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    className={cn(
-                                      "h-8 font-mono text-xs",
-                                      fmtActive.inlineCode &&
-                                        "border-primary bg-primary/10",
-                                    )}
-                                    title="Inline code — click again to remove"
-                                    onClick={toggleInlineCode}
-                                  >
-                                    &lt;/&gt;
-                                  </Button>
-                                </div>
-                                <div className="mb-2 space-y-2 border-t border-border/60 pt-2">
-                                  <div className="flex items-center gap-2">
-                                    <Palette className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                                    <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                                      Color
-                                    </span>
-                                  </div>
-                                  <NoteColorPicker
-                                    value={formatPanelColor}
-                                    onChange={applyForeColor}
-                                  />
-                                </div>
-                                <div className="flex flex-col gap-2 border-t border-border/60 pt-2">
-                                  <div className="flex flex-wrap items-end gap-2">
-                                    <div className="flex min-w-0 flex-col gap-1">
-                                      <Label
-                                        htmlFor="note-custom-font-size"
-                                        className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
-                                      >
-                                        Font size (px)
-                                      </Label>
-                                      <Input
-                                        id="note-custom-font-size"
-                                        type="number"
-                                        min={1}
-                                        max={100}
-                                        className="h-8 w-24 text-xs"
-                                        value={customFontSize}
-                                        onChange={(e) =>
-                                          setCustomFontSize(e.target.value)
-                                        }
-                                        onMouseDown={(e) => e.stopPropagation()}
-                                        onClick={(e) => e.stopPropagation()}
-                                        onKeyDown={(e) => {
-                                          e.stopPropagation();
-                                          if (e.key !== "Enter") return;
-                                          e.preventDefault();
-                                          const n = Number(customFontSize);
-                                          if (!Number.isFinite(n)) return;
-                                          queueMicrotask(() => {
-                                            editorRef.current?.focus();
-                                            applyFontSizePx(n);
-                                          });
-                                        }}
+                                    e.preventDefault();
+                                  }}
+                                >
+                                  <div className="flex flex-wrap gap-0.5">
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className={cn(
+                                        "h-7 w-7 shrink-0 px-0 text-[11px]",
+                                        fmtActive.bold &&
+                                          "border-primary bg-primary/10",
+                                      )}
+                                      title={formatShortcutTooltip("Bold", {
+                                        key: "B",
+                                      })}
+                                      onClick={() =>
+                                        runFormatCommand("bold")
+                                      }
+                                    >
+                                      <span className="font-bold">B</span>
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className={cn(
+                                        "h-7 w-7 shrink-0 px-0 text-[11px] italic",
+                                        fmtActive.italic &&
+                                          "border-primary bg-primary/10",
+                                      )}
+                                      title={formatShortcutTooltip("Italic", {
+                                        key: "I",
+                                      })}
+                                      onClick={() =>
+                                        runFormatCommand("italic")
+                                      }
+                                    >
+                                      I
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className={cn(
+                                        "h-7 w-7 shrink-0 px-0 text-[11px] underline",
+                                        fmtActive.underline &&
+                                          "border-primary bg-primary/10",
+                                      )}
+                                      title={formatShortcutTooltip(
+                                        "Underline",
+                                        { key: "U" },
+                                      )}
+                                      onClick={() =>
+                                        runFormatCommand("underline")
+                                      }
+                                    >
+                                      U
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className={cn(
+                                        "h-7 w-7 shrink-0 px-0 text-[11px] line-through",
+                                        fmtActive.strikeThrough &&
+                                          "border-primary bg-primary/10",
+                                      )}
+                                      title={formatShortcutTooltip(
+                                        "Strikethrough",
+                                      )}
+                                      onClick={() =>
+                                        runFormatCommand("strikeThrough")
+                                      }
+                                    >
+                                      S
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className={cn(
+                                        "h-7 w-7 shrink-0 px-0",
+                                        fmtActive.highlight &&
+                                          "border-primary bg-primary/10",
+                                      )}
+                                      title={formatShortcutTooltip(
+                                        "Highlight",
+                                      )}
+                                      onClick={toggleHighlightColor}
+                                    >
+                                      <Highlighter
+                                        className={cn(
+                                          "h-3 w-3",
+                                          fmtActive.highlight &&
+                                            "text-primary",
+                                        )}
                                       />
-                                    </div>
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className={cn(
+                                        "h-7 w-7 shrink-0 px-0 text-sm",
+                                        fmtActive.unorderedList &&
+                                          "border-primary bg-primary/10",
+                                      )}
+                                      title={formatShortcutTooltip(
+                                        "Bullet list",
+                                      )}
+                                      onClick={() =>
+                                        runFormatCommand(
+                                          "insertUnorderedList",
+                                        )
+                                      }
+                                    >
+                                      •
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className={cn(
+                                        "h-7 min-w-7 shrink-0 px-0.5 text-[10px]",
+                                        fmtActive.orderedList &&
+                                          "border-primary bg-primary/10",
+                                      )}
+                                      title={formatShortcutTooltip(
+                                        "Numbered list",
+                                      )}
+                                      onClick={() =>
+                                        runFormatCommand("insertOrderedList")
+                                      }
+                                    >
+                                      1.
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className={cn(
+                                        "h-7 w-7 shrink-0 px-0",
+                                        fmtActive.taskList &&
+                                          "border-primary bg-primary/10",
+                                      )}
+                                      title={formatShortcutTooltip(
+                                        "Checkbox list",
+                                      )}
+                                      onClick={insertTaskList}
+                                    >
+                                      <ListChecks className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className={cn(
+                                        "h-7 px-1.5 text-[10px]",
+                                        fmtActive.heading3 &&
+                                          "border-primary bg-primary/10",
+                                      )}
+                                      title={formatShortcutTooltip("Heading")}
+                                      onClick={toggleHeadingBlock}
+                                    >
+                                      H3
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className={cn(
+                                        "h-7 min-w-7 shrink-0 px-0 font-mono text-[10px]",
+                                        fmtActive.inlineCode &&
+                                          "border-primary bg-primary/10",
+                                      )}
+                                      title={formatShortcutTooltip(
+                                        "Inline code",
+                                      )}
+                                      onClick={toggleInlineCode}
+                                    >
+                                      &lt;/&gt;
+                                    </Button>
+                                  </div>
+                                  <div className="mt-1.5 border-t border-border/60 pt-1.5">
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-7 w-full justify-between gap-2 px-2 text-xs font-normal"
+                                      onMouseDown={(e) => e.preventDefault()}
+                                      onClick={() =>
+                                        setFormatColorExpanded((v) => !v)
+                                      }
+                                    >
+                                      <span className="flex min-w-0 items-center gap-1.5">
+                                        <Palette className="h-3.5 w-3.5 shrink-0" />
+                                        <span className="truncate">
+                                          Text color / picker
+                                        </span>
+                                      </span>
+                                      <ChevronDown
+                                        className={cn(
+                                          "h-3.5 w-3.5 shrink-0 transition-transform",
+                                          formatColorExpanded && "rotate-180",
+                                        )}
+                                      />
+                                    </Button>
+                                    {formatColorExpanded && (
+                                      <div className="mt-1.5 pr-0.5">
+                                        <NoteColorPicker
+                                          value={formatPanelColor}
+                                          onChange={applyForeColor}
+                                          className="max-w-full space-y-2 [&_div.h-36]:h-28 [&_div.h-36]:min-h-[7rem]"
+                                        />
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="mt-1.5 flex flex-wrap items-end gap-1 border-t border-border/60 pt-1.5">
+                                    <Label
+                                      htmlFor="note-custom-font-size"
+                                      className="sr-only"
+                                    >
+                                      Font size (px)
+                                    </Label>
+                                    <Input
+                                      id="note-custom-font-size"
+                                      type="number"
+                                      min={1}
+                                      max={100}
+                                      className="h-7 w-16 text-xs"
+                                      value={customFontSize}
+                                      onChange={(e) =>
+                                        setCustomFontSize(e.target.value)
+                                      }
+                                      onMouseDown={(e) => e.stopPropagation()}
+                                      onClick={(e) => e.stopPropagation()}
+                                      onKeyDown={(e) => {
+                                        e.stopPropagation();
+                                        if (e.key !== "Enter") return;
+                                        e.preventDefault();
+                                        const n = Number(customFontSize);
+                                        if (!Number.isFinite(n)) return;
+                                        queueMicrotask(() => {
+                                          editorRef.current?.focus();
+                                          applyFontSizePx(n);
+                                        });
+                                      }}
+                                      title="Font size (px)"
+                                    />
                                     <Button
                                       type="button"
                                       variant="secondary"
                                       size="sm"
-                                      className="h-8 shrink-0 text-xs"
+                                      className="h-7 shrink-0 px-2 text-xs"
                                       onMouseDown={(e) => e.preventDefault()}
                                       onClick={() => {
                                         const n = Number(customFontSize);
@@ -2551,14 +3022,15 @@ export default function NotesPage() {
                                           applyFontSizePx(n);
                                         });
                                       }}
+                                      title="Apply font size"
                                     >
-                                      Apply
+                                      Size
                                     </Button>
                                   </div>
-                                </div>
-                              </div>
-                            )}
-                          </div>
+                                </div>,
+                                document.body,
+                              )}
+                          </>
                         )}
                         {isEditing && (
                           <>
@@ -2585,35 +3057,12 @@ export default function NotesPage() {
                               <ImagePlus className="h-3.5 w-3.5" />
                               Image
                             </Button>
-                            <select
-                              value={mentionNoteId}
-                              onChange={(e) => setMentionNoteId(e.target.value)}
-                              className="h-7 max-w-[13rem] rounded-md border border-input bg-background px-2 text-xs"
-                              title="Mention another note"
+                            <span
+                              className="hidden sm:inline text-[10px] text-muted-foreground"
+                              title="Type @ in the note to link another note"
                             >
-                              <option value="">Mention note…</option>
-                              {allNotesForMentions
-                                .filter((n) => n.id !== selectedNote.id)
-                                .map((n) => (
-                                  <option key={n.id} value={n.id}>
-                                    {n.title}
-                                  </option>
-                                ))}
-                            </select>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              className="h-7 px-2 text-xs"
-                              disabled={!mentionNoteId}
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={() => {
-                                insertNoteMention(mentionNoteId);
-                                setMentionNoteId("");
-                              }}
-                            >
-                              @ Mention
-                            </Button>
+                              @ mention
+                            </span>
                           </>
                         )}
                         <Button
@@ -2682,6 +3131,14 @@ export default function NotesPage() {
                         }
                       }}
                       onClick={(e) => {
+                        const tgt = e.target as HTMLElement;
+                        if (
+                          tgt.tagName === "INPUT" &&
+                          (tgt as HTMLInputElement).type === "checkbox"
+                        ) {
+                          e.stopPropagation();
+                          return;
+                        }
                         const link = (e.target as HTMLElement).closest(
                           "a[data-note-id]",
                         ) as HTMLAnchorElement | null;
@@ -2706,7 +3163,10 @@ export default function NotesPage() {
                       )}
                       aria-live="polite"
                     >
-                      {renderReadNoteBody(selectedNote.content)}
+                      {renderReadNoteBody(
+                        selectedNote.content,
+                        readNoteHtmlRef,
+                      )}
                     </div>
                   )}
                   {isEditing && contextMenu.open && (
@@ -2828,6 +3288,58 @@ export default function NotesPage() {
           </section>
         </div>
       )}
+      {typeof document !== "undefined" &&
+        mentionPickerOpen &&
+        mentionPickerPos &&
+        isEditing &&
+        createPortal(
+          <div
+            ref={mentionPickerRef}
+            role="listbox"
+            aria-label="Link to note"
+            className="fixed z-[200] w-72 overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-lg"
+            style={{
+              top: mentionPickerPos.top,
+              left: mentionPickerPos.left,
+              maxHeight: mentionPickerPos.maxH,
+            }}
+          >
+            <ul className="max-h-[inherit] overflow-y-auto p-1">
+              {filteredMentionNotes.length === 0 ? (
+                <li className="px-2 py-2 text-xs text-muted-foreground">
+                  No matching notes
+                </li>
+              ) : (
+                filteredMentionNotes.map((n, i) => (
+                  <li key={n.id} role="presentation">
+                    <button
+                      type="button"
+                      role="option"
+                      data-mention-index={i}
+                      aria-selected={i === mentionHighlightIndex}
+                      className={cn(
+                        "flex w-full rounded px-2 py-1.5 text-left text-xs transition-colors",
+                        i === mentionHighlightIndex
+                          ? "bg-muted"
+                          : "hover:bg-muted/60",
+                      )}
+                      onMouseEnter={() => setMentionHighlightIndex(i)}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        insertNoteMentionFromPicker(n.id);
+                      }}
+                    >
+                      <span className="min-w-0 truncate font-medium">
+                        {n.title}
+                      </span>
+                    </button>
+                  </li>
+                ))
+              )}
+            </ul>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
