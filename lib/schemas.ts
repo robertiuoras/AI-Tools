@@ -29,6 +29,9 @@ export type Category = typeof categories[number]
 
 const categorySet = new Set<string>(categories)
 
+/** Max categories per tool (1–3; primary = first). */
+export const MAX_TOOL_CATEGORIES = 3
+
 /**
  * Map legacy tool category strings (before list renames) to current `categories` values.
  * Extend as you audit the `tool` table or imports.
@@ -238,8 +241,8 @@ export function normalizeToolCategory(raw: string | null | undefined): string {
 }
 
 /**
- * After normalizing AI/user category picks: drop redundant "Other" whenever at least
- * one more specific category exists; keep at most one non-canonical (custom) label.
+ * After normalizing AI/user category picks: drop redundant "Other" when specific
+ * labels exist; cap at {@link MAX_TOOL_CATEGORIES} (canonical + custom allowed).
  */
 export function finalizeToolCategoriesList(normalized: string[]): string[] {
   const seen = new Set<string>()
@@ -251,19 +254,7 @@ export function finalizeToolCategoriesList(normalized: string[]): string[] {
   }
   const withoutOther = out.filter((c) => c !== 'Other')
   const base = withoutOther.length > 0 ? withoutOther : out
-  let firstCustomSeen = false
-  const collapsed: string[] = []
-  for (const c of base) {
-    if (categorySet.has(c)) {
-      collapsed.push(c)
-      continue
-    }
-    if (!firstCustomSeen) {
-      firstCustomSeen = true
-      collapsed.push(c)
-    }
-  }
-  const capped = collapsed.slice(0, 5)
+  const capped = base.slice(0, MAX_TOOL_CATEGORIES)
   return capped.length > 0 ? capped : ['Other']
 }
 
@@ -276,7 +267,7 @@ const toolObjectSchema = z.object({
   categories: z
     .array(z.string().min(1).max(48))
     .min(1, 'Select at least one category')
-    .max(12),
+    .max(MAX_TOOL_CATEGORIES),
   tags: z.string().optional().nullable(),
   traffic: z.enum(['low', 'medium', 'high', 'unknown']).optional().nullable(),
   revenue: z.enum(['free', 'freemium', 'paid', 'enterprise']).optional().nullable(),

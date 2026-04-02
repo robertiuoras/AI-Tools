@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import {
   categories,
   finalizeToolCategoriesList,
+  MAX_TOOL_CATEGORIES,
   normalizeToolCategory,
 } from '@/lib/schemas'
 
@@ -34,7 +35,7 @@ interface AnalysisResult {
   description: string
   /** Primary category (same as categories[0]) */
   category: string
-  /** 1–5 labels (preferred list + optional one custom), best match first */
+  /** 1–3 labels (preferred + custom mix), best match first */
   categories: string[]
   tags: string
   revenue: 'free' | 'freemium' | 'paid' | 'enterprise' | null
@@ -373,13 +374,13 @@ Visits (search for numbers):
 Preferred categories (match spelling exactly when you use one of these — they map to filters on the site):
 ${categories.map((c) => `- "${c}"`).join('\n')}
 
-You may add at most ONE custom category string in "categories" only when no label above is even close (2–4 words, Title Case, max 40 characters). Prefer reusing a label from the list with a close meaning instead of inventing a near-duplicate.
+You may also use custom category strings when needed (2–4 words, Title Case, max 40 characters each). Prefer copying from the list above when it fits; use custom labels only when nothing on the list is close enough. Map near-synonyms to the closest list label instead of inventing duplicates.
 
 Return JSON:
 {
   "name": "Tool name (max 50 chars)",
   "description": "2-3 sentence description",
-  "categories": ["Best fit", "Second fit", "Optional third"],
+  "categories": ["Primary", "Second if needed", "Third if needed"],
   "tags": "ai, tag1, tag2 (3-5 tags)",
   "revenue": "free|freemium|paid|enterprise|null",
   "traffic": "low|medium|high|unknown",
@@ -391,10 +392,10 @@ Rules:
 - Revenue: Analyze pricing carefully
 - Visits: Provide number if any indicators exist
 - Tags: Always provide (even if generic)
-- categories: Pick 2–3 labels that best fit (max 4). Order by relevance (first = primary). Prefer items from the preferred list above; each must be either copied exactly from that list OR your single optional custom label. No duplicates. Never use pipes inside strings.
+- categories: Return 1 to ${MAX_TOOL_CATEGORIES} labels only (most tools: 2–3). Order by relevance (first = primary). Mix preferred-list labels and custom strings as needed — e.g. a daily AI newsletter with explainers can be ["News", "Education"] or ["News", "Education", "Research"]. No duplicates. Never use pipes inside strings.
 - categories: Prefer specific labels over "Other". Do NOT include "Other" if you already have two or more other specific categories — "Other" is only for tools that truly do not fit elsewhere.
-- categories: Use "News" for AI news sites, newsletters, daily digests, curated industry updates, or headline aggregators (not generic web search — those lean "Research" or "SaaS" as appropriate).
-- categories: Do not pad with loosely related labels; accuracy beats quantity. If an existing preferred label is a close fit, use it — do not add a custom label that means almost the same thing.
+- categories: Use "News" for AI news sites, newsletters, daily digests, curated industry updates, or headline aggregators. Add "Education" when the product clearly teaches, explains, or trains (courses, tutorials, learning tracks alongside news).
+- categories: Do not pad with loosely related labels; accuracy beats quantity. If a preferred label is a close fit, use it instead of a custom near-duplicate.
 - Return ONLY valid JSON, no markdown formatting`
 
     console.log('🚀 [OpenAI] ==========================================')
@@ -412,7 +413,7 @@ Rules:
           {
             role: 'system',
             content:
-              'Analyze AI tools. Return valid JSON only. Prefer categories from the provided list; one short custom category is allowed only if nothing on the list fits. Map near-synonyms to the closest list label. Prefer News for newsletters and daily AI news; avoid unnecessary Other.',
+              `Analyze AI tools. Return valid JSON only. Use 1–${MAX_TOOL_CATEGORIES} categories per tool. Prefer labels from the provided list; add custom labels only when needed. Map near-synonyms to the closest list label. News + Education is appropriate for products that combine daily AI news with learning content. Avoid unnecessary Other.`,
           },
           { role: 'user', content: prompt },
         ],

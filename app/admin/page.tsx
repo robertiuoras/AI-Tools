@@ -17,7 +17,13 @@ import {
 } from '@/components/ui/select'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useToast } from '@/components/ui/toaster'
-import { categories, normalizeToolCategory, videoCategories } from '@/lib/schemas'
+import {
+  categories,
+  finalizeToolCategoriesList,
+  MAX_TOOL_CATEGORIES,
+  normalizeToolCategory,
+  videoCategories,
+} from '@/lib/schemas'
 import { toolCategoryBadgeClass } from '@/lib/tool-category-styles'
 import { toolCategoryList } from '@/lib/tool-categories'
 import type { Tool, Video } from '@/lib/supabase'
@@ -490,10 +496,17 @@ export default function AdminPage() {
   const toggleToolCategory = (cat: string) => {
     setFormData((prev) => {
       const has = prev.categories.includes(cat)
-      const next = has
-        ? prev.categories.filter((c) => c !== cat)
-        : sortSelectedCategories([...prev.categories, cat])
-      return { ...prev, categories: next }
+      if (has) {
+        return {
+          ...prev,
+          categories: prev.categories.filter((c) => c !== cat),
+        }
+      }
+      if (prev.categories.length >= MAX_TOOL_CATEGORIES) return prev
+      return {
+        ...prev,
+        categories: sortSelectedCategories([...prev.categories, cat]),
+      }
     })
   }
 
@@ -600,7 +613,7 @@ export default function AdminPage() {
       description: tool.description,
       url: tool.url,
       logoUrl: tool.logoUrl || '',
-      categories: toolCategoryList(tool),
+      categories: finalizeToolCategoriesList(toolCategoryList(tool)),
       tags: tool.tags || '',
       traffic: tool.traffic || '',
       revenue: tool.revenue || '',
@@ -661,12 +674,12 @@ export default function AdminPage() {
       const nextCategories =
         Array.isArray(analyzeData.categories) &&
         analyzeData.categories.length > 0
-          ? sortSelectedCategories(
+          ? finalizeToolCategoriesList(
               analyzeData.categories
-                .map((c: unknown) => String(c).trim())
+                .map((c: unknown) => normalizeToolCategory(String(c)))
                 .filter(Boolean),
             )
-          : toolCategoryList(tool)
+          : finalizeToolCategoriesList(toolCategoryList(tool))
 
       const payload = {
         name: tool.name,
@@ -1216,8 +1229,14 @@ export default function AdminPage() {
         logoUrl: data.logoUrl || '',
         categories:
           Array.isArray(data.categories) && data.categories.length > 0
-            ? data.categories
-            : [data.category || 'Other'],
+            ? finalizeToolCategoriesList(
+                data.categories.map((c: unknown) =>
+                  normalizeToolCategory(String(c)),
+                ),
+              )
+            : finalizeToolCategoriesList([
+                normalizeToolCategory(String(data.category || 'Other')),
+              ]),
         tags: data.tags || '',
         traffic: data.traffic || '',
         revenue: data.revenue || '',
@@ -1239,9 +1258,15 @@ export default function AdminPage() {
       // Auto-submit immediately (no cooldown)
       const analyzedCategories =
         Array.isArray(data.categories) && data.categories.length > 0
-          ? data.categories
+          ? finalizeToolCategoriesList(
+              data.categories.map((c: unknown) =>
+                normalizeToolCategory(String(c)),
+              ),
+            )
           : data.category
-            ? [data.category]
+            ? finalizeToolCategoriesList([
+                normalizeToolCategory(String(data.category)),
+              ])
             : []
       if (
         data.name &&
@@ -1524,8 +1549,14 @@ export default function AdminPage() {
           url: data.url || url,
           categories:
             Array.isArray(data.categories) && data.categories.length > 0
-              ? data.categories
-              : [data.category || 'Other'],
+              ? finalizeToolCategoriesList(
+                  data.categories.map((c: unknown) =>
+                    normalizeToolCategory(String(c)),
+                  ),
+                )
+              : finalizeToolCategoriesList([
+                  normalizeToolCategory(String(data.category || 'Other')),
+                ]),
         }
 
         if (data.logoUrl) payload.logoUrl = data.logoUrl
@@ -1988,7 +2019,7 @@ export default function AdminPage() {
               <div className="space-y-2">
                 <Label>Categories *</Label>
                 <p className="text-xs text-muted-foreground">
-                  Pick one or more. Order follows the list (first = primary badge on the home page).
+                  Pick 1–3. Order follows the list (first = primary badge on the home page).
                 </p>
                 <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
                   <div className="grid max-h-52 grid-cols-1 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
