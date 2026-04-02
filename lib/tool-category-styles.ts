@@ -1,7 +1,9 @@
 import { cn } from '@/lib/utils'
+import { normalizeToolCategory } from '@/lib/schemas'
 
 /** Tailwind classes for category badges — shared by ToolCard and admin. */
 export const toolCategoryBadgeClassName = (category: string): string => {
+  const key = normalizeToolCategory(category)
   const map: Record<string, string> = {
     'AI Agents': 'bg-violet-500/10 text-violet-700 dark:text-violet-400 border-violet-500/25',
     'AI Automation':
@@ -30,12 +32,12 @@ export const toolCategoryBadgeClassName = (category: string): string => {
     Research: 'bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/25',
     SaaS: 'bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/25',
     'Video Editing':
-      'bg-sky-500/10 text-sky-700 dark:text-sky-400 border-sky-500/25',
+      'bg-sky-950/20 text-sky-900 dark:text-sky-300 border-sky-600/35',
     'Voice & Audio':
       'bg-indigo-500/10 text-indigo-700 dark:text-indigo-400 border-indigo-500/25',
     Writing: 'bg-lime-500/10 text-lime-800 dark:text-lime-400 border-lime-500/25',
   }
-  return map[category] ?? map.Other
+  return map[key] ?? map.Other
 }
 
 /** Outline badge wrapper (matches home ToolCard + admin). */

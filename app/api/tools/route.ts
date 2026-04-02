@@ -9,6 +9,15 @@ import {
   popularityScore,
 } from "@/lib/tool-popularity";
 
+/** Logged-in users see favorited tools first; order within each group is unchanged. */
+function sortWithFavoritesFirst<T extends { userFavorited?: boolean }>(
+  items: T[],
+): T[] {
+  const fav = items.filter((x) => x.userFavorited);
+  const rest = items.filter((x) => !x.userFavorited);
+  return [...fav, ...rest];
+}
+
 function jsonbCountsToMap(obj: unknown): Map<string, number> {
   const m = new Map<string, number>();
   if (obj && typeof obj === "object") {
@@ -294,7 +303,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    return NextResponse.json(processedTools);
+    return NextResponse.json(sortWithFavoritesFirst(processedTools));
   } catch (error) {
     console.error("❌ Error fetching tools:", error);
     console.error(

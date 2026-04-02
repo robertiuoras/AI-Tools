@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -25,6 +26,7 @@ import {
   noteKbPastePlainParen,
   noteKbRedoParen,
 } from "@/lib/note-kb";
+import { findTextInRoot } from "@/lib/note-find";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -55,6 +57,8 @@ import {
   Undo2,
   Redo2,
   Search,
+  ArrowDown,
+  ArrowUp,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { linkifyText } from "@/lib/linkify";
@@ -116,6 +120,23 @@ function formatShortcutTooltip(
   if (opts?.extra) return `${label} ${opts.extra}`;
   if (opts?.key) return `${label} ${noteKbParen(opts.key)}`;
   return `${label} — click again to toggle`;
+}
+
+/** Favorites first; preserves relative order within each group. */
+function sortNotesFavoritesFirst(notes: Note[]): Note[] {
+  const fav = notes.filter((n) => n.favorite);
+  const rest = notes.filter((n) => !n.favorite);
+  return [...fav, ...rest];
+}
+
+/** Visual gap where a dragged row will land (preview slot). */
+function DndDropSlot() {
+  return (
+    <div
+      className="pointer-events-none h-10 w-full shrink-0 rounded-lg border-2 border-dashed border-primary/50 bg-gradient-to-b from-primary/[0.12] to-muted/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
+      aria-hidden
+    />
+  );
 }
 
 function unwrapElement(el: HTMLElement): void {
@@ -493,10 +514,11 @@ function renderReadNoteBody(
       <span className="text-muted-foreground italic">Click here to write…</span>
     );
   }
-  if (isProbablyHtml(content)) {
+    if (isProbablyHtml(content)) {
     return (
       <div
         ref={htmlRef ? (el) => { htmlRef.current = el; } : undefined}
+        tabIndex={-1}
         className={NOTE_HTML_VIEW_CLASS}
         dangerouslySetInnerHTML={{
           __html: normalizeNoteHtmlStructure(content),
@@ -644,7 +666,10 @@ export default function NotesPage() {
     before: boolean;
   } | null>(null);
   const [lastSavedAtMs, setLastSavedAtMs] = useState<number | null>(null);
-  const [notesSearchQuery, setNotesSearchQuery] = useState("");
+  /** Search titles + bodies across all notes for this account. */
+  const [searchAllNotesQuery, setSearchAllNotesQuery] = useState("");
+  /** Find text inside the open note body (read or edit). */
+  const [findInNoteQuery, setFindInNoteQuery] = useState("");
   const [contextMenu, setContextMenu] = useState<{
     open: boolean;
     x: number;
@@ -655,7 +680,17 @@ export default function NotesPage() {
   const editorRef = useRef<HTMLDivElement | null>(null);
   const formatMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const formatMenuPanelRef = useRef<HTMLDivElement | null>(null);
+  const findInNoteToolbarRef = useRef<HTMLDivElement | null>(null);
+  /** Read-mode wrapper (always mounted when viewing a note); used for find + focus. */
+  const readNoteBodyWrapRef = useRef<HTMLDivElement | null>(null);
   const readNoteHtmlRef = useRef<HTMLDivElement | null>(null);
+  /** After leaving edit, restore read scroll (same position as editor). */
+  const pendingReadBodyScrollRef = useRef<{
+    noteId: string;
+    top: number;
+  } | null>(null);
+  /** When entering edit, match read view scroll on the editor. */
+  const pendingEditorScrollRef = useRef<number | null>(null);
   const mentionPickerRef = useRef<HTMLDivElement | null>(null);
   const refreshMentionPickerRef = useRef<() => void>(() => {});
   const lastMentionQueryForHighlightRef = useRef<string>("");
@@ -681,6 +716,7 @@ export default function NotesPage() {
   const selectedImageFigureRef = useRef<HTMLElement | null>(null);
   const contextMenuOpenRef = useRef(false);
   const openingContextMenuRef = useRef(false);
+  const formatMenuOpenRef = useRef(false);
 
   const flashCopied = useCallback((key: string) => {
     setCopiedKey(key);
@@ -704,26 +740,27 @@ export default function NotesPage() {
     [notes, selectedNoteId],
   );
 
-  const notesForList = useMemo(() => {
-    const q = notesSearchQuery.trim().toLowerCase();
-    const matches = (n: Note) => {
-      if (!q) return true;
-      const title = (n.title || "").toLowerCase();
-      const body = isProbablyHtml(n.content)
-        ? htmlToPlainText(n.content)
-        : n.content ?? "";
-      return title.includes(q) || body.toLowerCase().includes(q);
-    };
-    const filtered = notes.filter(matches);
-    if (
-      selectedNoteId &&
-      !filtered.some((n) => n.id === selectedNoteId)
-    ) {
-      const sel = notes.find((n) => n.id === selectedNoteId);
-      if (sel) return [sel, ...filtered];
-    }
-    return filtered;
-  }, [notes, notesSearchQuery, selectedNoteId]);
+  const allNotesSearchResults = useMemo(() => {
+    const q = searchAllNotesQuery.trim().toLowerCase();
+    if (!q) return [];
+    return allNotesForMentions
+      .map((n) => {
+        const title = (n.title || "").toLowerCase();
+        const body = isProbablyHtml(n.content)
+          ? htmlToPlainText(n.content)
+          : n.content ?? "";
+        const bl = body.toLowerCase();
+        if (!title.includes(q) && !bl.includes(q)) return null;
+        const idx = bl.indexOf(q);
+        const snippet =
+          idx >= 0
+            ? body.slice(Math.max(0, idx - 40), idx + q.length + 80)
+            : body.slice(0, 120);
+        return { note: n, snippet };
+      })
+      .filter((x): x is { note: Note; snippet: string } => x != null)
+      .slice(0, 50);
+  }, [allNotesForMentions, searchAllNotesQuery]);
 
   const filteredMentionNotes = useMemo(() => {
     const q = mentionQuery.trim().toLowerCase();
@@ -839,11 +876,16 @@ export default function NotesPage() {
   }, [formatMenuOpen]);
 
   useEffect(() => {
+    formatMenuOpenRef.current = formatMenuOpen;
+  }, [formatMenuOpen]);
+
+  useEffect(() => {
     if (!formatMenuOpen) return;
     const onPointerDown = (e: PointerEvent) => {
       const t = e.target as Node;
       if (formatMenuButtonRef.current?.contains(t)) return;
       if (formatMenuPanelRef.current?.contains(t)) return;
+      formatMenuOpenRef.current = false;
       setFormatMenuOpen(false);
     };
     document.addEventListener("pointerdown", onPointerDown, true);
@@ -911,9 +953,11 @@ export default function NotesPage() {
             setSelectedNoteId(null);
           } else {
             const data = (await nr.json()) as Note[];
-            const list = applySavedOrder(
-              Array.isArray(data) ? data : [],
-              `${LS_NOTE_ORDER_KEY_PREFIX}${initialPageId}`,
+            const list = sortNotesFavoritesFirst(
+              applySavedOrder(
+                Array.isArray(data) ? data : [],
+                `${LS_NOTE_ORDER_KEY_PREFIX}${initialPageId}`,
+              ),
             );
             setNotes(list);
             const savedNoteId = readLs(LS_LAST_NOTE_KEY);
@@ -980,9 +1024,11 @@ export default function NotesPage() {
           return;
         }
         const data = (await res.json()) as Note[];
-        const list = applySavedOrder(
-          Array.isArray(data) ? data : [],
-          `${LS_NOTE_ORDER_KEY_PREFIX}${selectedPageId}`,
+        const list = sortNotesFavoritesFirst(
+          applySavedOrder(
+            Array.isArray(data) ? data : [],
+            `${LS_NOTE_ORDER_KEY_PREFIX}${selectedPageId}`,
+          ),
         );
         setNotes(list);
         setSelectedNoteId((prev) => {
@@ -1014,12 +1060,46 @@ export default function NotesPage() {
     setMentionPickerOpen(false);
     setMentionQuery("");
     lastMentionQueryForHighlightRef.current = "";
+    pendingReadBodyScrollRef.current = null;
+    pendingEditorScrollRef.current = null;
     if (!selectedNoteId) return;
     setIsEditing(false);
     setFormatMenuOpen(false);
     setEditingMainTitle(false);
     setEditingNoteRowId(null);
   }, [selectedNoteId]);
+
+  useEffect(() => {
+    if (isEditing) return;
+    const p = pendingReadBodyScrollRef.current;
+    if (!p || p.noteId !== selectedNoteId) return;
+    const top = p.top;
+    const apply = () => {
+      const el = readNoteBodyWrapRef.current;
+      if (!el) return false;
+      el.scrollTop = top;
+      pendingReadBodyScrollRef.current = null;
+      return true;
+    };
+    if (apply()) return;
+    const id = requestAnimationFrame(() => {
+      apply();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [isEditing, selectedNoteId]);
+
+  useLayoutEffect(() => {
+    if (!isEditing || !selectedNoteId) return;
+    if (pendingEditorScrollRef.current === null) return;
+    const top = pendingEditorScrollRef.current;
+    const ed = editorRef.current;
+    if (!ed) return;
+    ed.scrollTop = top;
+    requestAnimationFrame(() => {
+      if (editorRef.current) editorRef.current.scrollTop = top;
+    });
+    pendingEditorScrollRef.current = null;
+  }, [isEditing, selectedNoteId, editorSession]);
 
   const createPage = async () => {
     if (!token) return;
@@ -1083,7 +1163,7 @@ export default function NotesPage() {
     if (!res.ok) return;
     const created = (await res.json()) as Note;
     setNotes((prev) => {
-      const next = [created, ...prev];
+      const next = sortNotesFavoritesFirst([created, ...prev]);
       if (selectedPageId) {
         writeOrderIds(
           `${LS_NOTE_ORDER_KEY_PREFIX}${selectedPageId}`,
@@ -1109,7 +1189,18 @@ export default function NotesPage() {
     });
     if (!res.ok) return false;
     const updated = (await res.json()) as Note;
-    setNotes((prev) => prev.map((n) => (n.id === noteId ? updated : n)));
+    setNotes((prev) => {
+      const next = sortNotesFavoritesFirst(
+        prev.map((n) => (n.id === noteId ? updated : n)),
+      );
+      if (selectedPageId) {
+        writeOrderIds(
+          `${LS_NOTE_ORDER_KEY_PREFIX}${selectedPageId}`,
+          next.map((n) => n.id),
+        );
+      }
+      return next;
+    });
     setAllNotesForMentions((prev) =>
       prev.map((n) => (n.id === noteId ? updated : n)),
     );
@@ -1161,10 +1252,12 @@ export default function NotesPage() {
             );
             // Keep React state in sync with normalized DOM; preserve server updatedAt from save.
             setNotes((prev) =>
-              prev.map((n) =>
-                n.id === noteId
-                  ? { ...saved, content: normalized }
-                  : n,
+              sortNotesFavoritesFirst(
+                prev.map((n) =>
+                  n.id === noteId
+                    ? { ...saved, content: normalized }
+                    : n,
+                ),
               ),
             );
           }
@@ -1225,7 +1318,11 @@ export default function NotesPage() {
       const raw = el.innerHTML;
       const normalized = normalizeNoteHtmlForSave(raw);
       setNotes((prev) =>
-        prev.map((n) => (n.id === sid ? { ...n, content: normalized } : n)),
+        sortNotesFavoritesFirst(
+          prev.map((n) =>
+            n.id === sid ? { ...n, content: normalized } : n,
+          ),
+        ),
       );
       void persistNoteBodyRef.current(sid, normalized, true);
     };
@@ -1280,7 +1377,9 @@ export default function NotesPage() {
       headers: authHeaders,
     });
     if (!res.ok) return;
-    const remaining = notes.filter((n) => n.id !== noteId);
+    const remaining = sortNotesFavoritesFirst(
+      notes.filter((n) => n.id !== noteId),
+    );
     setNotes(remaining);
     if (selectedPageId) {
       writeOrderIds(
@@ -1329,7 +1428,9 @@ export default function NotesPage() {
     const insertBefore =
       dragNoteOver?.id === targetNoteId ? dragNoteOver.before : true;
     setNotes((prev) => {
-      const next = reorderInsert(prev, dragNoteId, targetNoteId, insertBefore);
+      const next = sortNotesFavoritesFirst(
+        reorderInsert(prev, dragNoteId, targetNoteId, insertBefore),
+      );
       if (selectedPageId) {
         writeOrderIds(
           `${LS_NOTE_ORDER_KEY_PREFIX}${selectedPageId}`,
@@ -1800,6 +1901,8 @@ export default function NotesPage() {
   }, [refreshFmt, selectionInsideHeading3, restoreEditorSelection]);
 
   const beginEditingNote = useCallback(() => {
+    const wrap = readNoteBodyWrapRef.current;
+    pendingEditorScrollRef.current = wrap ? wrap.scrollTop : null;
     setEditorSession((s) => s + 1);
     setIsEditing(true);
   }, []);
@@ -1977,7 +2080,9 @@ export default function NotesPage() {
     if (!id) return;
     const html = stripEditorOnlyUi(editorRef.current?.innerHTML ?? "");
     setNotes((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, content: html } : n)),
+      sortNotesFavoritesFirst(
+        prev.map((n) => (n.id === id ? { ...n, content: html } : n)),
+      ),
     );
     queueMicrotask(() => refreshMentionPickerRef.current());
   }, [stripEditorOnlyUi]);
@@ -1986,15 +2091,28 @@ export default function NotesPage() {
     const related = e.relatedTarget as Node | null;
     if (related && formatMenuPanelRef.current?.contains(related)) return;
     if (related && formatMenuButtonRef.current?.contains(related)) return;
+    if (related && findInNoteToolbarRef.current?.contains(related)) return;
     if (related && mentionPickerRef.current?.contains(related)) return;
     if (contextMenuOpenRef.current) return;
     if (openingContextMenuRef.current) return;
 
     void (async () => {
       await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      if (formatMenuOpenRef.current) {
+        if (
+          formatMenuPanelRef.current?.contains(document.activeElement) ||
+          formatMenuButtonRef.current?.contains(document.activeElement)
+        ) {
+          return;
+        }
+        return;
+      }
       if (formatMenuPanelRef.current?.contains(document.activeElement))
         return;
       if (formatMenuButtonRef.current?.contains(document.activeElement))
+        return;
+      if (findInNoteToolbarRef.current?.contains(document.activeElement))
         return;
       if (contextMenuOpenRef.current) return;
       if (openingContextMenuRef.current) return;
@@ -2004,11 +2122,17 @@ export default function NotesPage() {
       const sid = selectedNoteIdRef.current;
       if (!sid) return;
       setNotes((prev) =>
-        prev.map((n) =>
-          n.id === sid ? { ...n, content: normalized } : n,
+        sortNotesFavoritesFirst(
+          prev.map((n) =>
+            n.id === sid ? { ...n, content: normalized } : n,
+          ),
         ),
       );
       await persistNoteBodyRef.current(sid, normalized, true);
+      const ed = editorRef.current;
+      if (ed) {
+        pendingReadBodyScrollRef.current = { noteId: sid, top: ed.scrollTop };
+      }
       setIsEditing(false);
       setFormatMenuOpen(false);
     })();
@@ -2121,6 +2245,36 @@ export default function NotesPage() {
       setContextMenu((s) => ({ ...s, open: false }));
     },
     [allNotesForMentions],
+  );
+
+  const jumpToNoteFromSearch = useCallback(
+    (noteId: string, pageId: string) => {
+      setSelectedPageId(pageId);
+      setSelectedNoteId(noteId);
+      setIsEditing(false);
+      formatMenuOpenRef.current = false;
+      setFormatMenuOpen(false);
+      setContextMenu((s) => ({ ...s, open: false }));
+    },
+    [],
+  );
+
+  const runFindInNote = useCallback(
+    (forward: boolean) => {
+      const q = findInNoteQuery.trim();
+      if (!q || !selectedNoteId) return;
+      const root = isEditing
+        ? editorRef.current
+        : readNoteBodyWrapRef.current;
+      if (!root) return;
+      try {
+        root.focus({ preventScroll: true });
+      } catch {
+        /* ignore */
+      }
+      findTextInRoot(root, q, forward);
+    },
+    [findInNoteQuery, isEditing, selectedNoteId],
   );
 
   const removeSelectedImage = useCallback(() => {
@@ -2457,57 +2611,45 @@ export default function NotesPage() {
             </div>
             <div className="space-y-1">
               {pages.map((p) => (
-                <div
-                  key={p.id}
-                  draggable
-                  onDragStart={(e) => {
-                    setDragPageId(p.id);
-                    setDragPageOver(null);
-                    e.dataTransfer.effectAllowed = "move";
-                    e.dataTransfer.setData("text/plain", p.id);
-                  }}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    e.dataTransfer.dropEffect = "move";
-                    if (!dragPageId || dragPageId === p.id) return;
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    const before = e.clientY < rect.top + rect.height / 2;
-                    setDragPageOver({ id: p.id, before });
-                  }}
-                  onDrop={() => handlePageDrop(p.id)}
-                  onDragEnd={() => {
-                    setDragPageId(null);
-                    setDragPageOver(null);
-                  }}
-                  className={cn(
-                    "relative flex cursor-grab items-center gap-1 rounded-lg border px-1.5 py-1 active:cursor-grabbing",
-                    selectedPageId === p.id &&
-                      "border-indigo-500 bg-indigo-500/10",
-                    dragPageId === p.id && "opacity-60",
+                <Fragment key={p.id}>
+                  {dragPageId &&
+                    dragPageId !== p.id &&
                     dragPageOver?.id === p.id &&
-                      dragPageId &&
-                      dragPageId !== p.id &&
-                      "ring-2 ring-primary/40",
-                  )}
-                >
-                  {dragPageOver?.id === p.id &&
-                    dragPageOver.before &&
-                    dragPageId &&
-                    dragPageId !== p.id && (
-                      <div
-                        className="pointer-events-none absolute left-1 right-1 top-0 z-10 h-0.5 rounded-full bg-primary"
-                        aria-hidden
-                      />
+                    dragPageOver.before && <DndDropSlot />}
+                  <div
+                    draggable
+                    onDragStart={(e) => {
+                      setDragPageId(p.id);
+                      setDragPageOver(null);
+                      e.dataTransfer.effectAllowed = "move";
+                      e.dataTransfer.setData("text/plain", p.id);
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      if (!dragPageId || dragPageId === p.id) return;
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const before = e.clientY < rect.top + rect.height / 2;
+                      setDragPageOver({ id: p.id, before });
+                    }}
+                    onDrop={() => handlePageDrop(p.id)}
+                    onDragEnd={() => {
+                      setDragPageId(null);
+                      setDragPageOver(null);
+                    }}
+                    className={cn(
+                      "relative flex min-h-10 cursor-pointer items-center gap-1 rounded-lg border px-1.5 py-1 transition-[box-shadow,transform,opacity,border-color] duration-150 [&_input]:cursor-text [&_button]:cursor-pointer",
+                      "hover:border-primary/35 hover:bg-muted/30",
+                      selectedPageId === p.id &&
+                        "border-indigo-500 bg-indigo-500/10",
+                      dragPageId === p.id &&
+                        "z-20 cursor-grabbing opacity-60 shadow-[0_14px_40px_-6px_rgba(0,0,0,0.28)] ring-2 ring-primary/35 scale-[0.985] rotate-[0.3deg]",
+                      dragPageOver?.id === p.id &&
+                        dragPageId &&
+                        dragPageId !== p.id &&
+                        "ring-2 ring-primary/45",
                     )}
-                  {dragPageOver?.id === p.id &&
-                    !dragPageOver.before &&
-                    dragPageId &&
-                    dragPageId !== p.id && (
-                      <div
-                        className="pointer-events-none absolute bottom-0 left-1 right-1 z-10 h-0.5 rounded-full bg-primary"
-                        aria-hidden
-                      />
-                    )}
+                  >
                   {editingPageId === p.id ? (
                     <Input
                       aria-label="Page title"
@@ -2535,7 +2677,7 @@ export default function NotesPage() {
                     <>
                       <button
                         type="button"
-                        className="min-w-0 flex-1 cursor-default truncate text-left text-sm"
+                        className="min-w-0 flex-1 cursor-pointer truncate text-left text-sm"
                         onClick={() => {
                           setSelectedPageId(p.id);
                           setSelectedNoteId(null);
@@ -2588,7 +2730,16 @@ export default function NotesPage() {
                     <Trash2 className="h-4 w-4 text-destructive" />
                   </button>
                 </div>
+                </Fragment>
               ))}
+              {dragPageId &&
+                dragPageOver &&
+                pages.length > 0 &&
+                dragPageOver.id === pages[pages.length - 1]!.id &&
+                !dragPageOver.before &&
+                dragPageId !== pages[pages.length - 1]!.id && (
+                  <DndDropSlot />
+                )}
             </div>
           </section>
 
@@ -2610,16 +2761,58 @@ export default function NotesPage() {
                 <Plus className="h-4 w-4" />
               </Button>
             </div>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                className="h-8 pl-8 text-xs"
-                placeholder="Search in notes…"
-                value={notesSearchQuery}
-                onChange={(e) => setNotesSearchQuery(e.target.value)}
-                disabled={!selectedPageId}
-                aria-label="Search notes"
-              />
+            <div className="space-y-1.5">
+              <Label className="text-[10px] text-muted-foreground">
+                Search all notes
+              </Label>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  className="h-8 pl-8 text-xs"
+                  placeholder="Title or body (all pages)…"
+                  value={searchAllNotesQuery}
+                  onChange={(e) => setSearchAllNotesQuery(e.target.value)}
+                  aria-label="Search all notes by title or body"
+                />
+              </div>
+              {searchAllNotesQuery.trim() && (
+                <div className="max-h-40 space-y-0.5 overflow-y-auto rounded-md border border-border/60 bg-muted/30 p-1 text-[11px]">
+                  {allNotesSearchResults.length === 0 ? (
+                    <p className="px-1 py-1 text-muted-foreground">
+                      No matches
+                    </p>
+                  ) : (
+                    allNotesSearchResults.map(({ note: n, snippet }) => {
+                      const pageTitle =
+                        pages.find((p) => p.id === n.pageId)?.title ??
+                        "Page";
+                      return (
+                        <button
+                          key={n.id}
+                          type="button"
+                          className={cn(
+                            "w-full rounded px-1.5 py-1 text-left hover:bg-muted",
+                            selectedNoteId === n.id && "bg-muted",
+                          )}
+                          onClick={() =>
+                            jumpToNoteFromSearch(n.id, n.pageId)
+                          }
+                        >
+                          <span className="block truncate font-medium">
+                            {n.title}
+                          </span>
+                          <span className="block truncate text-[10px] text-muted-foreground">
+                            {pageTitle}
+                          </span>
+                          <span className="line-clamp-2 text-muted-foreground">
+                            {snippet}
+                          </span>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              )}
             </div>
             <div className="relative space-y-1 min-h-[120px]">
               {notesLoading && (
@@ -2630,58 +2823,46 @@ export default function NotesPage() {
                   <Loader2 className="h-7 w-7 animate-spin text-muted-foreground" />
                 </div>
               )}
-              {notesForList.map((n) => (
-                <div
-                  key={n.id}
-                  draggable
-                  onDragStart={(e) => {
-                    setDragNoteId(n.id);
-                    setDragNoteOver(null);
-                    e.dataTransfer.effectAllowed = "move";
-                    e.dataTransfer.setData("text/plain", n.id);
-                  }}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    e.dataTransfer.dropEffect = "move";
-                    if (!dragNoteId || dragNoteId === n.id) return;
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    const before = e.clientY < rect.top + rect.height / 2;
-                    setDragNoteOver({ id: n.id, before });
-                  }}
-                  onDrop={() => handleNoteDrop(n.id)}
-                  onDragEnd={() => {
-                    setDragNoteId(null);
-                    setDragNoteOver(null);
-                  }}
-                  className={cn(
-                    "relative flex cursor-grab items-center gap-1 rounded-lg border px-1.5 py-1 active:cursor-grabbing",
-                    selectedNoteId === n.id &&
-                      "border-violet-500 bg-violet-500/10",
-                    dragNoteId === n.id && "opacity-60",
+              {notes.map((n) => (
+                <Fragment key={n.id}>
+                  {dragNoteId &&
+                    dragNoteId !== n.id &&
                     dragNoteOver?.id === n.id &&
-                      dragNoteId &&
-                      dragNoteId !== n.id &&
-                      "ring-2 ring-primary/40",
-                  )}
-                >
-                  {dragNoteOver?.id === n.id &&
-                    dragNoteOver.before &&
-                    dragNoteId &&
-                    dragNoteId !== n.id && (
-                      <div
-                        className="pointer-events-none absolute left-1 right-1 top-0 z-10 h-0.5 rounded-full bg-primary"
-                        aria-hidden
-                      />
+                    dragNoteOver.before && <DndDropSlot />}
+                  <div
+                    draggable
+                    onDragStart={(e) => {
+                      setDragNoteId(n.id);
+                      setDragNoteOver(null);
+                      e.dataTransfer.effectAllowed = "move";
+                      e.dataTransfer.setData("text/plain", n.id);
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      if (!dragNoteId || dragNoteId === n.id) return;
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const before = e.clientY < rect.top + rect.height / 2;
+                      setDragNoteOver({ id: n.id, before });
+                    }}
+                    onDrop={() => handleNoteDrop(n.id)}
+                    onDragEnd={() => {
+                      setDragNoteId(null);
+                      setDragNoteOver(null);
+                    }}
+                    className={cn(
+                      "relative flex min-h-10 cursor-pointer items-center gap-1 rounded-lg border px-1.5 py-1 transition-[box-shadow,transform,opacity,border-color] duration-150 [&_input]:cursor-text [&_button]:cursor-pointer",
+                      "hover:border-primary/35 hover:bg-muted/30",
+                      selectedNoteId === n.id &&
+                        "border-violet-500 bg-violet-500/10",
+                      dragNoteId === n.id &&
+                        "z-20 cursor-grabbing opacity-60 shadow-[0_14px_40px_-6px_rgba(0,0,0,0.28)] ring-2 ring-primary/35 scale-[0.985] rotate-[0.3deg]",
+                      dragNoteOver?.id === n.id &&
+                        dragNoteId &&
+                        dragNoteId !== n.id &&
+                        "ring-2 ring-primary/45",
                     )}
-                  {dragNoteOver?.id === n.id &&
-                    !dragNoteOver.before &&
-                    dragNoteId &&
-                    dragNoteId !== n.id && (
-                      <div
-                        className="pointer-events-none absolute bottom-0 left-1 right-1 z-10 h-0.5 rounded-full bg-primary"
-                        aria-hidden
-                      />
-                    )}
+                  >
                   {editingNoteRowId === n.id ? (
                     <Input
                       aria-label="Note title"
@@ -2691,8 +2872,10 @@ export default function NotesPage() {
                       onChange={(e) => {
                         const v = e.target.value;
                         setNotes((prev) =>
-                          prev.map((x) =>
-                            x.id === n.id ? { ...x, title: v } : x,
+                          sortNotesFavoritesFirst(
+                            prev.map((x) =>
+                              x.id === n.id ? { ...x, title: v } : x,
+                            ),
                           ),
                         );
                       }}
@@ -2709,7 +2892,7 @@ export default function NotesPage() {
                     <>
                       <button
                         type="button"
-                        className="min-w-0 flex-1 cursor-default truncate text-left text-sm"
+                        className="min-w-0 flex-1 cursor-pointer truncate text-left text-sm"
                         onClick={() => setSelectedNoteId(n.id)}
                       >
                         <span className="block truncate">{n.title}</span>
@@ -2773,7 +2956,16 @@ export default function NotesPage() {
                     <Trash2 className="h-4 w-4 text-destructive" />
                   </button>
                 </div>
+                </Fragment>
               ))}
+              {dragNoteId &&
+                dragNoteOver &&
+                notes.length > 0 &&
+                dragNoteOver.id === notes[notes.length - 1]!.id &&
+                !dragNoteOver.before &&
+                dragNoteId !== notes[notes.length - 1]!.id && (
+                  <DndDropSlot />
+                )}
             </div>
           </section>
 
@@ -2794,10 +2986,12 @@ export default function NotesPage() {
                           onChange={(e) => {
                             const v = e.target.value;
                             setNotes((prev) =>
-                              prev.map((n) =>
-                                n.id === selectedNote.id
-                                  ? { ...n, title: v }
-                                  : n,
+                              sortNotesFavoritesFirst(
+                                prev.map((n) =>
+                                  n.id === selectedNote.id
+                                    ? { ...n, title: v }
+                                    : n,
+                                ),
                               ),
                             );
                           }}
@@ -2971,6 +3165,49 @@ export default function NotesPage() {
                           )}
                         </Button>
 
+                        <div
+                          ref={findInNoteToolbarRef}
+                          className="flex min-w-0 max-w-full flex-wrap items-center gap-1"
+                        >
+                          <Input
+                            className="h-7 min-w-[7rem] max-w-[12rem] flex-1 text-xs"
+                            placeholder="Find in note…"
+                            value={findInNoteQuery}
+                            onChange={(e) => setFindInNoteQuery(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                runFindInNote(!e.shiftKey);
+                              }
+                            }}
+                            aria-label="Find text in this note"
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 w-7 shrink-0 px-0"
+                            title="Find previous in this note"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => runFindInNote(false)}
+                          >
+                            <ArrowUp className="h-3.5 w-3.5" />
+                            <span className="sr-only">Previous match</span>
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 w-7 shrink-0 px-0"
+                            title="Find next in this note"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => runFindInNote(true)}
+                          >
+                            <ArrowDown className="h-3.5 w-3.5" />
+                            <span className="sr-only">Next match</span>
+                          </Button>
+                        </div>
+
                         {isEditing && (
                           <>
                             <Button
@@ -3010,7 +3247,13 @@ export default function NotesPage() {
                                 )}
                                 title={`Formatting — ${noteKbParen("B")} ${noteKbParen("I")} ${noteKbParen("U")}`}
                                 onMouseDown={(e) => e.preventDefault()}
-                                onClick={() => setFormatMenuOpen((o) => !o)}
+                                onClick={() =>
+                                  setFormatMenuOpen((o) => {
+                                    const next = !o;
+                                    formatMenuOpenRef.current = next;
+                                    return next;
+                                  })
+                                }
                               >
                                 <Type className="h-3.5 w-3.5" />
                                 Format
@@ -3036,11 +3279,8 @@ export default function NotesPage() {
                                     maxHeight: formatMenuCoords.maxH,
                                   }}
                                   onMouseDown={(e) => {
-                                    if (
-                                      (e.target as HTMLElement).closest(
-                                        "input, textarea, select, label, button",
-                                      )
-                                    ) {
+                                    const t = e.target as HTMLElement;
+                                    if (t.closest("input, textarea, select")) {
                                       return;
                                     }
                                     e.preventDefault();
@@ -3403,6 +3643,7 @@ export default function NotesPage() {
                     />
                   ) : (
                     <div
+                      ref={readNoteBodyWrapRef}
                       role="button"
                       tabIndex={0}
                       aria-label="Click to edit note"

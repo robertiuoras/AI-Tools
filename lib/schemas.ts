@@ -34,10 +34,64 @@ const categorySet = new Set<string>(categories)
  */
 export const LEGACY_TOOL_CATEGORY_ALIASES: Record<string, Category> = {
   Video: 'Video Editing',
+  Videos: 'Video Editing',
+  Editing: 'Video Editing',
   Audio: 'Music & Audio',
   Voice: 'Voice & Audio',
   Images: 'Image Generation',
+  Image: 'Image Generation',
   Code: 'Code Assistants',
+  // Common DB / import variants → real categories (fewer gray “Other” badges)
+  Chat: 'AI Agents',
+  Chatbot: 'AI Agents',
+  Chatbots: 'AI Agents',
+  Agents: 'AI Agents',
+  LLM: 'AI Automation',
+  LLMs: 'AI Automation',
+  Automation: 'AI Automation',
+  'Machine Learning': 'Analytics',
+  ML: 'Analytics',
+  Data: 'Analytics',
+  Developer: 'Code Assistants',
+  DevTools: 'Code Assistants',
+  'Developer Tools': 'Code Assistants',
+  Programming: 'Code Assistants',
+  CRM: 'Customer Support',
+  Support: 'Customer Support',
+  Helpdesk: 'Customer Support',
+  UX: 'Design',
+  UI: 'Design',
+  'UI/UX': 'Design',
+  Graphics: 'Design',
+  Elearning: 'Education',
+  'E-learning': 'Education',
+  Photo: 'Image Generation',
+  Art: 'Image Generation',
+  Career: 'Job',
+  Jobs: 'Job',
+  Recruitment: 'Job',
+  Translation: 'Language',
+  NLP: 'Language',
+  Legaltech: 'Legal',
+  Ads: 'Marketing',
+  SEO: 'Marketing',
+  Social: 'Marketing',
+  Music: 'Music & Audio',
+  Sound: 'Music & Audio',
+  Podcast: 'Music & Audio',
+  Search: 'Research',
+  Cloud: 'SaaS',
+  B2B: 'SaaS',
+  Business: 'SaaS',
+  Transcription: 'Voice & Audio',
+  Speech: 'Voice & Audio',
+  Blog: 'Writing',
+  Copywriting: 'Writing',
+  Content: 'Writing',
+  General: 'Productivity',
+  Tools: 'Productivity',
+  Misc: 'Other',
+  Miscellaneous: 'Other',
 }
 
 /**
@@ -69,7 +123,7 @@ export function normalizeToolCategory(raw: string | null | undefined): string {
     for (const c of categories) {
       if (c.toLowerCase() === p0.toLowerCase()) return c
     }
-    return p0
+    return 'Other'
   }
   return 'Other'
 }
