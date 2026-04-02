@@ -20,6 +20,11 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { supabase, type Note, type NotePage } from "@/lib/supabase";
+import {
+  noteKbParen,
+  noteKbPastePlainParen,
+  noteKbRedoParen,
+} from "@/lib/note-kb";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -47,6 +52,9 @@ import {
   Eraser,
   ClipboardPaste,
   ListChecks,
+  Undo2,
+  Redo2,
+  Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { linkifyText } from "@/lib/linkify";
@@ -69,8 +77,7 @@ const NUMBERED_LINE_RE = /^(\s*)\d+\.\s+/;
 /** Styled via globals.css `.note-html-view mark.note-highlight` */
 const NOTE_MARK_HIGHLIGHT_CLASS = "note-highlight";
 
-/** Tooltip for format toolbar: optional Ctrl/⌘ shortcut on hover. */
-/** Relative time for note `updatedAt` (ISO); refreshes when `nowMs` bumps each minute. */
+/** Relative time for note `updatedAt` (ISO); `nowMs` bumps each minute. */
 function formatNoteEditedRelative(
   iso: string | undefined,
   nowMs: number,
@@ -78,22 +85,27 @@ function formatNoteEditedRelative(
   if (!iso) return "";
   const d = Date.parse(iso);
   if (Number.isNaN(d)) return "";
-  const diffSec = Math.round((d - nowMs) / 1000);
+  const secAgo = Math.floor((nowMs - d) / 1000);
+  if (secAgo < 0) return "just now";
+  if (secAgo < 15) return "just now";
+  if (secAgo < 60) return "moments ago";
+  const minAgo = Math.floor(secAgo / 60);
+  if (minAgo < 60)
+    return minAgo === 1 ? "about 1 minute ago" : `about ${minAgo} minutes ago`;
+  const hrAgo = Math.floor(minAgo / 60);
+  if (hrAgo < 36)
+    return hrAgo === 1 ? "about 1 hour ago" : `about ${hrAgo} hours ago`;
+  const dayAgo = Math.floor(hrAgo / 24);
+  if (dayAgo < 14)
+    return dayAgo === 1 ? "about 1 day ago" : `about ${dayAgo} days ago`;
   try {
-    const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
-    const abs = Math.abs(diffSec);
-    if (abs < 45) return rtf.format(diffSec, "second");
-    const diffMin = Math.round(diffSec / 60);
-    if (Math.abs(diffMin) < 45) return rtf.format(diffMin, "minute");
-    const diffHour = Math.round(diffMin / 60);
-    if (Math.abs(diffHour) < 36) return rtf.format(diffHour, "hour");
-    const diffDay = Math.round(diffHour / 24);
-    if (Math.abs(diffDay) < 25) return rtf.format(diffDay, "day");
-    const diffMonth = Math.round(diffDay / 30);
-    if (Math.abs(diffMonth) < 11) return rtf.format(diffMonth, "month");
-    return rtf.format(Math.round(diffDay / 365), "year");
+    return new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "numeric",
+      year: d < nowMs - 365 * 24 * 60 * 60 * 1000 ? "numeric" : undefined,
+    }).format(d);
   } catch {
-    return new Date(d).toLocaleString();
+    return new Date(d).toLocaleDateString();
   }
 }
 
@@ -101,12 +113,8 @@ function formatShortcutTooltip(
   label: string,
   opts?: { key?: string; extra?: string },
 ): string {
-  if (opts?.extra) return `${label} — ${opts.extra}`;
-  if (opts?.key) {
-    if (typeof navigator === "undefined") return `${label} — Ctrl+${opts.key}`;
-    const mac = /Mac|iPhone|iPad/i.test(navigator.platform);
-    return mac ? `${label} — ⌘${opts.key}` : `${label} — Ctrl+${opts.key}`;
-  }
+  if (opts?.extra) return `${label} ${opts.extra}`;
+  if (opts?.key) return `${label} ${noteKbParen(opts.key)}`;
   return `${label} — click again to toggle`;
 }
 
@@ -473,7 +481,7 @@ function renderPreviewMarkdown(text: string): ReactNode {
 }
 
 const NOTE_HTML_VIEW_CLASS =
-  "note-html-view min-h-0 space-y-2 text-sm [&_figure[data-note-image='1']]:max-w-full [&_figure[data-note-image='1']]:overflow-visible [&_figure[data-note-image='1']_img]:rounded-md [&_h3]:scroll-m-20 [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:tracking-tight [&_li]:my-0.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:whitespace-pre-wrap [&_ul]:list-disc [&_ul]:pl-5 [&_ul.note-task-list]:list-none [&_ul.note-task-list]:pl-0 [&_ul.note-task-list_li]:flex [&_ul.note-task-list_li]:items-start [&_ul.note-task-list_li]:gap-2 [&_ul.note-task-list_li]:my-0.5 [&_ul.note-task-list_.note-task-checkbox]:mt-0.5 [&_ul.note-task-list_.note-task-checkbox]:shrink-0 [&_a.note-mention]:font-medium [&_a.note-mention]:text-primary [&_a.note-mention]:underline [&_a.note-mention]:decoration-primary/60";
+  "note-html-view min-h-0 space-y-2 text-sm [&_figure[data-note-image='1']]:max-w-full [&_figure[data-note-image='1']]:overflow-visible [&_figure[data-note-image='1']_img]:rounded-md [&_h3]:scroll-m-20 [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:tracking-tight [&_li]:my-0.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:whitespace-pre-wrap [&_ul]:list-disc [&_ul]:pl-5 [&_ul.note-task-list]:list-none [&_ul.note-task-list]:pl-0 [&_ul.note-task-list_li]:flex [&_ul.note-task-list_li]:items-start [&_ul.note-task-list_li]:gap-2 [&_ul.note-task-list_li]:my-0.5 [&_ul.note-task-list_.note-task-checkbox]:mt-0.5 [&_ul.note-task-list_.note-task-checkbox]:h-4 [&_ul.note-task-list_.note-task-checkbox]:w-4 [&_ul.note-task-list_.note-task-checkbox]:shrink-0 [&_ul.note-task-list_.note-task-checkbox]:cursor-pointer [&_ul.note-task-list_.note-task-checkbox]:rounded-sm [&_ul.note-task-list_li>span]:min-h-[1.25em] [&_ul.note-task-list_li>span]:min-w-0 [&_ul.note-task-list_li>span]:flex-1 [&_ul.note-task-list_li>span]:cursor-text [&_ul.note-task-list_li>span]:outline-none [&_a.note-mention]:inline-flex [&_a.note-mention]:max-w-full [&_a.note-mention]:items-center [&_a.note-mention]:rounded-md [&_a.note-mention]:border [&_a.note-mention]:border-border/70 [&_a.note-mention]:bg-muted/85 [&_a.note-mention]:px-1.5 [&_a.note-mention]:py-px [&_a.note-mention]:text-xs [&_a.note-mention]:font-medium [&_a.note-mention]:leading-snug [&_a.note-mention]:text-foreground [&_a.note-mention]:no-underline [&_a.note-mention]:shadow-sm [&_a.note-mention]:decoration-transparent [&_a.note-mention]:transition-colors [&_a.note-mention]:hover:bg-muted";
 
 function renderReadNoteBody(
   content: string,
@@ -627,6 +635,16 @@ export default function NotesPage() {
   } | null>(null);
   const [dragPageId, setDragPageId] = useState<string | null>(null);
   const [dragNoteId, setDragNoteId] = useState<string | null>(null);
+  const [dragPageOver, setDragPageOver] = useState<{
+    id: string;
+    before: boolean;
+  } | null>(null);
+  const [dragNoteOver, setDragNoteOver] = useState<{
+    id: string;
+    before: boolean;
+  } | null>(null);
+  const [lastSavedAtMs, setLastSavedAtMs] = useState<number | null>(null);
+  const [notesSearchQuery, setNotesSearchQuery] = useState("");
   const [contextMenu, setContextMenu] = useState<{
     open: boolean;
     x: number;
@@ -686,6 +704,27 @@ export default function NotesPage() {
     [notes, selectedNoteId],
   );
 
+  const notesForList = useMemo(() => {
+    const q = notesSearchQuery.trim().toLowerCase();
+    const matches = (n: Note) => {
+      if (!q) return true;
+      const title = (n.title || "").toLowerCase();
+      const body = isProbablyHtml(n.content)
+        ? htmlToPlainText(n.content)
+        : n.content ?? "";
+      return title.includes(q) || body.toLowerCase().includes(q);
+    };
+    const filtered = notes.filter(matches);
+    if (
+      selectedNoteId &&
+      !filtered.some((n) => n.id === selectedNoteId)
+    ) {
+      const sel = notes.find((n) => n.id === selectedNoteId);
+      if (sel) return [sel, ...filtered];
+    }
+    return filtered;
+  }, [notes, notesSearchQuery, selectedNoteId]);
+
   const filteredMentionNotes = useMemo(() => {
     const q = mentionQuery.trim().toLowerCase();
     return allNotesForMentions
@@ -711,6 +750,15 @@ export default function NotesPage() {
   useEffect(() => {
     setNoteBodyFullscreen(false);
   }, [selectedNoteId]);
+
+  useEffect(() => {
+    if (!selectedNote?.updatedAt) {
+      setLastSavedAtMs(null);
+      return;
+    }
+    const t = Date.parse(selectedNote.updatedAt);
+    if (!Number.isNaN(t)) setLastSavedAtMs(t);
+  }, [selectedNote?.id, selectedNote?.updatedAt]);
 
   useEffect(() => {
     const id = window.setInterval(() => setEditedNowMs(Date.now()), 60_000);
@@ -1124,6 +1172,7 @@ export default function NotesPage() {
       }
       if (showIndicator) {
         if (saved) {
+          setLastSavedAtMs(Date.now());
           setAutoSaveState("saved");
           window.setTimeout(() => setAutoSaveState("idle"), 1200);
         } else {
@@ -1243,35 +1292,44 @@ export default function NotesPage() {
     if (selectedNoteId === noteId) setSelectedNoteId(remaining[0]?.id ?? null);
   };
 
-  const reorderByDrag = <T extends { id: string }>(
+  /** Insert `draggedId` before or after `targetId` (for drop indicators). */
+  const reorderInsert = <T extends { id: string }>(
     list: T[],
-    fromId: string,
-    toId: string,
+    draggedId: string,
+    targetId: string,
+    insertBefore: boolean,
   ) => {
-    if (!fromId || !toId || fromId === toId) return list;
-    const from = list.findIndex((x) => x.id === fromId);
-    const to = list.findIndex((x) => x.id === toId);
-    if (from < 0 || to < 0) return list;
+    if (!draggedId || !targetId || draggedId === targetId) return list;
+    const from = list.findIndex((x) => x.id === draggedId);
+    const targetIdx = list.findIndex((x) => x.id === targetId);
+    if (from < 0 || targetIdx < 0) return list;
+    let to = insertBefore ? targetIdx : targetIdx + 1;
     const next = [...list];
     const [moved] = next.splice(from, 1);
+    if (from < to) to -= 1;
     next.splice(to, 0, moved);
     return next;
   };
 
   const handlePageDrop = (targetPageId: string) => {
     if (!dragPageId || dragPageId === targetPageId) return;
+    const insertBefore =
+      dragPageOver?.id === targetPageId ? dragPageOver.before : true;
     setPages((prev) => {
-      const next = reorderByDrag(prev, dragPageId, targetPageId);
+      const next = reorderInsert(prev, dragPageId, targetPageId, insertBefore);
       writeOrderIds(LS_PAGE_ORDER_KEY, next.map((p) => p.id));
       return next;
     });
     setDragPageId(null);
+    setDragPageOver(null);
   };
 
   const handleNoteDrop = (targetNoteId: string) => {
     if (!dragNoteId || dragNoteId === targetNoteId) return;
+    const insertBefore =
+      dragNoteOver?.id === targetNoteId ? dragNoteOver.before : true;
     setNotes((prev) => {
-      const next = reorderByDrag(prev, dragNoteId, targetNoteId);
+      const next = reorderInsert(prev, dragNoteId, targetNoteId, insertBefore);
       if (selectedPageId) {
         writeOrderIds(
           `${LS_NOTE_ORDER_KEY_PREFIX}${selectedPageId}`,
@@ -1281,6 +1339,7 @@ export default function NotesPage() {
       return next;
     });
     setDragNoteId(null);
+    setDragNoteOver(null);
   };
 
   const beginImageInsert = () => {
@@ -1466,6 +1525,32 @@ export default function NotesPage() {
     [refreshFmt, restoreEditorSelection],
   );
 
+  const runUndo = useCallback(() => {
+    const root = editorRef.current;
+    root?.focus();
+    restoreEditorSelection();
+    try {
+      document.execCommand("undo");
+    } catch {
+      /* ignore */
+    }
+    root?.dispatchEvent(new Event("input", { bubbles: true }));
+    refreshFmt();
+  }, [refreshFmt, restoreEditorSelection]);
+
+  const runRedo = useCallback(() => {
+    const root = editorRef.current;
+    root?.focus();
+    restoreEditorSelection();
+    try {
+      document.execCommand("redo");
+    } catch {
+      /* ignore */
+    }
+    root?.dispatchEvent(new Event("input", { bubbles: true }));
+    refreshFmt();
+  }, [refreshFmt, restoreEditorSelection]);
+
   const insertTaskList = useCallback(() => {
     const root = editorRef.current;
     if (!root) return;
@@ -1487,6 +1572,7 @@ export default function NotesPage() {
     cb.className = "note-task-checkbox";
 
     const span = document.createElement("span");
+    span.className = "note-task-line";
     span.appendChild(document.createTextNode("\u200b"));
 
     li.appendChild(cb);
@@ -2110,6 +2196,22 @@ export default function NotesPage() {
         return;
       }
       if (!mod) return;
+      if (e.key.toLowerCase() === "z") {
+        if (e.shiftKey) {
+          e.preventDefault();
+          runRedo();
+          return;
+        }
+        e.preventDefault();
+        runUndo();
+        return;
+      }
+      if (e.key.toLowerCase() === "y") {
+        if (e.metaKey) return;
+        e.preventDefault();
+        runRedo();
+        return;
+      }
       const k = e.key.toLowerCase();
       if (k === "b" || k === "i" || k === "u") {
         e.preventDefault();
@@ -2123,6 +2225,8 @@ export default function NotesPage() {
       restoreEditorSelection,
       runFormatCommand,
       pastePlainFromClipboard,
+      runUndo,
+      runRedo,
     ],
   );
 
@@ -2358,19 +2462,52 @@ export default function NotesPage() {
                   draggable
                   onDragStart={(e) => {
                     setDragPageId(p.id);
+                    setDragPageOver(null);
                     e.dataTransfer.effectAllowed = "move";
                     e.dataTransfer.setData("text/plain", p.id);
                   }}
-                  onDragOver={(e) => e.preventDefault()}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    if (!dragPageId || dragPageId === p.id) return;
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const before = e.clientY < rect.top + rect.height / 2;
+                    setDragPageOver({ id: p.id, before });
+                  }}
                   onDrop={() => handlePageDrop(p.id)}
-                  onDragEnd={() => setDragPageId(null)}
+                  onDragEnd={() => {
+                    setDragPageId(null);
+                    setDragPageOver(null);
+                  }}
                   className={cn(
-                    "flex cursor-default items-center gap-1 rounded-lg border px-1.5 py-1",
+                    "relative flex cursor-grab items-center gap-1 rounded-lg border px-1.5 py-1 active:cursor-grabbing",
                     selectedPageId === p.id &&
                       "border-indigo-500 bg-indigo-500/10",
                     dragPageId === p.id && "opacity-60",
+                    dragPageOver?.id === p.id &&
+                      dragPageId &&
+                      dragPageId !== p.id &&
+                      "ring-2 ring-primary/40",
                   )}
                 >
+                  {dragPageOver?.id === p.id &&
+                    dragPageOver.before &&
+                    dragPageId &&
+                    dragPageId !== p.id && (
+                      <div
+                        className="pointer-events-none absolute left-1 right-1 top-0 z-10 h-0.5 rounded-full bg-primary"
+                        aria-hidden
+                      />
+                    )}
+                  {dragPageOver?.id === p.id &&
+                    !dragPageOver.before &&
+                    dragPageId &&
+                    dragPageId !== p.id && (
+                      <div
+                        className="pointer-events-none absolute bottom-0 left-1 right-1 z-10 h-0.5 rounded-full bg-primary"
+                        aria-hidden
+                      />
+                    )}
                   {editingPageId === p.id ? (
                     <Input
                       aria-label="Page title"
@@ -2473,6 +2610,17 @@ export default function NotesPage() {
                 <Plus className="h-4 w-4" />
               </Button>
             </div>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                className="h-8 pl-8 text-xs"
+                placeholder="Search in notes…"
+                value={notesSearchQuery}
+                onChange={(e) => setNotesSearchQuery(e.target.value)}
+                disabled={!selectedPageId}
+                aria-label="Search notes"
+              />
+            </div>
             <div className="relative space-y-1 min-h-[120px]">
               {notesLoading && (
                 <div
@@ -2482,25 +2630,58 @@ export default function NotesPage() {
                   <Loader2 className="h-7 w-7 animate-spin text-muted-foreground" />
                 </div>
               )}
-              {notes.map((n) => (
+              {notesForList.map((n) => (
                 <div
                   key={n.id}
                   draggable
                   onDragStart={(e) => {
                     setDragNoteId(n.id);
+                    setDragNoteOver(null);
                     e.dataTransfer.effectAllowed = "move";
                     e.dataTransfer.setData("text/plain", n.id);
                   }}
-                  onDragOver={(e) => e.preventDefault()}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    if (!dragNoteId || dragNoteId === n.id) return;
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const before = e.clientY < rect.top + rect.height / 2;
+                    setDragNoteOver({ id: n.id, before });
+                  }}
                   onDrop={() => handleNoteDrop(n.id)}
-                  onDragEnd={() => setDragNoteId(null)}
+                  onDragEnd={() => {
+                    setDragNoteId(null);
+                    setDragNoteOver(null);
+                  }}
                   className={cn(
-                    "flex cursor-default items-center gap-1 rounded-lg border px-1.5 py-1",
+                    "relative flex cursor-grab items-center gap-1 rounded-lg border px-1.5 py-1 active:cursor-grabbing",
                     selectedNoteId === n.id &&
                       "border-violet-500 bg-violet-500/10",
                     dragNoteId === n.id && "opacity-60",
+                    dragNoteOver?.id === n.id &&
+                      dragNoteId &&
+                      dragNoteId !== n.id &&
+                      "ring-2 ring-primary/40",
                   )}
                 >
+                  {dragNoteOver?.id === n.id &&
+                    dragNoteOver.before &&
+                    dragNoteId &&
+                    dragNoteId !== n.id && (
+                      <div
+                        className="pointer-events-none absolute left-1 right-1 top-0 z-10 h-0.5 rounded-full bg-primary"
+                        aria-hidden
+                      />
+                    )}
+                  {dragNoteOver?.id === n.id &&
+                    !dragNoteOver.before &&
+                    dragNoteId &&
+                    dragNoteId !== n.id && (
+                      <div
+                        className="pointer-events-none absolute bottom-0 left-1 right-1 z-10 h-0.5 rounded-full bg-primary"
+                        aria-hidden
+                      />
+                    )}
                   {editingNoteRowId === n.id ? (
                     <Input
                       aria-label="Note title"
@@ -2537,6 +2718,7 @@ export default function NotesPage() {
                             className="block truncate text-[10px] text-muted-foreground tabular-nums"
                             title={new Date(n.updatedAt).toLocaleString()}
                           >
+                            Updated{" "}
                             {formatNoteEditedRelative(n.updatedAt, editedNowMs)}
                           </span>
                         ) : null}
@@ -2698,9 +2880,9 @@ export default function NotesPage() {
                   <div className="flex min-w-0 items-center gap-1.5 pl-6 text-[11px] text-muted-foreground tabular-nums">
                     <Clock className="h-3 w-3 shrink-0 opacity-80" aria-hidden />
                     <span
-                      title={`Last edited ${new Date(selectedNote.updatedAt).toLocaleString()}`}
+                      title={new Date(selectedNote.updatedAt).toLocaleString()}
                     >
-                      Last edited{" "}
+                      Updated{" "}
                       {formatNoteEditedRelative(
                         selectedNote.updatedAt,
                         editedNowMs,
@@ -2716,22 +2898,48 @@ export default function NotesPage() {
                   )}
                 >
                   <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <Label className="text-xs text-muted-foreground">
+                    <div className="flex min-h-7 min-w-0 items-center gap-2">
+                      <Label className="shrink-0 text-xs text-muted-foreground">
                         Note body
                       </Label>
-                      {isEditing && autoSaveState === "saving" && (
-                        <Loader2
-                          className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground"
-                          aria-label="Saving"
-                        />
-                      )}
-                      {isEditing && autoSaveState === "saved" && (
-                        <span className="inline-flex items-center gap-0.5 text-xs font-medium text-emerald-600 animate-in fade-in zoom-in-95 duration-200 dark:text-emerald-400">
-                          <Check className="h-3.5 w-3.5" aria-hidden />
-                          Saved
-                        </span>
-                      )}
+                      {isEditing ? (
+                        <div className="flex min-h-7 min-w-[10.5rem] items-center gap-1.5 text-xs text-muted-foreground">
+                          {autoSaveState === "saving" ? (
+                            <>
+                              <Loader2
+                                className="h-3.5 w-3.5 shrink-0 animate-spin"
+                                aria-label="Saving"
+                              />
+                              <span className="tabular-nums">Saving…</span>
+                            </>
+                          ) : autoSaveState === "saved" ? (
+                            <span className="inline-flex items-center gap-1 font-medium text-emerald-600 tabular-nums dark:text-emerald-400">
+                              <Check className="h-3.5 w-3.5" aria-hidden />
+                              Saved
+                            </span>
+                          ) : lastSavedAtMs != null ? (
+                            <span
+                              className="tabular-nums"
+                              title={
+                                lastSavedAtMs
+                                  ? new Date(lastSavedAtMs).toLocaleString()
+                                  : undefined
+                              }
+                            >
+                              Saved{" "}
+                              {new Date(lastSavedAtMs).toLocaleTimeString(
+                                undefined,
+                                {
+                                  hour: "numeric",
+                                  minute: "2-digit",
+                                },
+                              )}
+                            </span>
+                          ) : (
+                            <span className="opacity-70">Autosave on</span>
+                          )}
+                        </div>
+                      ) : null}
                     </div>
                     <div className="flex w-full min-w-0 flex-col items-stretch gap-2 sm:w-auto sm:items-end">
                       <div className="flex flex-wrap items-center justify-end gap-1">
@@ -2765,6 +2973,30 @@ export default function NotesPage() {
 
                         {isEditing && (
                           <>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-7 w-7 shrink-0 px-0"
+                              title={`Undo ${noteKbParen("Z")}`}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => runUndo()}
+                            >
+                              <Undo2 className="h-3.5 w-3.5" />
+                              <span className="sr-only">Undo</span>
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-7 w-7 shrink-0 px-0"
+                              title={`Redo ${noteKbRedoParen()}`}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => runRedo()}
+                            >
+                              <Redo2 className="h-3.5 w-3.5" />
+                              <span className="sr-only">Redo</span>
+                            </Button>
                             <div className="relative">
                               <Button
                                 ref={formatMenuButtonRef}
@@ -2776,12 +3008,7 @@ export default function NotesPage() {
                                   formatMenuOpen &&
                                     "border-primary ring-1 ring-primary/30",
                                 )}
-                                title={
-                                  typeof navigator !== "undefined" &&
-                                  /Mac|iPhone|iPad/i.test(navigator.platform)
-                                    ? "Formatting (opens above). Shortcuts: ⌘B, ⌘I, ⌘U"
-                                    : "Formatting (opens above). Shortcuts: Ctrl+B, Ctrl+I, Ctrl+U"
-                                }
+                                title={`Formatting — ${noteKbParen("B")} ${noteKbParen("I")} ${noteKbParen("U")}`}
                                 onMouseDown={(e) => e.preventDefault()}
                                 onClick={() => setFormatMenuOpen((o) => !o)}
                               >
@@ -3229,64 +3456,122 @@ export default function NotesPage() {
                   )}
                   {isEditing && contextMenu.open && (
                     <div
-                      className="fixed z-[120] w-44 rounded-md border border-border bg-popover p-1 shadow-lg"
+                      className="fixed z-[120] w-[min(17rem,calc(100vw-1rem))] rounded-md border border-border bg-popover p-1 shadow-lg"
                       style={{ left: contextMenu.x, top: contextMenu.y }}
                       role="menu"
                     >
                       <button
                         type="button"
-                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        onClick={() => {
+                          setContextMenu((s) => ({ ...s, open: false }));
+                          runUndo();
+                        }}
+                      >
+                        <span className="flex items-center gap-2">
+                          <Undo2 className="h-3.5 w-3.5" />
+                          Undo
+                        </span>
+                        <span className="text-[10px] text-muted-foreground tabular-nums">
+                          {noteKbParen("Z")}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        onClick={() => {
+                          setContextMenu((s) => ({ ...s, open: false }));
+                          runRedo();
+                        }}
+                      >
+                        <span className="flex items-center gap-2">
+                          <Redo2 className="h-3.5 w-3.5" />
+                          Redo
+                        </span>
+                        <span className="text-[10px] text-muted-foreground tabular-nums">
+                          {noteKbRedoParen()}
+                        </span>
+                      </button>
+                      <div
+                        className="my-1 h-px bg-border"
+                        role="separator"
+                      />
+                      <button
+                        type="button"
+                        className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
                         onClick={() => {
                           setContextMenu((s) => ({ ...s, open: false }));
                           runFormatCommand("bold");
                         }}
                       >
-                        <Bold className="h-3.5 w-3.5" />
-                        Bold
+                        <span className="flex items-center gap-2">
+                          <Bold className="h-3.5 w-3.5" />
+                          Bold
+                        </span>
+                        <span className="text-[10px] text-muted-foreground tabular-nums">
+                          {noteKbParen("B")}
+                        </span>
                       </button>
                       <button
                         type="button"
-                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
                         onClick={() => {
                           setContextMenu((s) => ({ ...s, open: false }));
                           runFormatCommand("italic");
                         }}
                       >
-                        <Italic className="h-3.5 w-3.5" />
-                        Italic
+                        <span className="flex items-center gap-2">
+                          <Italic className="h-3.5 w-3.5" />
+                          Italic
+                        </span>
+                        <span className="text-[10px] text-muted-foreground tabular-nums">
+                          {noteKbParen("I")}
+                        </span>
                       </button>
                       <button
                         type="button"
-                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
                         onClick={() => {
                           setContextMenu((s) => ({ ...s, open: false }));
                           runFormatCommand("underline");
                         }}
                       >
-                        <UnderlineIcon className="h-3.5 w-3.5" />
-                        Underline
+                        <span className="flex items-center gap-2">
+                          <UnderlineIcon className="h-3.5 w-3.5" />
+                          Underline
+                        </span>
+                        <span className="text-[10px] text-muted-foreground tabular-nums">
+                          {noteKbParen("U")}
+                        </span>
                       </button>
                       <button
                         type="button"
-                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
                         onClick={() => {
                           setContextMenu((s) => ({ ...s, open: false }));
                           runFormatCommand("strikeThrough");
                         }}
                       >
-                        <Strikethrough className="h-3.5 w-3.5" />
-                        Strikethrough
+                        <span className="flex items-center gap-2">
+                          <Strikethrough className="h-3.5 w-3.5" />
+                          Strikethrough
+                        </span>
                       </button>
                       <button
                         type="button"
-                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
                         onClick={() => {
                           setContextMenu((s) => ({ ...s, open: false }));
                           void pastePlainFromClipboard();
                         }}
                       >
-                        <ClipboardPaste className="h-3.5 w-3.5" />
-                        Paste as plain text
+                        <span className="flex items-center gap-2">
+                          <ClipboardPaste className="h-3.5 w-3.5" />
+                          Paste as plain text
+                        </span>
+                        <span className="text-[10px] text-muted-foreground tabular-nums">
+                          {noteKbPastePlainParen()}
+                        </span>
                       </button>
                       <button
                         type="button"

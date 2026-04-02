@@ -391,6 +391,10 @@ function sanitizeElement(el: Element): void {
       const cls = a.value.trim();
       if (cls === "note-mention") continue;
     }
+    if (name === "class" && tag === "SPAN") {
+      const cls = a.value.trim();
+      if (cls === "note-task-line") continue;
+    }
     if (name === "class" && tag === "UL") {
       const cls = a.value.trim().split(/\s+/).filter(Boolean);
       if (cls.includes("note-task-list")) {
