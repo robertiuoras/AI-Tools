@@ -147,6 +147,11 @@ export function FilterSidebar({
             <AccordionItem value="category">
               <AccordionTrigger>Category</AccordionTrigger>
               <AccordionContent>
+                <p className="mb-3 text-xs text-muted-foreground leading-snug">
+                  Default labels plus any category used by a tool (including
+                  AI-suggested). New labels show up here automatically. We map
+                  near-duplicates to the closest default when possible.
+                </p>
                 <div className="space-y-3">
                   <Label
                     className={cn(

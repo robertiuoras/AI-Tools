@@ -15,6 +15,7 @@ export const categories = [
   'Legal',
   'Marketing',
   'Music & Audio',
+  'News',
   'Other',
   'Productivity',
   'Research',
@@ -79,6 +80,19 @@ export const LEGACY_TOOL_CATEGORY_ALIASES: Record<string, Category> = {
   Music: 'Music & Audio',
   Sound: 'Music & Audio',
   Podcast: 'Music & Audio',
+  /** Newsletters, digests, and aggregators — prefer over Research for “daily news” products */
+  Newsletter: 'News',
+  News: 'News',
+  Media: 'News',
+  Journalism: 'News',
+  Aggregator: 'News',
+  RSS: 'News',
+  Digest: 'News',
+  newsletter: 'News',
+  media: 'News',
+  journalism: 'News',
+  aggregator: 'News',
+  /** Generic “search” still maps to Research; use News for news-focused products via prompt + aliases */
   Search: 'Research',
   Cloud: 'SaaS',
   B2B: 'SaaS',
@@ -92,6 +106,104 @@ export const LEGACY_TOOL_CATEGORY_ALIASES: Record<string, Category> = {
   Tools: 'Productivity',
   Misc: 'Other',
   Miscellaneous: 'Other',
+}
+
+/** Levenshtein distance (small inputs only — category labels are short). */
+function levenshtein(a: string, b: string): number {
+  const m = a.length
+  const n = b.length
+  if (m === 0) return n
+  if (n === 0) return m
+  const dp: number[][] = Array.from({ length: m + 1 }, () =>
+    new Array(n + 1).fill(0),
+  )
+  for (let i = 0; i <= m; i++) dp[i]![0] = i
+  for (let j = 0; j <= n; j++) dp[0]![j] = j
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      dp[i]![j] = Math.min(
+        dp[i - 1]![j]! + 1,
+        dp[i]![j - 1]! + 1,
+        dp[i - 1]![j - 1]! + cost,
+      )
+    }
+  }
+  return dp[m]![n]!
+}
+
+/**
+ * If the model/user string is close to a canonical label, return that label
+ * (reduces duplicate near-synonyms without exploding category count).
+ */
+export function closestCanonicalCategory(raw: string): string | null {
+  const norm = raw
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+  if (!norm) return null
+
+  for (const c of categories) {
+    const cl = c.toLowerCase()
+    if (norm === cl) return c
+  }
+
+  // All significant words from a canonical label appear as whole words in the raw string
+  for (const c of categories) {
+    const words = c
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((w) => w.length > 2)
+    if (words.length === 0) continue
+    if (
+      words.every((w) => {
+        const esc = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        return new RegExp(`\\b${esc}\\b`, 'i').test(norm)
+      })
+    ) {
+      return c
+    }
+  }
+
+  // Typo / near-match (e.g. "Producivity" → Productivity)
+  let best: string | null = null
+  let bestRatio = 1
+  for (const c of categories) {
+    const cl = c.toLowerCase()
+    const maxLen = Math.max(norm.length, cl.length)
+    if (maxLen < 3) continue
+    const d = levenshtein(norm, cl)
+    const ratio = d / maxLen
+    if (ratio < bestRatio && ratio <= 0.34) {
+      bestRatio = ratio
+      best = c
+    }
+  }
+  return best
+}
+
+/** Normalize free-text label to Title Case; reject junk. Returns null if unusable. */
+export function sanitizeCustomCategoryLabel(raw: string): string | null {
+  let s = raw.trim().replace(/\s+/g, ' ')
+  if (s.length < 2 || s.length > 48) return null
+  if (/[|<>{}[\]\\]/.test(s)) return null
+  s = s
+    .split(/\s+/)
+    .map((w) => {
+      if (!w) return w
+      if (/^[&]+$/.test(w)) return w
+      return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()
+    })
+    .join(' ')
+  if (s.length < 2) return null
+  return s
+}
+
+function canonicalCaseIfMatches(s: string): string {
+  for (const c of categories) {
+    if (c.toLowerCase() === s.toLowerCase()) return c
+  }
+  return s
 }
 
 /**
@@ -113,19 +225,46 @@ export function normalizeToolCategory(raw: string | null | undefined): string {
     for (const c of categories) {
       if (c.toLowerCase() === pl) return c
     }
+    const fuzzy = closestCanonicalCategory(p)
+    if (fuzzy) return fuzzy
   }
   if (parts.length === 1) {
     const p0 = parts[0]
-    const legacy =
-      LEGACY_TOOL_CATEGORY_ALIASES[s] ??
-      LEGACY_TOOL_CATEGORY_ALIASES[lower]
-    if (legacy && categorySet.has(legacy)) return legacy
-    for (const c of categories) {
-      if (c.toLowerCase() === p0.toLowerCase()) return c
-    }
+    const custom = sanitizeCustomCategoryLabel(p0)
+    if (custom) return canonicalCaseIfMatches(custom)
     return 'Other'
   }
   return 'Other'
+}
+
+/**
+ * After normalizing AI/user category picks: drop redundant "Other" whenever at least
+ * one more specific category exists; keep at most one non-canonical (custom) label.
+ */
+export function finalizeToolCategoriesList(normalized: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const c of normalized) {
+    if (!c || seen.has(c)) continue
+    seen.add(c)
+    out.push(c)
+  }
+  const withoutOther = out.filter((c) => c !== 'Other')
+  const base = withoutOther.length > 0 ? withoutOther : out
+  let firstCustomSeen = false
+  const collapsed: string[] = []
+  for (const c of base) {
+    if (categorySet.has(c)) {
+      collapsed.push(c)
+      continue
+    }
+    if (!firstCustomSeen) {
+      firstCustomSeen = true
+      collapsed.push(c)
+    }
+  }
+  const capped = collapsed.slice(0, 5)
+  return capped.length > 0 ? capped : ['Other']
 }
 
 // Pre-process schema to handle empty strings for tools + legacy single `category`
@@ -135,7 +274,7 @@ const toolObjectSchema = z.object({
   url: z.string().url('Must be a valid URL'),
   logoUrl: z.union([z.string().url('Must be a valid URL'), z.null()]).optional().nullable(),
   categories: z
-    .array(z.string())
+    .array(z.string().min(1).max(48))
     .min(1, 'Select at least one category')
     .max(12),
   tags: z.string().optional().nullable(),
@@ -152,14 +291,18 @@ const preprocessTool = z.preprocess((data: any) => {
       const fromArr: string[] = data.categories.map((c: unknown) =>
         normalizeToolCategory(String(c)),
       )
-      categories = [...new Set(fromArr)].filter((c) => c.length > 0)
+      categories = finalizeToolCategoriesList(
+        [...new Set(fromArr)].filter((c) => c.length > 0),
+      )
     }
     if (
       categories.length === 0 &&
       data.category != null &&
       String(data.category).trim()
     ) {
-      categories = [normalizeToolCategory(String(data.category))]
+      categories = finalizeToolCategoriesList([
+        normalizeToolCategory(String(data.category)),
+      ])
     }
     if (categories.length === 0) {
       categories = ['Other']

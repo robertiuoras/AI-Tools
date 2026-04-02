@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { categories, normalizeToolCategory } from '@/lib/schemas'
+import {
+  categories,
+  finalizeToolCategoriesList,
+  normalizeToolCategory,
+} from '@/lib/schemas'
 
-/** Normalize + dedupe AI category output; cap length; primary = first. */
+/** Normalize + dedupe AI category output; drop redundant "Other"; cap length; primary = first. */
 function categoriesFromAiContent(content: {
   categories?: unknown
   category?: unknown
@@ -22,7 +26,7 @@ function categoriesFromAiContent(content: {
       out.push(c)
     }
   }
-  return out.slice(0, 5)
+  return finalizeToolCategoriesList(out)
 }
 
 interface AnalysisResult {
@@ -30,7 +34,7 @@ interface AnalysisResult {
   description: string
   /** Primary category (same as categories[0]) */
   category: string
-  /** 1–5 labels from the allowed list, best match first */
+  /** 1–5 labels (preferred list + optional one custom), best match first */
   categories: string[]
   tags: string
   revenue: 'free' | 'freemium' | 'paid' | 'enterprise' | null
@@ -366,8 +370,10 @@ Visits (search for numbers):
 - New/niche → 10K-100K
 - null only if no indicators
 
-Allowed categories (each entry in "categories" MUST be copied exactly from this list):
+Preferred categories (match spelling exactly when you use one of these — they map to filters on the site):
 ${categories.map((c) => `- "${c}"`).join('\n')}
+
+You may add at most ONE custom category string in "categories" only when no label above is even close (2–4 words, Title Case, max 40 characters). Prefer reusing a label from the list with a close meaning instead of inventing a near-duplicate.
 
 Return JSON:
 {
@@ -385,7 +391,10 @@ Rules:
 - Revenue: Analyze pricing carefully
 - Visits: Provide number if any indicators exist
 - Tags: Always provide (even if generic)
-- categories: 2–4 strings when the tool clearly spans multiple areas (e.g. SaaS + Productivity + AI Automation); 1 string if only one fits. Order by relevance (first = primary). Every value must match the allowed list exactly — spelling and spacing. No duplicates. Never use pipes inside strings.
+- categories: Pick 2–3 labels that best fit (max 4). Order by relevance (first = primary). Prefer items from the preferred list above; each must be either copied exactly from that list OR your single optional custom label. No duplicates. Never use pipes inside strings.
+- categories: Prefer specific labels over "Other". Do NOT include "Other" if you already have two or more other specific categories — "Other" is only for tools that truly do not fit elsewhere.
+- categories: Use "News" for AI news sites, newsletters, daily digests, curated industry updates, or headline aggregators (not generic web search — those lean "Research" or "SaaS" as appropriate).
+- categories: Do not pad with loosely related labels; accuracy beats quantity. If an existing preferred label is a close fit, use it — do not add a custom label that means almost the same thing.
 - Return ONLY valid JSON, no markdown formatting`
 
     console.log('🚀 [OpenAI] ==========================================')
@@ -402,7 +411,8 @@ Rules:
         messages: [
           {
             role: 'system',
-            content: 'Analyze AI tools. Return valid JSON only.',
+            content:
+              'Analyze AI tools. Return valid JSON only. Prefer categories from the provided list; one short custom category is allowed only if nothing on the list fits. Map near-synonyms to the closest list label. Prefer News for newsletters and daily AI news; avoid unnecessary Other.',
           },
           { role: 'user', content: prompt },
         ],

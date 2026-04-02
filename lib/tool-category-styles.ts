@@ -26,6 +26,7 @@ export const toolCategoryBadgeClassName = (category: string): string => {
       'bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-500/25',
     'Music & Audio':
       'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/25',
+    News: 'bg-red-500/10 text-red-800 dark:text-red-300 border-red-500/25',
     Other: 'bg-gray-500/10 text-gray-700 dark:text-gray-400 border-gray-500/25',
     Productivity:
       'bg-cyan-500/10 text-cyan-700 dark:text-cyan-400 border-cyan-500/25',

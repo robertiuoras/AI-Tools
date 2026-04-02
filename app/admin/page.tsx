@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/select'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useToast } from '@/components/ui/toaster'
-import { categories, videoCategories } from '@/lib/schemas'
+import { categories, normalizeToolCategory, videoCategories } from '@/lib/schemas'
 import { toolCategoryBadgeClass } from '@/lib/tool-category-styles'
 import { toolCategoryList } from '@/lib/tool-categories'
 import type { Tool, Video } from '@/lib/supabase'
@@ -500,10 +500,11 @@ export default function AdminPage() {
   const addCustomCategory = () => {
     const raw = customCategoryInput.trim()
     if (!raw) return
+    const normalized = normalizeToolCategory(raw)
     const existing = availableAdminCategories.find(
-      (c) => c.toLowerCase() === raw.toLowerCase(),
+      (c) => c.toLowerCase() === normalized.toLowerCase(),
     )
-    toggleToolCategory(existing ?? raw)
+    toggleToolCategory(existing ?? normalized)
     setCustomCategoryInput('')
   }
 
