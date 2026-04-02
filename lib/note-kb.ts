@@ -29,3 +29,8 @@ export function noteKbRedoParen(): string {
 export function noteKbHighlightParen(): string {
   return noteIsApplePlatform() ? `(⌘⇧H)` : `(Ctrl+Shift+H)`;
 }
+
+/** Find in note (notes page) */
+export function noteKbFindInNoteParen(): string {
+  return noteKbParen("F");
+}

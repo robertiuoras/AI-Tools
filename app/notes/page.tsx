@@ -27,6 +27,7 @@ import {
   noteKbPastePlainParen,
   noteKbRedoParen,
   noteKbHighlightParen,
+  noteKbFindInNoteParen,
 } from "@/lib/note-kb";
 import {
   findTextInRoot,
@@ -553,7 +554,7 @@ function renderPreviewMarkdown(text: string): ReactNode {
 }
 
 const NOTE_HTML_VIEW_CLASS =
-  "note-html-view min-h-0 space-y-2 text-sm [&_figure[data-note-image='1']]:max-w-full [&_figure[data-note-image='1']]:overflow-visible [&_figure[data-note-image='1']_img]:rounded-md [&_h3]:scroll-m-20 [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:tracking-tight [&_li]:my-0.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:whitespace-pre-wrap [&_ul]:list-disc [&_ul]:pl-5 [&_ul.note-task-list]:list-none [&_ul.note-task-list]:pl-0 [&_ul.note-task-list_li]:flex [&_ul.note-task-list_li]:items-start [&_ul.note-task-list_li]:gap-2 [&_ul.note-task-list_li]:my-0.5 [&_ul.note-task-list_.note-task-checkbox]:mt-0.5 [&_ul.note-task-list_.note-task-checkbox]:h-4 [&_ul.note-task-list_.note-task-checkbox]:w-4 [&_ul.note-task-list_.note-task-checkbox]:shrink-0 [&_ul.note-task-list_.note-task-checkbox]:cursor-pointer [&_ul.note-task-list_.note-task-checkbox]:rounded-sm [&_ul.note-task-list_li>span]:min-h-[1.25em] [&_ul.note-task-list_li>span]:min-w-0 [&_ul.note-task-list_li>span]:flex-1 [&_ul.note-task-list_li>span]:cursor-text [&_ul.note-task-list_li>span]:outline-none [&_a.note-mention]:inline-flex [&_a.note-mention]:max-w-full [&_a.note-mention]:items-center [&_a.note-mention]:rounded-md [&_a.note-mention]:border [&_a.note-mention]:border-border/70 [&_a.note-mention]:bg-muted/85 [&_a.note-mention]:px-1.5 [&_a.note-mention]:py-px [&_a.note-mention]:text-xs [&_a.note-mention]:font-medium [&_a.note-mention]:leading-snug [&_a.note-mention]:text-foreground [&_a.note-mention]:no-underline [&_a.note-mention]:shadow-sm [&_a.note-mention]:decoration-transparent [&_a.note-mention]:transition-colors [&_a.note-mention]:cursor-pointer [&_a.note-mention]:hover:bg-muted";
+  "note-html-view min-h-0 space-y-2 text-sm [&_figure[data-note-image='1']]:max-w-full [&_figure[data-note-image='1']]:min-h-[48px] [&_figure[data-note-image='1']]:min-w-[120px] [&_figure[data-note-image='1']]:cursor-grab [&_figure[data-note-image='1']]:overflow-visible [&_figure[data-note-image='1']_img]:rounded-md [&_figure[data-note-image='1']_img]:min-h-[32px] [&_h3]:scroll-m-20 [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:tracking-tight [&_li]:my-0.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:whitespace-pre-wrap [&_ul]:list-disc [&_ul]:pl-5 [&_ul.note-task-list]:list-none [&_ul.note-task-list]:pl-0 [&_ul.note-task-list_li]:flex [&_ul.note-task-list_li]:items-start [&_ul.note-task-list_li]:gap-2 [&_ul.note-task-list_li]:my-0.5 [&_ul.note-task-list_.note-task-checkbox]:mt-0.5 [&_ul.note-task-list_.note-task-checkbox]:h-4 [&_ul.note-task-list_.note-task-checkbox]:w-4 [&_ul.note-task-list_.note-task-checkbox]:shrink-0 [&_ul.note-task-list_.note-task-checkbox]:cursor-pointer [&_ul.note-task-list_.note-task-checkbox]:rounded-sm [&_ul.note-task-list_li>span]:min-h-[1.25em] [&_ul.note-task-list_li>span]:min-w-0 [&_ul.note-task-list_li>span]:flex-1 [&_ul.note-task-list_li>span]:cursor-text [&_ul.note-task-list_li>span]:outline-none [&_a.note-mention]:inline-flex [&_a.note-mention]:max-w-full [&_a.note-mention]:items-center [&_a.note-mention]:rounded-md [&_a.note-mention]:border [&_a.note-mention]:border-border/70 [&_a.note-mention]:bg-muted/85 [&_a.note-mention]:px-1.5 [&_a.note-mention]:py-px [&_a.note-mention]:text-xs [&_a.note-mention]:font-medium [&_a.note-mention]:leading-snug [&_a.note-mention]:text-foreground [&_a.note-mention]:no-underline [&_a.note-mention]:shadow-sm [&_a.note-mention]:decoration-transparent [&_a.note-mention]:transition-colors [&_a.note-mention]:cursor-pointer [&_a.note-mention]:hover:bg-muted";
 
 function renderReadNoteBody(
   content: string,
@@ -728,6 +729,12 @@ export default function NotesPage() {
   const [findInNoteQuery, setFindInNoteQuery] = useState("");
   const [findInNoteOpen, setFindInNoteOpen] = useState(false);
   const [fmtInMention, setFmtInMention] = useState(false);
+  /** Image upload to /api/notes/images (XHR progress + decode after insert). */
+  const [imageUploadState, setImageUploadState] = useState<{
+    active: boolean;
+    progress: number;
+    phase: "upload" | "decode";
+  }>({ active: false, progress: 0, phase: "upload" });
   const [contextMenu, setContextMenu] = useState<{
     open: boolean;
     x: number;
@@ -1083,6 +1090,28 @@ export default function NotesPage() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [findInNoteOpen]);
+
+  /** ⌘F / Ctrl+F: find in note (avoid hijacking sidebar search / new-title fields). */
+  useEffect(() => {
+    if (!selectedNoteId) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod || e.key.toLowerCase() !== "f") return;
+      const t = e.target;
+      if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) {
+        if (t.dataset.notesGlobalSearch === "1" || t.dataset.notesNewTitle === "1") {
+          return;
+        }
+      }
+      e.preventDefault();
+      setFindInNoteOpen(true);
+      queueMicrotask(() =>
+        findInNotePanelRef.current?.querySelector("input")?.focus(),
+      );
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [selectedNoteId]);
 
   /** Switch page: single notes fetch with abort if user switches again. */
   useEffect(() => {
@@ -1711,12 +1740,14 @@ export default function NotesPage() {
       const root = editorRef.current;
       const sel = window.getSelection();
       if (!root || !sel || sel.rangeCount === 0) {
-        editorSelectionRef.current = null;
+        if (!contextMenuOpenRef.current) {
+          editorSelectionRef.current = null;
+        }
       } else {
         const r = sel.getRangeAt(0);
         if (root.contains(r.commonAncestorContainer)) {
           editorSelectionRef.current = r.cloneRange();
-        } else {
+        } else if (!contextMenuOpenRef.current) {
           editorSelectionRef.current = null;
         }
       }
@@ -1726,7 +1757,7 @@ export default function NotesPage() {
     return () => document.removeEventListener("selectionchange", onSel);
   }, [isEditing, refreshFmt]);
 
-  /** execCommand toggles most inline styles; keeps selection via restoreEditorSelection. */
+  /** execCommand for inline styles; runs twice when needed so toggling off works (context menu + toolbar). */
   const runFormatCommand = useCallback(
     (command: string, value?: string) => {
       const root = editorRef.current;
@@ -1737,10 +1768,46 @@ export default function NotesPage() {
       } catch {
         /* ignore */
       }
-      try {
-        document.execCommand(command, false, value);
-      } catch {
-        /* ignore */
+      const inlineToggle = [
+        "bold",
+        "italic",
+        "underline",
+        "strikeThrough",
+      ] as const;
+      if (
+        (inlineToggle as readonly string[]).includes(command) &&
+        value === undefined
+      ) {
+        let before = false;
+        try {
+          before = document.queryCommandState(command);
+        } catch {
+          /* ignore */
+        }
+        try {
+          document.execCommand(command, false, value);
+        } catch {
+          /* ignore */
+        }
+        let after = false;
+        try {
+          after = document.queryCommandState(command);
+        } catch {
+          /* ignore */
+        }
+        if (before && after) {
+          try {
+            document.execCommand(command, false, value);
+          } catch {
+            /* ignore */
+          }
+        }
+      } else {
+        try {
+          document.execCommand(command, false, value);
+        } catch {
+          /* ignore */
+        }
       }
       root?.dispatchEvent(new Event("input", { bubbles: true }));
       refreshFmt();
@@ -2086,8 +2153,13 @@ export default function NotesPage() {
     figure.setAttribute("data-note-image", "1");
     figure.style.display = "block";
     figure.style.position = "relative";
+    figure.style.boxSizing = "border-box";
+    figure.style.cursor = "grab";
+    figure.style.touchAction = "none";
     if (!figure.style.maxWidth) figure.style.maxWidth = "100%";
     if (!figure.style.width) figure.style.width = "420px";
+    figure.style.minWidth = "120px";
+    figure.style.minHeight = "48px";
     if (!figure.style.marginTop) figure.style.marginTop = "8px";
     if (!figure.style.marginBottom) figure.style.marginBottom = "8px";
     if (!figure.style.marginLeft) figure.style.marginLeft = "0px";
@@ -2099,6 +2171,8 @@ export default function NotesPage() {
       img.style.height = "auto";
       img.style.maxWidth = "100%";
       img.style.display = "block";
+      img.style.minHeight = "32px";
+      img.style.pointerEvents = "auto";
       if (!img.getAttribute("loading")) img.setAttribute("loading", "lazy");
     }
 
@@ -2111,10 +2185,11 @@ export default function NotesPage() {
       handle.setAttribute("data-resize-handle", "1");
       handle.title = "Drag to resize";
       handle.style.position = "absolute";
-      handle.style.right = "-5px";
-      handle.style.bottom = "-5px";
-      handle.style.width = "12px";
-      handle.style.height = "12px";
+      handle.style.right = "4px";
+      handle.style.bottom = "4px";
+      handle.style.width = "20px";
+      handle.style.height = "20px";
+      handle.style.zIndex = "3";
       handle.style.borderRadius = "999px";
       handle.style.background = "rgb(99 102 241)";
       handle.style.border = "1px solid white";
@@ -2149,15 +2224,15 @@ export default function NotesPage() {
   }, [token]);
 
   const insertImageIntoEditor = useCallback(
-    (imageUrl: string) => {
+    (imageUrl: string): HTMLImageElement | null => {
       const root = editorRef.current;
-      if (!root) return;
+      if (!root) return null;
       root.focus();
       restoreEditorSelection();
       const sel = window.getSelection();
-      if (!sel || sel.rangeCount === 0) return;
+      if (!sel || sel.rangeCount === 0) return null;
       const r = sel.getRangeAt(0);
-      if (!root.contains(r.commonAncestorContainer)) return;
+      if (!root.contains(r.commonAncestorContainer)) return null;
 
       const figure = document.createElement("figure");
       const img = document.createElement("img");
@@ -2168,8 +2243,8 @@ export default function NotesPage() {
       img.style.maxWidth = "100%";
       img.style.display = "block";
       img.setAttribute("loading", "lazy");
-      ensureImageFigureUi(figure);
       figure.appendChild(img);
+      ensureImageFigureUi(figure);
       r.deleteContents();
       r.insertNode(figure);
       r.setStartAfter(figure);
@@ -2177,6 +2252,7 @@ export default function NotesPage() {
       sel.removeAllRanges();
       sel.addRange(r);
       root.dispatchEvent(new Event("input", { bubbles: true }));
+      return img;
     },
     [ensureImageFigureUi, restoreEditorSelection],
   );
@@ -2185,16 +2261,71 @@ export default function NotesPage() {
     async (file: File) => {
       const bearer = await getEditorAuthToken();
       if (!bearer) return;
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch("/api/notes/images", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${bearer}` },
-        body: fd,
-      });
-      if (!res.ok) return;
-      const data = (await res.json()) as { url?: string };
-      if (data.url) insertImageIntoEditor(data.url);
+      setImageUploadState({ active: true, progress: -1, phase: "upload" });
+      let url: string | null = null;
+      try {
+        url = await new Promise<string | null>((resolve) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("POST", "/api/notes/images");
+          xhr.setRequestHeader("Authorization", `Bearer ${bearer}`);
+          xhr.upload.onprogress = (ev) => {
+            if (ev.lengthComputable) {
+              setImageUploadState({
+                active: true,
+                progress: Math.round((ev.loaded / ev.total) * 100),
+                phase: "upload",
+              });
+            } else {
+              setImageUploadState({
+                active: true,
+                progress: -1,
+                phase: "upload",
+              });
+            }
+          };
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              try {
+                const data = JSON.parse(xhr.responseText) as { url?: string };
+                resolve(data.url ?? null);
+              } catch {
+                resolve(null);
+              }
+            } else resolve(null);
+          };
+          xhr.onerror = () => resolve(null);
+          xhr.onabort = () => resolve(null);
+          const fd = new FormData();
+          fd.append("file", file);
+          xhr.send(fd);
+        });
+      } finally {
+        if (!url) {
+          setImageUploadState({ active: false, progress: 0, phase: "upload" });
+        }
+      }
+      if (!url) return;
+      setImageUploadState({ active: true, progress: -1, phase: "decode" });
+      const img = insertImageIntoEditor(url);
+      if (!img) {
+        setImageUploadState({ active: false, progress: 0, phase: "upload" });
+        return;
+      }
+      const finishDecode = () =>
+        setImageUploadState({ active: false, progress: 0, phase: "upload" });
+      if (img.complete && img.naturalWidth > 0) {
+        queueMicrotask(finishDecode);
+        return;
+      }
+      const maxWait = window.setTimeout(finishDecode, 12000);
+      img.onload = () => {
+        window.clearTimeout(maxWait);
+        finishDecode();
+      };
+      img.onerror = () => {
+        window.clearTimeout(maxWait);
+        finishDecode();
+      };
     },
     [getEditorAuthToken, insertImageIntoEditor],
   );
@@ -2606,6 +2737,14 @@ export default function NotesPage() {
   const handleEditorContextMenu = useCallback(
     (e: MouseEvent<HTMLDivElement>) => {
       e.preventDefault();
+      const root = editorRef.current;
+      const sel = window.getSelection();
+      if (root && sel && sel.rangeCount > 0) {
+        const r = sel.getRangeAt(0);
+        if (root.contains(r.commonAncestorContainer)) {
+          editorSelectionRef.current = r.cloneRange();
+        }
+      }
       openingContextMenuRef.current = true;
       contextMenuOpenRef.current = true;
       const target = e.target as HTMLElement;
@@ -2656,6 +2795,7 @@ export default function NotesPage() {
 
       if (handle) {
         e.preventDefault();
+        figure.style.cursor = "nwse-resize";
         const width = Math.max(120, figure.getBoundingClientRect().width);
         imageDragStateRef.current = {
           mode: "resize",
@@ -2666,8 +2806,9 @@ export default function NotesPage() {
           startMarginLeft: parseFloat(figure.style.marginLeft || "0") || 0,
           startMarginTop: parseFloat(figure.style.marginTop || "8") || 8,
         };
-      } else if (target.tagName === "IMG" || target.closest("img")) {
+      } else {
         e.preventDefault();
+        figure.style.cursor = "grabbing";
         imageDragStateRef.current = {
           mode: "move",
           figure,
@@ -2677,8 +2818,6 @@ export default function NotesPage() {
           startMarginLeft: parseFloat(figure.style.marginLeft || "0") || 0,
           startMarginTop: parseFloat(figure.style.marginTop || "8") || 8,
         };
-      } else {
-        return;
       }
 
       const onMove = (ev: globalThis.PointerEvent) => {
@@ -2700,6 +2839,7 @@ export default function NotesPage() {
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
         imageDragStateRef.current = null;
+        figure.style.cursor = "grab";
         root.dispatchEvent(new Event("input", { bubbles: true }));
       };
 
@@ -2997,6 +3137,7 @@ export default function NotesPage() {
             <Label className="text-xs text-muted-foreground">Notes</Label>
             <div className="flex gap-2">
               <Input
+                data-notes-new-title="1"
                 placeholder="New note title..."
                 value={newNoteTitle}
                 onChange={(e) => setNewNoteTitle(e.target.value)}
@@ -3018,6 +3159,7 @@ export default function NotesPage() {
               <div className="relative">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                 <Input
+                  data-notes-global-search="1"
                   className="h-8 pl-8 text-xs"
                   placeholder="Title or body (all pages)…"
                   value={searchAllNotesQuery}
@@ -3513,7 +3655,7 @@ export default function NotesPage() {
                               findInNoteOpen &&
                                 "text-primary ring-1 ring-primary/30 rounded-md",
                             )}
-                            title="Find in note"
+                            title={`Find in note ${noteKbFindInNoteParen()}`}
                             aria-expanded={findInNoteOpen}
                             onMouseDown={(e) => e.preventDefault()}
                             onClick={() =>
@@ -3600,7 +3742,7 @@ export default function NotesPage() {
                                 findInNoteOpen &&
                                   "text-primary ring-1 ring-primary/30 rounded-md",
                               )}
-                              title="Find in note"
+                              title={`Find in note ${noteKbFindInNoteParen()}`}
                               aria-expanded={findInNoteOpen}
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={() =>
@@ -3983,6 +4125,7 @@ export default function NotesPage() {
                       {findInNoteOpen && (
                         <div
                           ref={findInNotePanelRef}
+                          data-find-in-note="1"
                           className="flex w-full min-w-0 flex-wrap items-center gap-1.5 rounded-md border border-border/70 bg-muted/30 px-2 py-1.5"
                         >
                           <Input
@@ -4151,6 +4294,7 @@ export default function NotesPage() {
                       <button
                         type="button"
                         className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        onMouseDown={(e) => e.preventDefault()}
                         onClick={() => {
                           setContextMenu((s) => ({ ...s, open: false }));
                           runFormatCommand("bold");
@@ -4167,6 +4311,7 @@ export default function NotesPage() {
                       <button
                         type="button"
                         className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        onMouseDown={(e) => e.preventDefault()}
                         onClick={() => {
                           setContextMenu((s) => ({ ...s, open: false }));
                           runFormatCommand("italic");
@@ -4183,6 +4328,7 @@ export default function NotesPage() {
                       <button
                         type="button"
                         className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        onMouseDown={(e) => e.preventDefault()}
                         onClick={() => {
                           setContextMenu((s) => ({ ...s, open: false }));
                           runFormatCommand("underline");
@@ -4199,6 +4345,7 @@ export default function NotesPage() {
                       <button
                         type="button"
                         className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        onMouseDown={(e) => e.preventDefault()}
                         onClick={() => {
                           setContextMenu((s) => ({ ...s, open: false }));
                           runFormatCommand("strikeThrough");
@@ -4212,6 +4359,7 @@ export default function NotesPage() {
                       <button
                         type="button"
                         className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        onMouseDown={(e) => e.preventDefault()}
                         onClick={() => {
                           setContextMenu((s) => ({ ...s, open: false }));
                           toggleHighlightColor();
@@ -4297,6 +4445,29 @@ export default function NotesPage() {
               </div>
             )}
           </section>
+        </div>
+      )}
+      {imageUploadState.active && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="pointer-events-none fixed bottom-6 left-1/2 z-[200] w-[min(22rem,calc(100vw-2rem))] -translate-x-1/2 rounded-lg border border-border bg-popover px-4 py-3 text-popover-foreground shadow-lg"
+        >
+          <p className="mb-2 text-xs font-medium">
+            {imageUploadState.phase === "decode"
+              ? "Processing image…"
+              : "Uploading image…"}
+          </p>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+            {imageUploadState.progress < 0 ? (
+              <div className="h-full w-full animate-pulse rounded-full bg-primary/80" />
+            ) : (
+              <div
+                className="h-full rounded-full bg-primary transition-[width] duration-150 ease-out"
+                style={{ width: `${Math.min(100, imageUploadState.progress)}%` }}
+              />
+            )}
+          </div>
         </div>
       )}
       {typeof document !== "undefined" &&
