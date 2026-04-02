@@ -24,3 +24,8 @@ export function noteKbPastePlainParen(): string {
 export function noteKbRedoParen(): string {
   return noteIsApplePlatform() ? `(⌘⇧Z)` : `(Ctrl+Y)`;
 }
+
+/** Highlight toggle in notes editor */
+export function noteKbHighlightParen(): string {
+  return noteIsApplePlatform() ? `(⌘⇧H)` : `(Ctrl+Shift+H)`;
+}

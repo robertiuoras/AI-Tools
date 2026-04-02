@@ -26,8 +26,13 @@ import {
   noteKbParen,
   noteKbPastePlainParen,
   noteKbRedoParen,
+  noteKbHighlightParen,
 } from "@/lib/note-kb";
-import { findTextInRoot } from "@/lib/note-find";
+import {
+  findTextInRoot,
+  clearFindHighlights,
+  applyFindMatchHighlight,
+} from "@/lib/note-find";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -1058,6 +1063,18 @@ export default function NotesPage() {
   }, [selectedNoteId]);
 
   useEffect(() => {
+    clearFindHighlights(editorRef.current);
+    clearFindHighlights(readNoteBodyWrapRef.current);
+  }, [selectedNoteId]);
+
+  useEffect(() => {
+    if (!findInNoteQuery.trim()) {
+      clearFindHighlights(editorRef.current);
+      clearFindHighlights(readNoteBodyWrapRef.current);
+    }
+  }, [findInNoteQuery]);
+
+  useEffect(() => {
     if (!findInNoteOpen) return;
     const onKey = (e: Event) => {
       if (e instanceof KeyboardEvent && e.key === "Escape")
@@ -1284,6 +1301,13 @@ export default function NotesPage() {
     const root = doc.body.firstElementChild;
     if (!root) return html;
     root.querySelectorAll("[data-note-ui='1']").forEach((el) => el.remove());
+    root.querySelectorAll("mark[data-note-find='1']").forEach((el) => {
+      if (!(el instanceof HTMLElement)) return;
+      const parent = el.parentNode;
+      if (!parent) return;
+      while (el.firstChild) parent.insertBefore(el.firstChild, el);
+      parent.removeChild(el);
+    });
     return root.innerHTML;
   }, []);
 
@@ -2419,7 +2443,11 @@ export default function NotesPage() {
       } catch {
         /* ignore */
       }
-      findTextInRoot(root, q, forward);
+      clearFindHighlights(root);
+      const found = findTextInRoot(root, q, forward);
+      if (found) {
+        applyFindMatchHighlight(root, NOTE_MARK_HIGHLIGHT_CLASS);
+      }
     },
     [findInNoteQuery, isEditing, selectedNoteId],
   );
@@ -2496,6 +2524,11 @@ export default function NotesPage() {
         void pastePlainFromClipboard();
         return;
       }
+      if (mod && e.shiftKey && e.key.toLowerCase() === "h") {
+        e.preventDefault();
+        toggleHighlightColor();
+        return;
+      }
       if (!mod) return;
       if (e.key.toLowerCase() === "z") {
         if (e.shiftKey) {
@@ -2528,6 +2561,7 @@ export default function NotesPage() {
       pastePlainFromClipboard,
       runUndo,
       runRedo,
+      toggleHighlightColor,
     ],
   );
 
@@ -3691,6 +3725,7 @@ export default function NotesPage() {
                                       )}
                                       title={formatShortcutTooltip(
                                         "Highlight",
+                                        { extra: noteKbHighlightParen() },
                                       )}
                                       onClick={toggleHighlightColor}
                                     >
@@ -4172,6 +4207,22 @@ export default function NotesPage() {
                         <span className="flex items-center gap-2">
                           <Strikethrough className="h-3.5 w-3.5" />
                           Strikethrough
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        onClick={() => {
+                          setContextMenu((s) => ({ ...s, open: false }));
+                          toggleHighlightColor();
+                        }}
+                      >
+                        <span className="flex items-center gap-2">
+                          <Highlighter className="h-3.5 w-3.5" />
+                          Highlight
+                        </span>
+                        <span className="text-[10px] text-muted-foreground tabular-nums">
+                          {noteKbHighlightParen()}
                         </span>
                       </button>
                       <button

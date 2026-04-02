@@ -2,6 +2,69 @@
  * Find text within a root element (read or contenteditable), case-insensitive.
  * Returns whether a match was selected and scrolled into view.
  */
+
+/** Transient find-match marks (stripped before save; same visual class as format highlight). */
+export const NOTE_FIND_MARK_ATTR = "data-note-find";
+
+function unwrapFindMark(el: HTMLElement): void {
+  const parent = el.parentNode;
+  if (!parent) return;
+  while (el.firstChild) parent.insertBefore(el.firstChild, el);
+  parent.removeChild(el);
+}
+
+/** Remove transient find highlights (does not remove user-applied highlights). */
+export function clearFindHighlights(root: HTMLElement | null): void {
+  if (!root) return;
+  root
+    .querySelectorAll(`mark[${NOTE_FIND_MARK_ATTR}="1"]`)
+    .forEach((el) => {
+      if (el instanceof HTMLElement) unwrapFindMark(el);
+    });
+}
+
+function wrapRangeInFindMark(
+  root: HTMLElement,
+  r: Range,
+  highlightClass: string,
+): void {
+  const mark = document.createElement("mark");
+  mark.className = highlightClass;
+  mark.setAttribute(NOTE_FIND_MARK_ATTR, "1");
+  if (r.collapsed) return;
+  try {
+    r.surroundContents(mark);
+  } catch {
+    const frag = r.extractContents();
+    mark.appendChild(frag);
+    r.insertNode(mark);
+  }
+  const sel = window.getSelection();
+  if (sel) {
+    sel.removeAllRanges();
+    const nr = document.createRange();
+    nr.selectNodeContents(mark);
+    nr.collapse(false);
+    sel.addRange(nr);
+  }
+}
+
+/**
+ * Wraps the current selection in a transient highlight mark (call after findTextInRoot succeeds).
+ * Uses the same `highlightClass` as the format highlighter (e.g. `note-highlight`).
+ */
+export function applyFindMatchHighlight(
+  root: HTMLElement | null,
+  highlightClass: string,
+): void {
+  if (!root) return;
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return;
+  const r = sel.getRangeAt(0);
+  if (!root.contains(r.commonAncestorContainer) || r.collapsed) return;
+  wrapRangeInFindMark(root, r, highlightClass);
+}
+
 export function findTextInRoot(
   root: HTMLElement | null,
   query: string,
