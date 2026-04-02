@@ -26,6 +26,7 @@ import { Label } from "@/components/ui/label";
 import {
   Star,
   Plus,
+  Clock,
   Trash2,
   FileText,
   Copy,
@@ -69,6 +70,33 @@ const NUMBERED_LINE_RE = /^(\s*)\d+\.\s+/;
 const NOTE_MARK_HIGHLIGHT_CLASS = "note-highlight";
 
 /** Tooltip for format toolbar: optional Ctrl/⌘ shortcut on hover. */
+/** Relative time for note `updatedAt` (ISO); refreshes when `nowMs` bumps each minute. */
+function formatNoteEditedRelative(
+  iso: string | undefined,
+  nowMs: number,
+): string {
+  if (!iso) return "";
+  const d = Date.parse(iso);
+  if (Number.isNaN(d)) return "";
+  const diffSec = Math.round((d - nowMs) / 1000);
+  try {
+    const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+    const abs = Math.abs(diffSec);
+    if (abs < 45) return rtf.format(diffSec, "second");
+    const diffMin = Math.round(diffSec / 60);
+    if (Math.abs(diffMin) < 45) return rtf.format(diffMin, "minute");
+    const diffHour = Math.round(diffMin / 60);
+    if (Math.abs(diffHour) < 36) return rtf.format(diffHour, "hour");
+    const diffDay = Math.round(diffHour / 24);
+    if (Math.abs(diffDay) < 25) return rtf.format(diffDay, "day");
+    const diffMonth = Math.round(diffDay / 30);
+    if (Math.abs(diffMonth) < 11) return rtf.format(diffMonth, "month");
+    return rtf.format(Math.round(diffDay / 365), "year");
+  } catch {
+    return new Date(d).toLocaleString();
+  }
+}
+
 function formatShortcutTooltip(
   label: string,
   opts?: { key?: string; extra?: string },
@@ -586,6 +614,8 @@ export default function NotesPage() {
   const [newNoteTitle, setNewNoteTitle] = useState("");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [noteBodyFullscreen, setNoteBodyFullscreen] = useState(false);
+  /** Bumps every minute so "last edited" relative labels stay fresh. */
+  const [editedNowMs, setEditedNowMs] = useState(() => Date.now());
   const [allNotesForMentions, setAllNotesForMentions] = useState<Note[]>([]);
   const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState("");
@@ -681,6 +711,11 @@ export default function NotesPage() {
   useEffect(() => {
     setNoteBodyFullscreen(false);
   }, [selectedNoteId]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => setEditedNowMs(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     if (!noteBodyFullscreen) return;
@@ -1018,7 +1053,7 @@ export default function NotesPage() {
     noteId: string,
     patch: Partial<Pick<Note, "title" | "content" | "favorite">>,
     opts?: { silent?: boolean },
-  ) => {
+  ): Promise<Note | false> => {
     const res = await fetch(`/api/notes/${noteId}`, {
       method: "PUT",
       headers: authHeaders,
@@ -1030,7 +1065,7 @@ export default function NotesPage() {
     setAllNotesForMentions((prev) =>
       prev.map((n) => (n.id === noteId ? updated : n)),
     );
-    return true;
+    return updated;
   };
 
   const updateNoteRef = useRef(updateNote);
@@ -1055,12 +1090,12 @@ export default function NotesPage() {
         return true;
       }
       if (showIndicator) setAutoSaveState("saving");
-      const ok = await updateNoteRef.current(
+      const saved = await updateNoteRef.current(
         noteId,
         { content: normalized },
         { silent: true },
       );
-      if (ok) {
+      if (saved) {
         lastAutoSavedBodyRef.current = normalized;
         if (
           typeof document !== "undefined" &&
@@ -1076,25 +1111,26 @@ export default function NotesPage() {
             lastAutoSavedBodyRef.current = normalizeNoteHtmlForSave(
               editorRef.current.innerHTML,
             );
-            // Keep React state in sync with normalized DOM so read view never shows
-            // plain URL + linkified duplicate until the next full refresh.
+            // Keep React state in sync with normalized DOM; preserve server updatedAt from save.
             setNotes((prev) =>
               prev.map((n) =>
-                n.id === noteId ? { ...n, content: normalized } : n,
+                n.id === noteId
+                  ? { ...saved, content: normalized }
+                  : n,
               ),
             );
           }
         }
       }
       if (showIndicator) {
-        if (ok) {
+        if (saved) {
           setAutoSaveState("saved");
           window.setTimeout(() => setAutoSaveState("idle"), 1200);
         } else {
           setAutoSaveState("idle");
         }
       }
-      return ok;
+      return !!saved;
     },
     [stripEditorOnlyUi],
   );
@@ -2495,7 +2531,15 @@ export default function NotesPage() {
                         className="min-w-0 flex-1 cursor-default truncate text-left text-sm"
                         onClick={() => setSelectedNoteId(n.id)}
                       >
-                        {n.title}
+                        <span className="block truncate">{n.title}</span>
+                        {n.updatedAt ? (
+                          <span
+                            className="block truncate text-[10px] text-muted-foreground tabular-nums"
+                            title={new Date(n.updatedAt).toLocaleString()}
+                          >
+                            {formatNoteEditedRelative(n.updatedAt, editedNowMs)}
+                          </span>
+                        ) : null}
                       </button>
                       <Button
                         type="button"
@@ -2650,6 +2694,20 @@ export default function NotesPage() {
                     </>
                   )}
                 </div>
+                {selectedNote.updatedAt ? (
+                  <div className="flex min-w-0 items-center gap-1.5 pl-6 text-[11px] text-muted-foreground tabular-nums">
+                    <Clock className="h-3 w-3 shrink-0 opacity-80" aria-hidden />
+                    <span
+                      title={`Last edited ${new Date(selectedNote.updatedAt).toLocaleString()}`}
+                    >
+                      Last edited{" "}
+                      {formatNoteEditedRelative(
+                        selectedNote.updatedAt,
+                        editedNowMs,
+                      )}
+                    </span>
+                  </div>
+                ) : null}
                 <div
                   className={cn(
                     "flex min-h-0 min-w-0 flex-1 flex-col space-y-2",
