@@ -2537,6 +2537,10 @@ export default function NotesPage() {
       if (contextMenuOpenRef.current) return;
       if (openingContextMenuRef.current) return;
 
+      // Tab/window switch blurs the editor but should not leave edit mode.
+      const docNotVisible =
+        document.hidden || document.visibilityState === "hidden";
+
       const raw = editorRef.current?.innerHTML ?? "";
       const normalized = normalizeNoteHtmlForSave(stripEditorOnlyUi(raw));
       const sid = selectedNoteIdRef.current;
@@ -2549,6 +2553,7 @@ export default function NotesPage() {
         ),
       );
       await persistNoteBodyRef.current(sid, normalized, true);
+      if (docNotVisible) return;
       const ed = editorRef.current;
       if (ed) {
         pendingReadBodyScrollRef.current = { noteId: sid, top: ed.scrollTop };
