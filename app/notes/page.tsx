@@ -11,7 +11,6 @@ import {
   useState,
   type ClipboardEvent,
   type DragEvent,
-  type FocusEvent,
   type KeyboardEvent,
   type MouseEvent,
   type MutableRefObject,
@@ -621,6 +620,23 @@ function renderReadNoteBody(
   return renderPreviewMarkdown(content);
 }
 
+/** Radix portaled UI opened from the note editor (format panel, selects, crop dialog). */
+function isInsideDetachedNoteEditUi(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return !!target.closest(
+    [
+      "[data-radix-popper-content-wrapper]",
+      "[data-radix-select-content]",
+      '[data-slot="select-content"]',
+      "[data-radix-menu-content]",
+      "[data-radix-dropdown-menu-content]",
+      "[data-radix-dialog-overlay]",
+      "[data-radix-dialog-content]",
+      '[role="dialog"]',
+    ].join(","),
+  );
+}
+
 /** Handlers updated each parent render via ref so the editor subtree can stay memoized. */
 type NoteEditorHandlers = {
   onInput: () => void;
@@ -631,7 +647,6 @@ type NoteEditorHandlers = {
   onPointerDown: (e: ReactPointerEvent<HTMLDivElement>) => void;
   onMouseUp: () => void;
   onKeyUp: () => void;
-  onBlur: (e: FocusEvent<HTMLDivElement>) => void;
 };
 
 type NoteBodyEditorProps = {
@@ -686,7 +701,6 @@ const NoteBodyEditor = memo(
         onPointerDown={(e) => handlersRef.current.onPointerDown(e)}
         onMouseUp={() => handlersRef.current.onMouseUp()}
         onKeyUp={() => handlersRef.current.onKeyUp()}
-        onBlur={(e) => handlersRef.current.onBlur(e)}
       />
     );
   },
@@ -836,6 +850,10 @@ export default function NotesPage() {
   const contextMenuOpenRef = useRef(false);
   const openingContextMenuRef = useRef(false);
   const formatMenuOpenRef = useRef(false);
+  /** Title + toolbar + body for the open note; pointer outside = leave edit (blur ignored). */
+  const noteEditShellRef = useRef<HTMLDivElement | null>(null);
+  const imageCropOpenRef = useRef(false);
+  imageCropOpenRef.current = imageCropOpen;
 
   const flashCopied = useCallback((key: string) => {
     setCopiedKey(key);
@@ -1458,6 +1476,51 @@ export default function NotesPage() {
 
   const persistNoteBodyRef = useRef(persistNoteBody);
   persistNoteBodyRef.current = persistNoteBody;
+
+  const closeNoteBodyEditAndSave = useCallback(() => {
+    const sid = selectedNoteIdRef.current;
+    if (!sid) return;
+    void (async () => {
+      const edEl = editorRef.current;
+      const raw = edEl?.innerHTML ?? "";
+      const normalized = normalizeNoteHtmlForSave(stripEditorOnlyUi(raw));
+      setNotes((prev) =>
+        sortNotesFavoritesFirst(
+          prev.map((n) =>
+            n.id === sid ? { ...n, content: normalized } : n,
+          ),
+        ),
+      );
+      await persistNoteBodyRef.current(sid, normalized, true);
+      const ed = editorRef.current;
+      if (ed) {
+        pendingReadBodyScrollRef.current = { noteId: sid, top: ed.scrollTop };
+      }
+      formatMenuOpenRef.current = false;
+      setFormatMenuOpen(false);
+      setContextMenu((s) => ({ ...s, open: false }));
+      setIsEditing(false);
+    })();
+  }, [stripEditorOnlyUi]);
+
+  useEffect(() => {
+    if (!isEditing) return;
+    const onPointerDownCapture = (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      if (imageCropOpenRef.current) return;
+      const target = e.target as Node;
+      if (noteEditShellRef.current?.contains(target)) return;
+      if (formatMenuPanelRef.current?.contains(target)) return;
+      if (formatMenuButtonRef.current?.contains(target)) return;
+      if (mentionPickerRef.current?.contains(target)) return;
+      if (findInNotePanelRef.current?.contains(target)) return;
+      if (isInsideDetachedNoteEditUi(target)) return;
+      closeNoteBodyEditAndSave();
+    };
+    document.addEventListener("pointerdown", onPointerDownCapture, true);
+    return () =>
+      document.removeEventListener("pointerdown", onPointerDownCapture, true);
+  }, [isEditing, closeNoteBodyEditAndSave]);
 
   useEffect(() => {
     if (!isEditing || !selectedNoteId) return;
@@ -2507,62 +2570,6 @@ export default function NotesPage() {
     queueMicrotask(() => refreshMentionPickerRef.current());
   }, [stripEditorOnlyUi]);
 
-  const handleEditorBlur = useCallback((e: FocusEvent<HTMLDivElement>) => {
-    const related = e.relatedTarget as Node | null;
-    if (related && formatMenuPanelRef.current?.contains(related)) return;
-    if (related && formatMenuButtonRef.current?.contains(related)) return;
-    if (related && findInNotePanelRef.current?.contains(related)) return;
-    if (related && mentionPickerRef.current?.contains(related)) return;
-    if (contextMenuOpenRef.current) return;
-    if (openingContextMenuRef.current) return;
-
-    void (async () => {
-      await new Promise<void>((r) => requestAnimationFrame(() => r()));
-      await new Promise<void>((r) => requestAnimationFrame(() => r()));
-      if (formatMenuOpenRef.current) {
-        if (
-          formatMenuPanelRef.current?.contains(document.activeElement) ||
-          formatMenuButtonRef.current?.contains(document.activeElement)
-        ) {
-          return;
-        }
-        return;
-      }
-      if (formatMenuPanelRef.current?.contains(document.activeElement))
-        return;
-      if (formatMenuButtonRef.current?.contains(document.activeElement))
-        return;
-      if (findInNotePanelRef.current?.contains(document.activeElement))
-        return;
-      if (contextMenuOpenRef.current) return;
-      if (openingContextMenuRef.current) return;
-
-      // Tab/window switch blurs the editor but should not leave edit mode.
-      const docNotVisible =
-        document.hidden || document.visibilityState === "hidden";
-
-      const raw = editorRef.current?.innerHTML ?? "";
-      const normalized = normalizeNoteHtmlForSave(stripEditorOnlyUi(raw));
-      const sid = selectedNoteIdRef.current;
-      if (!sid) return;
-      setNotes((prev) =>
-        sortNotesFavoritesFirst(
-          prev.map((n) =>
-            n.id === sid ? { ...n, content: normalized } : n,
-          ),
-        ),
-      );
-      await persistNoteBodyRef.current(sid, normalized, true);
-      if (docNotVisible) return;
-      const ed = editorRef.current;
-      if (ed) {
-        pendingReadBodyScrollRef.current = { noteId: sid, top: ed.scrollTop };
-      }
-      setIsEditing(false);
-      setFormatMenuOpen(false);
-    })();
-  }, []);
-
   /** Cmd/Ctrl+\ — paste clipboard as plain text (no rich formatting). */
   const pastePlainFromClipboard = useCallback(async () => {
     const root = editorRef.current;
@@ -3175,7 +3182,6 @@ export default function NotesPage() {
     onPointerDown: () => {},
     onMouseUp: () => {},
     onKeyUp: () => {},
-    onBlur: () => {},
   });
   editorHandlersRef.current = {
     onInput: syncEditorToState,
@@ -3192,7 +3198,6 @@ export default function NotesPage() {
       refreshFmt();
       queueMicrotask(() => refreshMentionPickerRef.current());
     },
-    onBlur: handleEditorBlur,
   };
 
   if (!token) {
@@ -3756,7 +3761,10 @@ export default function NotesPage() {
 
           <section className="flex min-h-0 min-w-0 cursor-default flex-col overflow-visible rounded-xl border bg-card p-4 lg:max-h-[calc(100vh-7rem)]">
             {selectedNote ? (
-              <div className="flex min-h-0 min-w-0 max-w-full flex-1 flex-col gap-4 overflow-hidden">
+              <div
+                ref={noteEditShellRef}
+                className="flex min-h-0 min-w-0 max-w-full flex-1 flex-col gap-4 overflow-hidden"
+              >
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
                   {editingMainTitle ? (
