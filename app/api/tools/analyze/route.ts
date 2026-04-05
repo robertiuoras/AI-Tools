@@ -4,6 +4,7 @@ import {
   augmentCategoriesWithAgencySignals,
   augmentCategoriesWithIndustryVerticals,
   categories,
+  corpusIndicatesProductVendorNotServicesAgency,
   finalizeToolCategoriesList,
   MAX_TOOL_CATEGORIES,
   normalizeToolCategory,
@@ -401,9 +402,10 @@ Industry verticals (required when copy is explicit): If the title, description, 
 Pair the vertical with function labels (**AI Agents**, **Voice & Audio**, **Customer Support**, **SaaS**, etc.) up to ${MAX_TOOL_CATEGORIES} total.
 
 Category quality — **how they sell** matters as much as **what** they sell:
-- **Self-serve product vendor**: instant signup, transparent pricing tiers, little or no bespoke integration — use **Insurance**, **SaaS**, **AI Automation**, etc. Set **isAgency** to **false**.
-- **Client-services / implementation firm**: sells **custom delivery** — e.g. integrate with **your** existing systems, configure to **your** standards, **book a call / diagnostic**, **phased rollout**, **“live in 30 days”**, **we build** your deployment. Set **isAgency** **true** and use categories like **Insurance** + **AI Automation** when the vertical is insurance and delivery is bespoke.
-- **Marketing/creative/digital agency**: retainers, campaigns, creative production — **isAgency** **true**; categories **Marketing** / **Design** / **Advertising** when relevant (never put **"Agencies"** in **categories**).
+- **Self-serve product vendor** (SaaS, builders, platforms): **Log in** + **Sign up**, pricing/plans, free tier, APIs/integrations — use **SaaS**, **Design**, **Marketing**, etc. Set **isAgency** to **false** (that pattern is software, not a services agency).
+- **“For agencies” / “built for agencies”** means agencies are **customers** (ICP), **not** that the company **is** an agency. Page builders, CRMs, and tools “for agencies & businesses” → **isAgency** **false** unless they explicitly say **we are** a services agency and sell custom delivery.
+- **Client-services / implementation firm**: sells **custom delivery** into client systems — integrate with **your** existing stack, configure to **your** standards, **phased rollout**, bespoke implementation. Set **isAgency** **true** when that is the primary business (not a product demo CTA alone).
+- **Marketing/creative/digital agency** (the vendor **is** the agency): **isAgency** **true**; categories **Marketing** / **Design** / **Advertising** when relevant (never put **"Agencies"** in **categories**).
 
 Return JSON:
 {
@@ -425,7 +427,7 @@ Rules:
 - categories: Return 1 to ${MAX_TOOL_CATEGORIES} labels only (most tools: 2–3). Order by relevance (first = primary). **List labels are preferred**; add **at most one** custom when needed (see above). Examples: ["News", "Education"]; ["Healthcare", "AI Agents", "Voice & Audio"] (all list); ["SaaS", "E-commerce"] (one broad custom). No duplicates. Never use pipes inside strings.
 - categories: Custom labels **will appear in the site’s category filter** for everyone — keep them **reusable and not overly narrow**. Prefer specific list labels over "Other". Do NOT include "Other" if you already have two or more other specific categories.
 - categories: Use "News" for AI news sites, newsletters, daily digests, curated industry updates, or headline aggregators. Add "Education" when the product clearly teaches, explains, or trains (courses, tutorials, learning tracks alongside news).
-- isAgency: **true** for client-services / **custom implementation** firms and marketing/creative agencies (see above). **false** for purely self-serve SaaS with no bespoke rollout story.
+- isAgency: **false** for software products that **serve** or **target** agencies as users (very common). **true** only when the vendor **is** a services or implementation firm selling custom work, not when copy only says “for agencies”, “agencies & businesses”, or similar ICP phrasing.
 - categories: Use **only** industry verticals + functional labels (e.g. **Healthcare**, **Insurance**, **AI Automation**, **Marketing**). Do **not** put **"Agencies"** in the categories array — agency status is **isAgency** only.
 - categories: Do not pad; prefer list labels. Use 2–3 when needed. Do not stack multiple custom categories.
 - Return ONLY valid JSON, no markdown formatting`
@@ -445,7 +447,7 @@ Rules:
           {
             role: 'system',
             content:
-              `Analyze AI tools. Return valid JSON only. Use 1–${MAX_TOOL_CATEGORIES} categories per tool (never put "Agencies" in categories — set isAgency instead). Prefer canonical list labels; add at most one broad custom label when the list has no good fit — customs show in public filters, so keep wording reusable, not hyper-niche. When copy names an industry, include that list vertical (Healthcare, Insurance, Legal, …) with functional categories. isAgency true for marketing/creative and bespoke implementation partners; false for self-serve-only SaaS. News + Education when appropriate. Avoid unnecessary Other.`,
+              `Analyze AI tools. Return valid JSON only. Use 1–${MAX_TOOL_CATEGORIES} categories per tool (never put "Agencies" in categories — set isAgency instead). Prefer canonical list labels; add at most one broad custom label when the list has no good fit — customs show in public filters, so keep wording reusable, not hyper-niche. When copy names an industry, include that list vertical (Healthcare, Insurance, Legal, …) with functional categories. isAgency true only when the vendor IS a services or implementation firm; false for SaaS/products including those marketed “for agencies” or “agencies & businesses” (that is ICP, not company type). News + Education when appropriate. Avoid unnecessary Other.`,
           },
           { role: 'user', content: prompt },
         ],
@@ -936,7 +938,10 @@ export async function POST(request: NextRequest) {
     )
     const { categories: catsStored, isAgency: isAgencyFromCats } =
       stripAgencyFromCategoriesForStorage(catsAugmented)
-    const isAgency = isAgencyFromCats || analysis.isAgency === true
+    const modelAgency = analysis.isAgency === true
+    const isAgency =
+      !corpusIndicatesProductVendorNotServicesAgency(corpusForAgency) &&
+      (isAgencyFromCats || modelAgency)
     const result: AnalysisResult = {
       name: analysis.name || scraped.title || validUrl.hostname.replace('www.', ''),
       description: analysis.description || scraped.description || 'AI tool',

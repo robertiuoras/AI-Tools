@@ -277,46 +277,156 @@ export const CORPUS_VERTICAL_B2B_BLOCKS_AGENCIES =
   /\b(insurtech|insurance tech|for insurers?|for brokers?|for brokerages?|insurance brokers?|insurance brokerages?|brokerage software|claims software|underwriting software|policy admin|sold to (insurers?|brokers?))\b/i
 
 /**
- * Site text strongly suggests a marketing/creative **services** firm (retainers, client work).
- * Used when the model returns categories but omits "Agencies".
+ * First-party copy that the **vendor is** a marketing/creative services agency.
+ * Intentionally narrow — phrases like “marketing agency” in testimonials or “for agencies” ICP copy must not match.
  */
-export const CORPUS_SERVICES_AGENCY_HINT = new RegExp(
+export const CORPUS_VENDOR_IS_SERVICES_AGENCY = new RegExp(
   [
-    String.raw`\b(digital|creative|marketing|advertising|design|brand|media|growth|seo|web|content|social|influencer|performance|ppc|paid media)\s+agenc(y|ies)\b`,
+    String.raw`\bwe\s+'?re\s+(a\s+)?(digital|creative|marketing|advertising|design|brand|full[- ]service)\s+agenc(y|ies)\b`,
+    String.raw`\bwe\s+are\s+(a\s+)?(digital|creative|marketing|advertising|design|brand|full[- ]service)\s+agenc(y|ies)\b`,
+    String.raw`\bour\s+(digital|creative|marketing|advertising|design)\s+agenc(y|ies)\b`,
     String.raw`\b(full[- ]service|boutique)\s+agenc(y|ies)\b`,
-    String.raw`\bwe\s+are\s+(a\s+)?(digital|creative|marketing|advertising|design|brand)\s+agency\b`,
     String.raw`\bagency\s+(specializing|focused|based)\s+in\b`,
   ].join('|'),
   'i',
 )
 
 /**
- * Custom implementation / integration shops: book-a-call motion, diagnostics, phased rollout,
- * “live in N days”, integrate with client systems — including vertical specialists (e.g. broker automation).
+ * Self-serve software / SaaS product signals. Sites like page builders match here; do not infer Agencies from weak CTAs alone.
  */
-export const CORPUS_IMPLEMENTATION_SERVICES_HINT = new RegExp(
+export const CORPUS_SELF_SERVE_SOFTWARE_PRODUCT = new RegExp(
   [
-    String.raw`\bbook\s+(a\s+)?(call|consultation|demo|strategy|discovery)\b`,
-    String.raw`\b(schedule|request)\s+(a\s+)?(call|demo|consultation|discovery)\b`,
-    String.raw`\b(free\s+)?diagnostic\b`,
+    String.raw`\b(create\s+your\s+)?free\s+account\b`,
+    String.raw`\bno\s+credit\s+card\b`,
+    String.raw`\bfree\s+to\s+use\b`,
+    String.raw`\bit'?s\s+not\s+a\s+trial\b`,
+    String.raw`\bwebsite[- ]building\s+(tool|software)\b`,
+    String.raw`\bpage\s+building\s+software\b`,
+    String.raw`\bpage[- ]building\s+software\b`,
+    String.raw`\blanding\s+page\s+(builder|software|tool)\b`,
+    String.raw`\bdrag[- ]and[- ]drop\b`,
+    String.raw`\bwordpress\s+alternative\b`,
+    String.raw`\ball[- ]in[- ]one\s+(builder|platform|software|tool)\b`,
+    String.raw`\b(builder|editor)\s+instantly\s+responds\b`,
+    String.raw`\bsoftware\s+that\s+helps\s+you\s+build\b`,
+    String.raw`\bsaas\b`,
+    String.raw`\bcloud[- ]based\s+software\b`,
+  ].join('|'),
+  'i',
+)
+
+/**
+ * Typical app chrome: log in + sign up. Alone it matches many brochure sites, so pair with {@link CORPUS_SAAS_PRODUCT_CORROBORATION}.
+ */
+export const CORPUS_SAAS_AUTH_NAV = new RegExp(
+  [
+    String.raw`\blog\s+in\b`,
+    String.raw`\blogin\b`,
+    String.raw`\bsign\s+in\b`,
+    String.raw`\bsign\s+up\b`,
+    String.raw`\bregister\b`,
+    String.raw`\bcreate\s+an?\s+account\b`,
+  ].join('|'),
+  'i',
+)
+
+/**
+ * Second signal that the product is software (not just a marketing page with a lone “Sign up” for email).
+ */
+export const CORPUS_SAAS_PRODUCT_CORROBORATION = new RegExp(
+  [
+    String.raw`\b(api\s+keys?|rest\s+api|graphql|webhooks?|openapi|sdk)\b`,
+    String.raw`\bfree\s+tier\b`,
+    String.raw`\b(pro|business|enterprise|starter)\s+plan\b`,
+    String.raw`\bper\s+(seat|user|member|month)\b`,
+    String.raw`\bmonthly\s+billing\b`,
+    String.raw`\bsubscription\b`,
+    String.raw`\bzapier\b`,
+    String.raw`\bintegrations?\s+(page|gallery|directory)\b`,
+    String.raw`\bchangelog\b`,
+    String.raw`\broadmap\b`,
+    String.raw`\bworkspace\b`,
+    String.raw`\bteam\s+members?\b`,
+    String.raw`\bmulti[- ]tenant\b`,
+    String.raw`\bssl\s+certificate\b`,
+    String.raw`\bconnect\s+your\s+domain\b`,
+  ].join('|'),
+  'i',
+)
+
+/** Newsletter / lead magnet — if this dominates, do not treat “sign up” as SaaS auth. */
+export const CORPUS_NEWSLETTER_SIGNUP_ONLY = new RegExp(
+  String.raw`\bsign\s+up\s+for\s+(our\s+|the\s+)?(newsletter|email\s+updates?|weekly\s+digest)\b`,
+  'i',
+)
+
+/**
+ * Strong self-serve product copy **or** log in / sign up **plus** verification (technical/product surface **or** dual auth + pricing).
+ * Auth nav alone is ignored (brochure + newsletter CTAs); “sign up for newsletter” without **Log in** does not count.
+ */
+export function corpusMatchesSelfServeSoftwareSignals(corpus: string): boolean {
+  if (!corpus?.trim()) return false
+  if (CORPUS_SELF_SERVE_SOFTWARE_PRODUCT.test(corpus)) return true
+  if (!CORPUS_SAAS_AUTH_NAV.test(corpus)) return false
+
+  const hasLoginSurface = /\b(log\s+in|login|sign\s+in)\b/i.test(corpus)
+  const hasSignUpSurface = /\bsign\s+up\b/i.test(corpus)
+  const dualAuthChrome = hasLoginSurface && hasSignUpSurface
+  const pricingSurface = /\b(pricing|\/pricing|choose\s+(a\s+)?plan)\b/i.test(
+    corpus,
+  )
+
+  const corroborated =
+    CORPUS_SAAS_PRODUCT_CORROBORATION.test(corpus) ||
+    (dualAuthChrome && pricingSurface)
+
+  if (!corroborated) return false
+
+  if (CORPUS_NEWSLETTER_SIGNUP_ONLY.test(corpus) && !hasLoginSurface) {
+    return false
+  }
+  return true
+}
+
+/**
+ * Copy positions **agencies** as customers / ICP (“built for agencies”), not “we are an agency”.
+ */
+export const CORPUS_AGENCIES_AS_TARGET_CUSTOMER = new RegExp(
+  [
+    String.raw`\b(built|made|designed)\s+for\s+[^.]{0,160}?\bagencies\b`,
+    String.raw`\bfor\s+agencies\s+(&|and)\s+businesses\b`,
+    String.raw`\bagencies\s+(&|and)\s+businesses\b`,
+    String.raw`\b(secret\s+weapon|perfect\s+for)\s+[^.]{0,80}?\bagencies\b`,
+  ].join('|'),
+  'i',
+)
+
+/**
+ * Bespoke implementation / integration delivery (shops that ship custom work into client systems).
+ * Excludes generic SaaS CTAs (“book a demo”, “schedule a call”) that match almost every product site.
+ */
+export const CORPUS_IMPLEMENTATION_BESPOKE_HINT = new RegExp(
+  [
     String.raw`\bintegrat(e|ion)\s+with\s+your\s+(existing\s+)?`,
     String.raw`\b(live|go\s+live)\s+in\s+\d+\s*(days?|weeks?|months?)\b`,
     String.raw`\b\d+\s+days?\s+or\s+less\b`,
     String.raw`\b(system|solution)\s+is\s+live\s+in\b`,
     String.raw`\bconfigure(d)?\s+to\s+your\s+(standards?|workflows?|needs?)\b`,
     String.raw`\btemplates?\s+to\s+your\s+standards?\b`,
-    String.raw`\broll[- ]?out\b`,
-    String.raw`\broll\s+(it\s+)?out\b`,
     String.raw`\bphased\s+(rollout|deployment|launch)\b`,
-    String.raw`\bwe\s+refine\b`,
-    String.raw`\bwe\s+build\b`,
     String.raw`\b(custom|bespoke)\s+(implementation|build|deployment|integration|solution)\b`,
     String.raw`\bimplementation\s+(partner|services?|team)\b`,
     String.raw`\b(done[- ]for[- ]you|white[- ]glove)\s+(setup|onboarding|implementation)\b`,
-    String.raw`\bno\s+(sales\s+)?pitch\b`,
+    String.raw`\b(free\s+)?diagnostic\b`,
   ].join('|'),
   'i',
 )
+
+/** @deprecated Use {@link CORPUS_VENDOR_IS_SERVICES_AGENCY} — old regex matched testimonial “marketing agency” noise. */
+export const CORPUS_SERVICES_AGENCY_HINT = CORPUS_VENDOR_IS_SERVICES_AGENCY
+
+/** @deprecated Use {@link CORPUS_IMPLEMENTATION_BESPOKE_HINT} — old regex matched “demo” / “we build” product marketing. */
+export const CORPUS_IMPLEMENTATION_SERVICES_HINT = CORPUS_IMPLEMENTATION_BESPOKE_HINT
 
 /** Map free-text / AI labels that clearly mean a services agency → canonical Agencies. */
 function inferAgenciesCategory(segment: string): Category | null {
@@ -439,7 +549,7 @@ export function parseOptionalBool(v: unknown): boolean | undefined {
 
 /**
  * If the page clearly describes a services or implementation firm but the model omitted "Agencies", add it.
- * Vertical B2B wording (e.g. “for brokers”) no longer blocks when implementation / book-a-call signals match.
+ * Does **not** treat “for agencies” ICP copy or “book a demo” SaaS pages as proof the vendor is an agency.
  */
 export function augmentCategoriesWithAgencySignals(
   categories: string[],
@@ -449,17 +559,46 @@ export function augmentCategoriesWithAgencySignals(
   if (categories.includes('Agencies')) return categories
 
   const verticalProduct = CORPUS_VERTICAL_B2B_BLOCKS_AGENCIES.test(corpus)
-  const marketingAgency = CORPUS_SERVICES_AGENCY_HINT.test(corpus)
-  const implServices = CORPUS_IMPLEMENTATION_SERVICES_HINT.test(corpus)
+  const vendorAgency = CORPUS_VENDOR_IS_SERVICES_AGENCY.test(corpus)
+  const bespokeImpl = CORPUS_IMPLEMENTATION_BESPOKE_HINT.test(corpus)
+  const selfServeProduct = corpusMatchesSelfServeSoftwareSignals(corpus)
+  const agenciesAreICP = CORPUS_AGENCIES_AS_TARGET_CUSTOMER.test(corpus)
 
-  if (verticalProduct && !implServices && !marketingAgency) {
+  if (selfServeProduct && !vendorAgency) {
     return categories
   }
-  if (!marketingAgency && !implServices) {
+
+  if (agenciesAreICP && !vendorAgency && !bespokeImpl) {
+    return categories
+  }
+
+  if (verticalProduct && !bespokeImpl && !vendorAgency) {
+    return categories
+  }
+
+  if (!vendorAgency && !bespokeImpl) {
     return categories
   }
 
   return finalizeToolCategoriesList(['Agencies', ...categories])
+}
+
+/**
+ * When true, force {@code isAgency} false even if the model returned true — e.g. SaaS “for agencies” ICP copy.
+ */
+export function corpusIndicatesProductVendorNotServicesAgency(
+  corpus: string,
+): boolean {
+  if (!corpus?.trim()) return false
+  if (CORPUS_VENDOR_IS_SERVICES_AGENCY.test(corpus)) return false
+  if (corpusMatchesSelfServeSoftwareSignals(corpus)) return true
+  if (
+    CORPUS_AGENCIES_AS_TARGET_CUSTOMER.test(corpus) &&
+    !CORPUS_IMPLEMENTATION_BESPOKE_HINT.test(corpus)
+  ) {
+    return true
+  }
+  return false
 }
 
 /**
