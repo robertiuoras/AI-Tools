@@ -866,6 +866,7 @@ export default function AdminPage() {
     if (videoAnalyzing) return
     videoAutoAddSessionRef.current += 1
     clearVideoAutoAdd()
+    setVideoThumbImgError(false)
     setVideoAnalyzing(true)
     try {
       let urlToFetch = rawUrl.trim()
@@ -903,22 +904,18 @@ export default function AdminPage() {
         tags: data.suggestedTags ?? prev.tags,
       }))
       if (clearQuick) setVideoQuickAddUrl('')
-      window.scrollTo({ top: 0, behavior: 'smooth' })
 
       addToast({
         variant: 'success',
-        title: 'Video details loaded',
-        description: `Saving automatically in 5s — edit the form or press Cancel to stop.`,
+        title: 'Video scanned',
+        description: `Saving automatically in 5s — press Cancel to stop, or use Save if you cancelled the countdown.`,
         duration: 6000,
       })
 
       const filledTitle = (data.title || '').trim()
       const filledUrl = (data.url || urlToFetch).trim()
       if (!editingVideoIdRef.current && filledTitle && filledUrl) {
-        window.setTimeout(() => {
-          if (editingVideoIdRef.current) return
-          startVideoAutoAddCountdownRef.current()
-        }, 50)
+        startVideoAutoAddCountdownRef.current()
       }
     } catch (e) {
       addToast({
@@ -2411,242 +2408,327 @@ export default function AdminPage() {
           <CardHeader className="pb-4">
             <CardTitle className="text-xl">{editingVideoId ? 'Edit Video' : 'Add Video'}</CardTitle>
             <CardDescription>
-              {editingVideoId ? 'Update the video below' : 'Paste a YouTube or TikTok URL to fetch title and channel, then add to the directory'}
+              {editingVideoId
+                ? 'Change any fields below, then update. Re-fetch thumbnail with Generate if needed.'
+                : 'Paste a YouTube or TikTok link. AI scans the page and saves the video automatically. To change details, add it first, then open Edit on that video.'}
             </CardDescription>
           </CardHeader>
           <CardContent>
             {!editingVideoId && (
-              <div className="mb-6 p-4 rounded-lg border bg-gradient-to-r from-red-50 to-orange-50 dark:from-red-950/20 dark:to-orange-950/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <Youtube className="h-4 w-4 text-red-600 dark:text-red-400" />
-                  <Music2 className="h-4 w-4 text-pink-600 dark:text-pink-400" />
-                  <Label className="font-semibold">Add Video by URL</Label>
-                </div>
-                <p className="text-sm text-muted-foreground mb-3">
-                  Paste a YouTube or TikTok URL to auto-fetch and fill the form (same as Quick Add by URL for AI tools)—or type a URL and click Fetch info.
-                </p>
-                <div className="flex gap-2">
-                  <Input
-                    placeholder="YouTube or TikTok URL (e.g. youtube.com/watch?v=... or tiktok.com/...)"
-                    value={videoQuickAddUrl}
-                    onChange={(e) => setVideoQuickAddUrl(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleVideoAnalyze())}
-                    onPaste={(e) => {
-                      const text = e.clipboardData.getData('text/plain').trim()
-                      if (!isLikelyVideoUrlText(text)) return
-                      e.preventDefault()
-                      setVideoQuickAddUrl(text)
-                      void runVideoAnalyzeFromUrl(text, { clearQuickField: true })
-                    }}
-                    disabled={videoAnalyzing || videoSubmitting}
-                    className="flex-1"
-                  />
-                  <Button
-                    type="button"
-                    onClick={handleVideoAnalyze}
-                    disabled={videoAnalyzing || videoSubmitting || !videoQuickAddUrl.trim()}
-                    variant="default"
-                  >
-                    {videoAnalyzing ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Fetch
-                      </>
-                    ) : (
-                      'Fetch info'
-                    )}
-                  </Button>
-                </div>
-              </div>
-            )}
-            <form onSubmit={handleVideoSubmit} className="space-y-4">
-              {videoAutoAddSeconds !== null && !editingVideoId ? (
-                <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
-                  <span>
-                    Saving this video automatically in <strong>{videoAutoAddSeconds}</strong>s — edit fields below or cancel.
-                  </span>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="shrink-0 border-amber-300 bg-white hover:bg-amber-100 dark:border-amber-700 dark:bg-transparent dark:hover:bg-amber-900/50"
-                    onClick={clearVideoAutoAdd}
-                  >
-                    Cancel auto-save
-                  </Button>
-                </div>
-              ) : null}
-              <div className="space-y-2">
-                <Label htmlFor="video-title">Title *</Label>
-                <Input
-                  id="video-title"
-                  value={videoFormData.title}
-                  onChange={(e) => setVideoFormData({ ...videoFormData, title: e.target.value })}
-                  placeholder="Video title"
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="video-url">Video URL * (YouTube or TikTok)</Label>
-                <Input
-                  id="video-url"
-                  type="url"
-                  value={videoFormData.url}
-                  onChange={(e) => setVideoFormData({ ...videoFormData, url: e.target.value })}
-                  onPaste={(e) => {
-                    if (editingVideoId) return
-                    const text = e.clipboardData.getData('text/plain').trim()
-                    if (!isLikelyVideoUrlText(text)) return
-                    e.preventDefault()
-                    void runVideoAnalyzeFromUrl(text, { clearQuickField: false })
-                  }}
-                  placeholder="https://www.youtube.com/watch?v=... or https://www.tiktok.com/..."
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="video-source">Source</Label>
-                <Select
-                  value={videoFormData.source}
-                  onValueChange={(v) => setVideoFormData({ ...videoFormData, source: v as 'youtube' | 'tiktok' })}
-                >
-                  <SelectTrigger id="video-source">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="youtube">YouTube</SelectItem>
-                    <SelectItem value="tiktok">TikTok</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="video-category">Category *</Label>
-                <Select
-                  value={videoFormData.category}
-                  onValueChange={(v) => setVideoFormData({ ...videoFormData, category: v as (typeof videoCategories)[number] })}
-                >
-                  <SelectTrigger id="video-category">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {videoCategories.map((cat) => (
-                      <SelectItem key={cat} value={cat}>{cat}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="video-youtuber">Channel / Creator name</Label>
-                <Input
-                  id="video-youtuber"
-                  value={videoFormData.youtuberName}
-                  onChange={(e) => setVideoFormData({ ...videoFormData, youtuberName: e.target.value })}
-                  placeholder="Channel name"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="video-subs">Subscribers / followers</Label>
-                <Input
-                  id="video-subs"
-                  type="number"
-                  min={0}
-                  value={videoFormData.subscriberCount}
-                  onChange={(e) => setVideoFormData({ ...videoFormData, subscriberCount: e.target.value })}
-                  placeholder="e.g. 1000000"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="video-channel-thumb">Channel profile picture URL</Label>
-                <div className="flex flex-wrap gap-2 items-start">
-                  <Input
-                    id="video-channel-thumb"
-                    type="url"
-                    value={videoFormData.channelThumbnailUrl}
-                    onChange={(e) => { setVideoThumbImgError(false); setVideoFormData({ ...videoFormData, channelThumbnailUrl: e.target.value }) }}
-                    placeholder="https://yt3.ggpht.com/... or use Generate"
-                    className="flex-1 min-w-[200px]"
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={handleGenerateChannelThumbnail}
-                    disabled={videoThumbnailGenerating || !videoFormData.url?.trim()}
-                    className="shrink-0"
-                  >
-                    {videoThumbnailGenerating ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      'Generate'
-                    )}
-                  </Button>
-                  <div className="h-12 w-12 rounded-full overflow-hidden border-2 border-border flex-shrink-0 bg-muted flex items-center justify-center text-muted-foreground text-xs">
-                    {videoFormData.channelThumbnailUrl && !videoThumbImgError ? (
-                      <img
-                        src={videoFormData.channelThumbnailUrl}
-                        alt="Channel"
-                        className="h-full w-full object-cover"
-                        onError={() => setVideoThumbImgError(true)}
-                      />
-                    ) : (
-                      <span>?</span>
-                    )}
+              <>
+                <div className="mb-6 p-4 rounded-lg border bg-gradient-to-r from-red-50 to-orange-50 dark:from-red-950/20 dark:to-orange-950/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Youtube className="h-4 w-4 text-red-600 dark:text-red-400" />
+                    <Music2 className="h-4 w-4 text-pink-600 dark:text-pink-400" />
+                    <Label className="font-semibold">Add by URL (AI only)</Label>
+                  </div>
+                  <p className="text-sm text-muted-foreground mb-3">
+                    No manual fields here—scan runs on the server and fills title, channel, category, tags, and thumbnail. Use the list → Edit if something needs fixing.
+                  </p>
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="YouTube or TikTok URL (e.g. youtube.com/watch?v=... or tiktok.com/...)"
+                      value={videoQuickAddUrl}
+                      onChange={(e) => setVideoQuickAddUrl(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleVideoAnalyze())}
+                      onPaste={(e) => {
+                        const text = e.clipboardData.getData('text/plain').trim()
+                        if (!isLikelyVideoUrlText(text)) return
+                        e.preventDefault()
+                        setVideoQuickAddUrl(text)
+                        void runVideoAnalyzeFromUrl(text, { clearQuickField: true })
+                      }}
+                      disabled={videoAnalyzing || videoSubmitting}
+                      className="flex-1"
+                    />
+                    <Button
+                      type="button"
+                      onClick={handleVideoAnalyze}
+                      disabled={videoAnalyzing || videoSubmitting || !videoQuickAddUrl.trim()}
+                      variant="default"
+                    >
+                      {videoAnalyzing ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Scanning…
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="mr-2 h-4 w-4" />
+                          Scan & add
+                        </>
+                      )}
+                    </Button>
                   </div>
                 </div>
-                <p className="text-xs text-muted-foreground">Missing profile pic? Paste the video URL above and click Generate to fetch channel thumbnail or use video frame.</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="video-verified"
-                  checked={videoFormData.verified}
-                  onChange={(e) => setVideoFormData({ ...videoFormData, verified: e.target.checked })}
-                  className="h-4 w-4 rounded border-border"
-                />
-                <Label htmlFor="video-verified" className="cursor-pointer">Verified (manual)</Label>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="video-tags">Tags (comma-separated)</Label>
-                <Input
-                  id="video-tags"
-                  value={videoFormData.tags}
-                  onChange={(e) => setVideoFormData({ ...videoFormData, tags: e.target.value })}
-                  placeholder="motivation, success, ..."
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="video-desc">Short description (one line, max 200 chars)</Label>
-                <Input
-                  id="video-desc"
-                  value={videoFormData.description}
-                  onChange={(e) => setVideoFormData({ ...videoFormData, description: e.target.value })}
-                  placeholder="AI-generated or manual one-line summary"
-                  maxLength={200}
-                />
-              </div>
-              <div className="flex gap-2">
-                <Button type="submit" disabled={videoSubmitting}>
-                  {videoSubmitting ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Saving...
-                    </>
-                  ) : editingVideoId ? (
-                    'Update Video'
-                  ) : (
-                    <>
-                      <Plus className="mr-2 h-4 w-4" />
-                      Add Video
-                    </>
-                  )}
-                </Button>
-                {editingVideoId && (
+                {videoAutoAddSeconds !== null ? (
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+                    <span>
+                      Saving in <strong>{videoAutoAddSeconds}</strong>s…
+                    </span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0 border-amber-300 bg-white hover:bg-amber-100 dark:border-amber-700 dark:bg-transparent dark:hover:bg-amber-900/50"
+                      onClick={clearVideoAutoAdd}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                ) : null}
+                {(videoFormData.title.trim() || videoFormData.url.trim()) && (
+                  <div className="mb-4 rounded-lg border border-border/70 bg-muted/25 p-4 text-sm">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">
+                      Scanned preview (read-only)
+                    </p>
+                    <dl className="space-y-2">
+                      <div>
+                        <dt className="text-xs text-muted-foreground">Title</dt>
+                        <dd className="font-medium">{videoFormData.title || '—'}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs text-muted-foreground">URL</dt>
+                        <dd className="break-all text-muted-foreground">{videoFormData.url || '—'}</dd>
+                      </div>
+                      <div className="flex flex-wrap gap-4">
+                        <div>
+                          <dt className="text-xs text-muted-foreground">Category</dt>
+                          <dd>{videoFormData.category}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs text-muted-foreground">Source</dt>
+                          <dd className="capitalize">{videoFormData.source}</dd>
+                        </div>
+                      </div>
+                      {videoFormData.youtuberName ? (
+                        <div>
+                          <dt className="text-xs text-muted-foreground">Channel</dt>
+                          <dd>{videoFormData.youtuberName}</dd>
+                        </div>
+                      ) : null}
+                      {videoFormData.description ? (
+                        <div>
+                          <dt className="text-xs text-muted-foreground">Description</dt>
+                          <dd className="text-muted-foreground line-clamp-3">{videoFormData.description}</dd>
+                        </div>
+                      ) : null}
+                      {videoFormData.tags ? (
+                        <div>
+                          <dt className="text-xs text-muted-foreground">Tags</dt>
+                          <dd className="text-muted-foreground">{videoFormData.tags}</dd>
+                        </div>
+                      ) : null}
+                      <div className="flex items-center gap-2 pt-1">
+                        <dt className="text-xs text-muted-foreground shrink-0">Thumb</dt>
+                        <dd>
+                          {videoFormData.channelThumbnailUrl && !videoThumbImgError ? (
+                            <img
+                              src={videoFormData.channelThumbnailUrl}
+                              alt=""
+                              className="h-12 w-12 rounded-full border object-cover"
+                              onError={() => setVideoThumbImgError(true)}
+                            />
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </dd>
+                      </div>
+                      {videoFormData.verified ? (
+                        <p className="text-xs text-muted-foreground">Verified (from scan)</p>
+                      ) : null}
+                    </dl>
+                  </div>
+                )}
+                {videoAutoAddSeconds === null &&
+                videoFormData.title.trim() &&
+                videoFormData.url.trim() &&
+                !videoAnalyzing ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={videoSubmitting}
+                    onClick={() => void submitVideoCore()}
+                    className="w-full sm:w-auto"
+                  >
+                    {videoSubmitting ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Saving…
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="mr-2 h-4 w-4" />
+                        Save to directory now
+                      </>
+                    )}
+                  </Button>
+                ) : null}
+                <p className="mt-4 text-xs text-muted-foreground">
+                  After a successful add, this panel clears. If you cancelled the countdown, use Save to directory now.
+                </p>
+              </>
+            )}
+            {editingVideoId ? (
+              <form onSubmit={handleVideoSubmit} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="video-title">Title *</Label>
+                  <Input
+                    id="video-title"
+                    value={videoFormData.title}
+                    onChange={(e) => setVideoFormData({ ...videoFormData, title: e.target.value })}
+                    placeholder="Video title"
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="video-url">Video URL * (YouTube or TikTok)</Label>
+                  <Input
+                    id="video-url"
+                    type="url"
+                    value={videoFormData.url}
+                    onChange={(e) => setVideoFormData({ ...videoFormData, url: e.target.value })}
+                    placeholder="https://www.youtube.com/watch?v=... or https://www.tiktok.com/..."
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="video-source">Source</Label>
+                  <Select
+                    value={videoFormData.source}
+                    onValueChange={(v) => setVideoFormData({ ...videoFormData, source: v as 'youtube' | 'tiktok' })}
+                  >
+                    <SelectTrigger id="video-source">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="youtube">YouTube</SelectItem>
+                      <SelectItem value="tiktok">TikTok</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="video-category">Category *</Label>
+                  <Select
+                    value={videoFormData.category}
+                    onValueChange={(v) => setVideoFormData({ ...videoFormData, category: v as (typeof videoCategories)[number] })}
+                  >
+                    <SelectTrigger id="video-category">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {videoCategories.map((cat) => (
+                        <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="video-youtuber">Channel / Creator name</Label>
+                  <Input
+                    id="video-youtuber"
+                    value={videoFormData.youtuberName}
+                    onChange={(e) => setVideoFormData({ ...videoFormData, youtuberName: e.target.value })}
+                    placeholder="Channel name"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="video-subs">Subscribers / followers</Label>
+                  <Input
+                    id="video-subs"
+                    type="number"
+                    min={0}
+                    value={videoFormData.subscriberCount}
+                    onChange={(e) => setVideoFormData({ ...videoFormData, subscriberCount: e.target.value })}
+                    placeholder="e.g. 1000000"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="video-channel-thumb">Channel profile picture URL</Label>
+                  <div className="flex flex-wrap gap-2 items-start">
+                    <Input
+                      id="video-channel-thumb"
+                      type="url"
+                      value={videoFormData.channelThumbnailUrl}
+                      onChange={(e) => { setVideoThumbImgError(false); setVideoFormData({ ...videoFormData, channelThumbnailUrl: e.target.value }) }}
+                      placeholder="https://yt3.ggpht.com/... or use Generate"
+                      className="flex-1 min-w-[200px]"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleGenerateChannelThumbnail}
+                      disabled={videoThumbnailGenerating || !videoFormData.url?.trim()}
+                      className="shrink-0"
+                    >
+                      {videoThumbnailGenerating ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        'Generate'
+                      )}
+                    </Button>
+                    <div className="h-12 w-12 rounded-full overflow-hidden border-2 border-border flex-shrink-0 bg-muted flex items-center justify-center text-muted-foreground text-xs">
+                      {videoFormData.channelThumbnailUrl && !videoThumbImgError ? (
+                        <img
+                          src={videoFormData.channelThumbnailUrl}
+                          alt="Channel"
+                          className="h-full w-full object-cover"
+                          onError={() => setVideoThumbImgError(true)}
+                        />
+                      ) : (
+                        <span>?</span>
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Re-run fetch for thumbnail from the current video URL.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="video-verified"
+                    checked={videoFormData.verified}
+                    onChange={(e) => setVideoFormData({ ...videoFormData, verified: e.target.checked })}
+                    className="h-4 w-4 rounded border-border"
+                  />
+                  <Label htmlFor="video-verified" className="cursor-pointer">Verified</Label>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="video-tags">Tags (comma-separated)</Label>
+                  <Input
+                    id="video-tags"
+                    value={videoFormData.tags}
+                    onChange={(e) => setVideoFormData({ ...videoFormData, tags: e.target.value })}
+                    placeholder="motivation, success, ..."
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="video-desc">Short description (one line, max 200 chars)</Label>
+                  <Input
+                    id="video-desc"
+                    value={videoFormData.description}
+                    onChange={(e) => setVideoFormData({ ...videoFormData, description: e.target.value })}
+                    placeholder="One-line summary"
+                    maxLength={200}
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <Button type="submit" disabled={videoSubmitting}>
+                    {videoSubmitting ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Saving...
+                      </>
+                    ) : (
+                      'Update Video'
+                    )}
+                  </Button>
                   <Button type="button" variant="outline" onClick={resetVideoForm}>
                     Cancel
                   </Button>
-                )}
-              </div>
-            </form>
+                </div>
+              </form>
+            ) : null}
           </CardContent>
         </Card>
 
@@ -2662,7 +2744,7 @@ export default function AdminPage() {
               </div>
             ) : videos.length === 0 ? (
               <p className="text-center text-muted-foreground py-8">
-                No videos yet. Add one via the form.
+                No videos yet. Paste a URL in Add Video to scan and save.
               </p>
             ) : (
               <>
