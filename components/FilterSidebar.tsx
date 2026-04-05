@@ -151,7 +151,12 @@ export function FilterSidebar({
               variant={agenciesOnly ? 'default' : 'outline'}
               size="sm"
               onClick={onAgenciesToggle}
-              className="w-full gap-2"
+              className={cn(
+                'w-full gap-2',
+                agenciesOnly
+                  ? 'border-orange-500/80 bg-gradient-to-r from-orange-600 to-amber-600 text-white hover:from-orange-600/90 hover:to-amber-600/90 hover:text-white'
+                  : 'border-orange-300/80 text-orange-900 hover:bg-orange-50 dark:border-orange-700/60 dark:text-orange-100 dark:hover:bg-orange-950/40',
+              )}
             >
               <Building2 className="h-4 w-4" />
               {agenciesOnly ? 'Showing Agencies' : 'Show Agencies'}

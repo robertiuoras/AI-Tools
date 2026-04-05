@@ -22,6 +22,7 @@ import {
   finalizeToolCategoriesList,
   MAX_TOOL_CATEGORIES,
   normalizeToolCategory,
+  normalizeVideoCategory,
   videoCategories,
 } from '@/lib/schemas'
 import { toolCategoryBadgeClass } from '@/lib/tool-category-styles'
@@ -176,6 +177,16 @@ export default function AdminPage() {
   const [videoSubmitting, setVideoSubmitting] = useState(false)
   const [editingVideoId, setEditingVideoId] = useState<string | null>(null)
   const [videoSearchQuery, setVideoSearchQuery] = useState('')
+  const [videoBulkUrls, setVideoBulkUrls] = useState('')
+  const [videoBulkProcessing, setVideoBulkProcessing] = useState(false)
+  const [videoBulkProgress, setVideoBulkProgress] = useState({
+    current: 0,
+    total: 0,
+    currentUrl: '',
+  })
+  const [adminListRefreshing, setAdminListRefreshing] = useState<
+    'tools' | 'videos' | null
+  >(null)
   const [videoThumbnailGenerating, setVideoThumbnailGenerating] = useState(false)
   const [videoThumbImgError, setVideoThumbImgError] = useState(false)
   const [videoFormData, setVideoFormData] = useState({
@@ -477,8 +488,8 @@ export default function AdminPage() {
     }
   }, [formData, editingId, tools])
 
-  const fetchVideos = async () => {
-    setVideosLoading(true)
+  const fetchVideos = async (opts?: { background?: boolean }) => {
+    if (!opts?.background) setVideosLoading(true)
     try {
       const response = await fetch('/api/videos')
       const data = await response.json()
@@ -487,7 +498,29 @@ export default function AdminPage() {
       console.error('Error fetching videos:', error)
       setVideos([])
     } finally {
-      setVideosLoading(false)
+      if (!opts?.background) setVideosLoading(false)
+    }
+  }
+
+  const refreshToolsList = async () => {
+    setAdminListRefreshing('tools')
+    try {
+      const response = await fetch('/api/tools')
+      const data = await response.json()
+      setTools(data)
+    } catch (e) {
+      console.error('Error refreshing tools:', e)
+    } finally {
+      setAdminListRefreshing(null)
+    }
+  }
+
+  const refreshVideosList = async () => {
+    setAdminListRefreshing('videos')
+    try {
+      await fetchVideos({ background: true })
+    } finally {
+      setAdminListRefreshing(null)
     }
   }
 
@@ -982,8 +1015,8 @@ export default function AdminPage() {
       addToast({
         variant: 'success',
         title: 'Video scanned',
-        description: `Saving automatically in 5s — press Cancel to stop, or use Save if you cancelled the countdown.`,
-        duration: 6000,
+        description: 'Auto-saving in 5s — Cancel to wait, or Save now below.',
+        duration: 5000,
       })
 
       const filledTitle = (data.title || '').trim()
@@ -1349,9 +1382,8 @@ export default function AdminPage() {
         addToast({
           variant: 'success',
           title: 'Tool scanned',
-          description:
-            'Adding automatically in 5s — Cancel to stop, or use Save to directory now if you cancelled the countdown.',
-          duration: 6000,
+          description: 'Auto-adding in 5s — Cancel or use Save to directory now.',
+          duration: 5000,
         })
         setIsProcessing(false)
         startToolAutoAddCountdownRef.current()
@@ -1642,6 +1674,168 @@ export default function AdminPage() {
     }
   }
 
+  const handleVideoBulkAdd = async () => {
+    const urls = videoBulkUrls
+      .split('\n')
+      .map((line) => {
+        let u = line.trim()
+        if (!u) return null
+        if (!u.startsWith('http://') && !u.startsWith('https://')) {
+          u = `https://${u}`
+        }
+        try {
+          new URL(u)
+          return u
+        } catch {
+          return null
+        }
+      })
+      .filter((u): u is string => u !== null)
+
+    if (urls.length === 0) {
+      addToast({
+        variant: 'warning',
+        title: 'No valid URLs',
+        description: 'Enter one YouTube or TikTok URL per line.',
+      })
+      return
+    }
+
+    setVideoBulkProcessing(true)
+    setVideoBulkProgress({ current: 0, total: urls.length, currentUrl: '' })
+
+    let successCount = 0
+    let errorCount = 0
+    const errors: string[] = []
+
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i]
+      setVideoBulkProgress({ current: i + 1, total: urls.length, currentUrl: url })
+
+      try {
+        let retries = 3
+        let response: Response | null = null
+        let lastError: string | null = null
+
+        while (retries > 0) {
+          try {
+            response = await fetch('/api/videos/analyze', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ url }),
+            })
+            if (response.ok) break
+            const errorData = await response.json().catch(() => ({}))
+            lastError =
+              (errorData as { error?: string }).error ||
+              `HTTP ${response.status}`
+            if (response.status === 429) {
+              await new Promise((r) =>
+                setTimeout(r, Math.pow(2, 3 - retries) * 2000),
+              )
+              retries--
+              continue
+            }
+            break
+          } catch (fetchError) {
+            lastError =
+              fetchError instanceof Error
+                ? fetchError.message
+                : 'Network error'
+            retries--
+            if (retries > 0) await new Promise((r) => setTimeout(r, 1000))
+          }
+        }
+
+        if (!response || !response.ok) {
+          errors.push(`${url}: ${lastError || 'failed'}`)
+          errorCount++
+          continue
+        }
+
+        const data = (await response.json()) as Record<string, unknown>
+        const title = String(data.title || '').trim()
+        if (!title) {
+          errors.push(`${url}: missing title`)
+          errorCount++
+          continue
+        }
+
+        const category = normalizeVideoCategory(
+          (data.suggestedCategory as string) || 'Other',
+        )
+        const payload: Record<string, unknown> = {
+          title,
+          url: (data.url as string) || url,
+          category,
+          source: data.source === 'tiktok' ? 'tiktok' : 'youtube',
+          youtuberName: data.youtuberName ?? null,
+          subscriberCount: data.subscriberCount ?? null,
+          channelThumbnailUrl: data.channelThumbnailUrl ?? null,
+          channelVideoCount: data.channelVideoCount ?? null,
+          verified: data.verified ?? null,
+          tags: data.suggestedTags ?? null,
+          description: data.description ?? null,
+        }
+
+        const submitResponse = await fetch('/api/videos', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+
+        if (submitResponse.ok) {
+          successCount++
+        } else {
+          const errorData = await submitResponse.json().catch(() => ({}))
+          const msg =
+            (errorData as { message?: string; error?: string }).message ||
+            (errorData as { error?: string }).error ||
+            `HTTP ${submitResponse.status}`
+          errors.push(`${url}: ${msg}`)
+          errorCount++
+        }
+
+        if (i < urls.length - 1) {
+          await new Promise((r) => setTimeout(r, 5000))
+        }
+      } catch (error) {
+        errors.push(
+          `${url}: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        )
+        errorCount++
+      }
+    }
+
+    await fetchVideos({ background: true })
+    setVideoBulkUrls('')
+    setVideoBulkProcessing(false)
+    setVideoBulkProgress({ current: 0, total: 0, currentUrl: '' })
+
+    if (successCount > 0 && errorCount === 0) {
+      addToast({
+        variant: 'success',
+        title: 'Bulk add complete',
+        description: `Added ${successCount} video${successCount !== 1 ? 's' : ''}.`,
+        duration: 5000,
+      })
+    } else if (errorCount > 0 && successCount === 0) {
+      addToast({
+        variant: 'error',
+        title: 'Bulk add failed',
+        description: `${errors.slice(0, 2).join('; ')}${errors.length > 2 ? ` …+${errors.length - 2}` : ''}`,
+        duration: 8000,
+      })
+    } else if (errorCount > 0) {
+      addToast({
+        variant: 'warning',
+        title: 'Bulk add partially complete',
+        description: `Added ${successCount}, failed ${errorCount}. ${errors.slice(0, 1).join('')}`,
+        duration: 8000,
+      })
+    }
+  }
+
   const resetForm = () => {
     clearToolAutoAdd()
     if (autoSaveDebounceRef.current) {
@@ -1776,7 +1970,7 @@ export default function AdminPage() {
               <span className="bg-gradient-to-r from-violet-600 to-fuchsia-600 dark:from-violet-400 dark:to-fuchsia-400 bg-clip-text text-transparent">Admin Dashboard</span>
             </h1>
             <p className="text-muted-foreground text-sm sm:text-base">
-              Add, edit, or remove AI tools and videos from the directory
+              Manage tools, videos, and usage
             </p>
           </div>
           <div className="flex rounded-xl border border-border/80 bg-card/80 shadow-sm p-1">
@@ -1842,8 +2036,8 @@ export default function AdminPage() {
             </CardTitle>
             <CardDescription>
               {editingId
-                ? 'Changes save automatically after you stop typing or changing categories'
-                : 'Quick Add and Bulk Add use AI only. To change name, URL, categories, etc., pick a tool in the list and click Edit.'}
+                ? 'Changes save automatically after you stop editing.'
+                : 'Add by URL or bulk lines, or edit a tool from the list.'}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -1854,9 +2048,6 @@ export default function AdminPage() {
                     <Sparkles className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
                     <Label className="font-semibold">Quick Add by URL</Label>
                   </div>
-                  <p className="text-sm text-muted-foreground mb-3">
-                    AI scans the URL, then the tool is added automatically after 5 seconds (same as videos). Cancel the countdown if you need to wait. Use Edit on a tool to change fields.
-                  </p>
                   {cooldownRemaining > 0 && (
                     <div className="mb-3 p-2 rounded-md bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-200 dark:border-yellow-800">
                       <p className="text-sm text-yellow-700 dark:text-yellow-300">
@@ -1921,9 +2112,6 @@ export default function AdminPage() {
                     <Plus className="h-4 w-4 text-green-600 dark:text-green-400" />
                     <Label className="font-semibold">Bulk Add URLs</Label>
                   </div>
-                  <p className="text-sm text-muted-foreground mb-3">
-                    Add multiple tools at once. Enter one URL per line.
-                  </p>
                   <textarea
                     placeholder="https://example1.com&#10;example2.com&#10;https://example3.com"
                     value={bulkUrls}
@@ -1964,45 +2152,7 @@ export default function AdminPage() {
                     )}
                   </Button>
                 </div>
-                  <div className="text-xs text-muted-foreground space-y-1">
-                    <p>💡 AI analysis available. Add OPENAI_API_KEY to .env for enhanced results.</p>
-                    <p className="text-blue-600 dark:text-blue-400">
-                      ℹ️ Rate Limits: You have 2 types of limits - RPM (requests/min) and TPM (tokens/min). Even with balance, low-tier accounts have low RPM limits. Check your tier at platform.openai.com/account/limits
-                    </p>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="mt-2"
-                      onClick={async () => {
-                        try {
-                          const response = await fetch('/api/openai/test')
-                          const data = await response.json()
-                          if (data.success) {
-                            addToast({
-                              variant: 'success',
-                              title: 'API Key Valid',
-                              description: `Your API key is working. ${data.modelsAvailable} models available.`,
-                            })
-                          } else {
-                            addToast({
-                              variant: 'error',
-                              title: 'API Key Issue',
-                              description: `${data.error}: ${data.suggestion || data.details || ''}`,
-                              duration: 8000,
-                            })
-                          }
-                        } catch (error: any) {
-                          addToast({
-                            variant: 'error',
-                            title: 'Test Failed',
-                            description: error.message || 'Could not test API key',
-                          })
-                        }
-                      }}
-                    >
-                      Test API Key
-                    </Button>
+                  <div className="flex flex-wrap gap-2 pt-2">
                     <Button
                       variant="outline"
                       size="sm"
@@ -2090,9 +2240,6 @@ export default function AdminPage() {
               <div className="mb-6 rounded-lg border border-border/70 bg-muted/25 p-4 text-sm">
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">
                   Draft from last scan (read-only)
-                </p>
-                <p className="mb-3 text-muted-foreground">
-                  This appears if analysis returned data but did not auto-save (e.g. missing fields or duplicate). You can save once if the draft is complete, or clear and try again.
                 </p>
                 <dl className="mb-4 space-y-2">
                   <div>
@@ -2354,21 +2501,41 @@ export default function AdminPage() {
         </Card>
 
         <Card className="flex flex-col h-full border-border/60 shadow-lg shadow-black/5 dark:shadow-black/20 bg-card/95">
-          <CardHeader className="flex-shrink-0">
-            <CardTitle className="text-xl">All Tools ({tools.length})</CardTitle>
-            <CardDescription>
-              Manage existing tools in the directory
-              {tools.length > 0 && (
-                <>
-                  {' '}
-                  · Showing{' '}
-                  <span className="font-medium text-foreground">
-                    {filteredAdminTools.length}
-                  </span>{' '}
-                  of {tools.length}
-                </>
-              )}
-            </CardDescription>
+          <CardHeader className="flex-shrink-0 space-y-3">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <CardTitle className="text-xl">All Tools ({tools.length})</CardTitle>
+                <CardDescription>
+                  {tools.length > 0 ? (
+                    <>
+                      Showing{' '}
+                      <span className="font-medium text-foreground">
+                        {filteredAdminTools.length}
+                      </span>{' '}
+                      of {tools.length}
+                    </>
+                  ) : (
+                    'Directory list'
+                  )}
+                </CardDescription>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="shrink-0 gap-1.5"
+                disabled={loading || adminListRefreshing === 'tools'}
+                onClick={() => void refreshToolsList()}
+              >
+                <RefreshCw
+                  className={cn(
+                    'h-4 w-4',
+                    adminListRefreshing === 'tools' && 'animate-spin',
+                  )}
+                />
+                Refresh
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="flex flex-col flex-1 min-h-0 p-6">
             {loading ? (
@@ -2377,7 +2544,7 @@ export default function AdminPage() {
               </div>
             ) : tools.length === 0 ? (
               <p className="text-center text-muted-foreground py-8">
-                No tools yet. Use Quick Add or Bulk Add on the left—then Edit a tool to change details.
+                No tools yet.
               </p>
             ) : (
               <>
@@ -2597,25 +2764,23 @@ export default function AdminPage() {
             <CardTitle className="text-xl">{editingVideoId ? 'Edit Video' : 'Add Video'}</CardTitle>
             <CardDescription>
               {editingVideoId
-                ? 'Change any fields below, then update. Re-fetch thumbnail with Generate if needed.'
-                : 'Paste a YouTube or TikTok link. AI scans the page and saves the video automatically. To change details, add it first, then open Edit on that video.'}
+                ? 'Update fields below, then save.'
+                : 'Scan by URL or bulk lines; edit from the list.'}
             </CardDescription>
           </CardHeader>
           <CardContent>
             {!editingVideoId && (
               <>
-                <div className="mb-6 p-4 rounded-lg border bg-gradient-to-r from-red-50 to-orange-50 dark:from-red-950/20 dark:to-orange-950/20">
+                <div className="mb-6 space-y-4">
+                <div className="p-4 rounded-lg border bg-gradient-to-r from-red-50 to-orange-50 dark:from-red-950/20 dark:to-orange-950/20">
                   <div className="flex items-center gap-2 mb-2">
                     <Youtube className="h-4 w-4 text-red-600 dark:text-red-400" />
                     <Music2 className="h-4 w-4 text-pink-600 dark:text-pink-400" />
-                    <Label className="font-semibold">Add by URL (AI only)</Label>
+                    <Label className="font-semibold">Quick add (URL)</Label>
                   </div>
-                  <p className="text-sm text-muted-foreground mb-3">
-                    No manual fields here—scan runs on the server and fills title, channel, category, tags, and thumbnail. Use the list → Edit if something needs fixing.
-                  </p>
                   <div className="flex gap-2">
                     <Input
-                      placeholder="YouTube or TikTok URL (e.g. youtube.com/watch?v=... or tiktok.com/...)"
+                      placeholder="YouTube or TikTok URL"
                       value={videoQuickAddUrl}
                       onChange={(e) => setVideoQuickAddUrl(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleVideoAnalyze())}
@@ -2626,13 +2791,13 @@ export default function AdminPage() {
                         setVideoQuickAddUrl(text)
                         void runVideoAnalyzeFromUrl(text, { clearQuickField: true })
                       }}
-                      disabled={videoAnalyzing || videoSubmitting}
+                      disabled={videoAnalyzing || videoSubmitting || videoBulkProcessing}
                       className="flex-1"
                     />
                     <Button
                       type="button"
                       onClick={handleVideoAnalyze}
-                      disabled={videoAnalyzing || videoSubmitting || !videoQuickAddUrl.trim()}
+                      disabled={videoAnalyzing || videoSubmitting || videoBulkProcessing || !videoQuickAddUrl.trim()}
                       variant="default"
                     >
                       {videoAnalyzing ? (
@@ -2648,6 +2813,64 @@ export default function AdminPage() {
                       )}
                     </Button>
                   </div>
+                </div>
+
+                <div className="p-4 rounded-lg border bg-gradient-to-r from-green-50 to-orange-50 dark:from-green-950/20 dark:to-orange-950/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Plus className="h-4 w-4 text-green-600 dark:text-green-400" />
+                    <Label className="font-semibold">Bulk add URLs</Label>
+                  </div>
+                  <textarea
+                    placeholder="One YouTube or TikTok URL per line"
+                    value={videoBulkUrls}
+                    onChange={(e) => setVideoBulkUrls(e.target.value)}
+                    disabled={videoAnalyzing || videoSubmitting || videoBulkProcessing}
+                    className="flex min-h-[100px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 mb-3 font-mono text-xs"
+                  />
+                  {videoBulkProcessing && (
+                    <div className="mb-3 p-2 rounded-md bg-green-100 dark:bg-green-900/30 border border-green-200 dark:border-green-800">
+                      <p className="text-sm text-green-700 dark:text-green-300 flex items-center gap-2">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        {videoBulkProgress.current} of {videoBulkProgress.total}
+                        {videoBulkProgress.currentUrl ? (
+                          <span className="text-xs truncate max-w-md">
+                            {videoBulkProgress.currentUrl}
+                          </span>
+                        ) : null}
+                      </p>
+                    </div>
+                  )}
+                  <Button
+                    type="button"
+                    onClick={() => void handleVideoBulkAdd()}
+                    disabled={
+                      videoAnalyzing ||
+                      videoSubmitting ||
+                      videoBulkProcessing ||
+                      !videoBulkUrls.trim()
+                    }
+                    variant="default"
+                    className="w-full"
+                  >
+                    {videoBulkProcessing ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Processing…
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="mr-2 h-4 w-4" />
+                        Bulk add (
+                        {
+                          videoBulkUrls
+                            .split('\n')
+                            .filter((u) => u.trim().length > 0).length
+                        }{' '}
+                        URLs)
+                      </>
+                    )}
+                  </Button>
+                </div>
                 </div>
                 {videoAutoAddSeconds !== null ? (
                   <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
@@ -2731,7 +2954,8 @@ export default function AdminPage() {
                 {videoAutoAddSeconds === null &&
                 videoFormData.title.trim() &&
                 videoFormData.url.trim() &&
-                !videoAnalyzing ? (
+                !videoAnalyzing &&
+                !videoBulkProcessing ? (
                   <Button
                     type="button"
                     variant="secondary"
@@ -2752,9 +2976,6 @@ export default function AdminPage() {
                     )}
                   </Button>
                 ) : null}
-                <p className="mt-4 text-xs text-muted-foreground">
-                  After a successful add, this panel clears. If you cancelled the countdown, use Save to directory now.
-                </p>
               </>
             )}
             {editingVideoId ? (
@@ -2921,9 +3142,29 @@ export default function AdminPage() {
         </Card>
 
         <Card className="flex flex-col h-full border-border/60 shadow-lg shadow-black/5 dark:shadow-black/20 bg-card/95">
-          <CardHeader className="flex-shrink-0">
-            <CardTitle className="text-xl">All Videos ({videos.length})</CardTitle>
-            <CardDescription>Manage videos shown on /videos</CardDescription>
+          <CardHeader className="flex-shrink-0 space-y-3">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <CardTitle className="text-xl">All Videos ({videos.length})</CardTitle>
+                <CardDescription>/videos directory</CardDescription>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="shrink-0 gap-1.5"
+                disabled={videosLoading || adminListRefreshing === 'videos'}
+                onClick={() => void refreshVideosList()}
+              >
+                <RefreshCw
+                  className={cn(
+                    'h-4 w-4',
+                    adminListRefreshing === 'videos' && 'animate-spin',
+                  )}
+                />
+                Refresh
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="flex flex-col flex-1 min-h-0 p-6">
             {videosLoading ? (
@@ -2932,7 +3173,7 @@ export default function AdminPage() {
               </div>
             ) : videos.length === 0 ? (
               <p className="text-center text-muted-foreground py-8">
-                No videos yet. Paste a URL in Add Video to scan and save.
+                No videos yet.
               </p>
             ) : (
               <>
@@ -3032,16 +3273,9 @@ export default function AdminPage() {
                   <span>Loading usage data…</span>
                 </div>
               ) : openaiUsageError ? (
-                <div className="flex flex-col gap-3">
-                  <div className="flex items-start gap-2 rounded-lg bg-destructive/10 border border-destructive/20 p-3 text-sm text-destructive">
-                    <XCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-                    <span>{openaiUsageError}</span>
-                  </div>
-                  {openaiUsageError.includes('not configured') && (
-                    <p className="text-xs text-muted-foreground">
-                      Add <code className="font-mono bg-muted px-1 rounded">OPENAI_API_KEY</code> to your environment variables to enable usage tracking.
-                    </p>
-                  )}
+                <div className="flex items-start gap-2 rounded-lg bg-destructive/10 border border-destructive/20 p-3 text-sm text-destructive">
+                  <XCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                  <span>{openaiUsageError}</span>
                 </div>
               ) : openaiUsage ? (
                 <div className="flex flex-col gap-4">
