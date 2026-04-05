@@ -19,7 +19,10 @@ import { supabase } from "@/lib/supabase";
 import type { Tool } from "@/lib/supabase";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
 import { cn } from "@/lib/utils";
-import { toolCategoryList } from "@/lib/tool-categories";
+import {
+  toolCategoryListForBadges,
+  toolIsAgency,
+} from "@/lib/tool-categories";
 import { toolCategoryBadgeClass } from "@/lib/tool-category-styles";
 
 export type ToolCardLayout = "grid" | "list";
@@ -434,7 +437,17 @@ export function ToolCard({
     </Badge>
   ) : null;
 
-  const toolCategories = toolCategoryList(tool);
+  const isAgency = toolIsAgency(tool);
+  const toolCategories = toolCategoryListForBadges(tool);
+
+  const agencyBanner = isAgency ? (
+    <div
+      className="w-full bg-gradient-to-r from-violet-600 via-violet-500 to-fuchsia-600 px-3 py-1.5 text-center text-[11px] font-semibold uppercase tracking-[0.12em] text-white shadow-sm"
+      role="note"
+    >
+      Agency
+    </div>
+  ) : null;
 
   if (layout === "list") {
     return (
@@ -444,6 +457,7 @@ export function ToolCard({
         transition={{ duration: 0.2, delay: index * 0.02 }}
       >
         <Card className="overflow-hidden border-border/50 transition-colors hover:border-primary/40">
+          {agencyBanner}
           <CardContent className="flex min-w-0 flex-col gap-3 p-3 sm:flex-row sm:items-center sm:gap-4">
             <div className="flex min-w-0 flex-1 flex-col items-center gap-3 sm:flex-row sm:items-start">
               {logoBlock}
@@ -593,6 +607,7 @@ export function ToolCard({
           descriptionExpanded ? "overflow-visible" : "overflow-hidden",
         )}
       >
+        {agencyBanner}
         <CardContent
           className={cn(
             "flex min-h-0 min-w-0 flex-1 flex-col gap-0 px-3.5 pb-4 pt-3.5 sm:px-5 sm:pb-5 sm:pt-5",

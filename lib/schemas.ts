@@ -26,6 +26,9 @@ export const categories = [
   'Writing',
 ] as const
 
+/** Canonical label for service agencies (DB + AI). On the home page this is a card ribbon, not a category filter. */
+export const AGENCY_CATEGORY_LABEL = 'Agencies' as const
+
 export type Category = typeof categories[number]
 
 const categorySet = new Set<string>(categories)

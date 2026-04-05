@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase";
-import { toolSchema } from "@/lib/schemas";
+import { AGENCY_CATEGORY_LABEL, toolSchema } from "@/lib/schemas";
 import { toolCategoryList } from "@/lib/tool-categories";
 import { createClient } from "@supabase/supabase-js";
 import {
@@ -116,6 +116,7 @@ export async function GET(request: NextRequest) {
     const sort = searchParams.get("sort") || "popular";
     const order = searchParams.get("order") || "desc";
     const favoritesOnly = searchParams.get("favoritesOnly") === "true";
+    const agenciesOnly = searchParams.get("agenciesOnly") === "true";
 
     // Get authorization header (used later for user authentication)
     const authHeader = request.headers.get("authorization");
@@ -215,6 +216,12 @@ export async function GET(request: NextRequest) {
           favoriteToolIds.has(tool.id),
         );
       }
+    }
+
+    if (agenciesOnly) {
+      filteredTools = filteredTools.filter((tool: any) =>
+        toolCategoryList(tool).some((c) => c === AGENCY_CATEGORY_LABEL),
+      );
     }
 
     if (filteredTools.length === 0) {

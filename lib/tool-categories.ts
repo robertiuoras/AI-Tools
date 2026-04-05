@@ -1,4 +1,4 @@
-import { normalizeToolCategory } from '@/lib/schemas'
+import { AGENCY_CATEGORY_LABEL, normalizeToolCategory } from '@/lib/schemas'
 
 export type ToolCategoryRow = {
   category?: string | null
@@ -23,4 +23,13 @@ export function toolCategoryList(row: ToolCategoryRow): string[] {
     if (out.length > 0) return out
   }
   return [normalizeToolCategory(row.category)]
+}
+
+export function toolIsAgency(row: ToolCategoryRow): boolean {
+  return toolCategoryList(row).some((c) => c === AGENCY_CATEGORY_LABEL)
+}
+
+/** Category badges on cards: agency is shown as a ribbon, not repeated as a chip. */
+export function toolCategoryListForBadges(row: ToolCategoryRow): string[] {
+  return toolCategoryList(row).filter((c) => c !== AGENCY_CATEGORY_LABEL)
 }

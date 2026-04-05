@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { X, Heart } from 'lucide-react'
+import { X, Heart, Building2 } from 'lucide-react'
 import {
   Accordion,
   AccordionContent,
@@ -12,7 +12,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { categories as defaultCategories } from '@/lib/schemas'
+import { AGENCY_CATEGORY_LABEL, categories as defaultCategories } from '@/lib/schemas'
 import { cn } from '@/lib/utils'
 
 interface FilterSidebarProps {
@@ -24,6 +24,8 @@ interface FilterSidebarProps {
   onRevenueChange: (revenue: string[]) => void
   favoritesOnly: boolean
   onFavoritesToggle: () => void
+  agenciesOnly: boolean
+  onAgenciesToggle: () => void
   user: any
   availableCategories?: string[]
   className?: string
@@ -41,6 +43,8 @@ export function FilterSidebar({
   onRevenueChange,
   favoritesOnly,
   onFavoritesToggle,
+  agenciesOnly,
+  onAgenciesToggle,
   user,
   availableCategories,
   className,
@@ -67,14 +71,21 @@ export function FilterSidebar({
     onCategoriesChange([])
     onTrafficChange([])
     onRevenueChange([])
+    if (favoritesOnly) onFavoritesToggle()
+    if (agenciesOnly) onAgenciesToggle()
   }
 
   const hasActiveFilters =
-    selectedCategories.length > 0 || selectedTraffic.length > 0 || selectedRevenue.length > 0
-  const categoryOptions =
+    selectedCategories.length > 0 ||
+    selectedTraffic.length > 0 ||
+    selectedRevenue.length > 0 ||
+    favoritesOnly ||
+    agenciesOnly
+  const categoryOptions = (
     availableCategories && availableCategories.length > 0
       ? availableCategories
-      : defaultCategories
+      : (defaultCategories as readonly string[]).filter((c) => c !== AGENCY_CATEGORY_LABEL)
+  ).filter((c) => c !== AGENCY_CATEGORY_LABEL)
 
   return (
     <>
@@ -87,7 +98,13 @@ export function FilterSidebar({
         Filters
         {hasActiveFilters && (
           <Badge variant="secondary" className="ml-2">
-            [...selectedCategories, ...selectedTraffic, ...selectedRevenue].filter(Boolean).length
+            {[
+              ...selectedCategories,
+              ...selectedTraffic,
+              ...selectedRevenue,
+              ...(favoritesOnly ? ['fav'] : []),
+              ...(agenciesOnly ? ['ag'] : []),
+            ].filter(Boolean).length}
           </Badge>
         )}
       </Button>
@@ -129,19 +146,28 @@ export function FilterSidebar({
             </div>
           </div>
 
-          {user && (
-            <div className="mb-6">
+          <div className="mb-6 space-y-2">
+            <Button
+              variant={agenciesOnly ? 'default' : 'outline'}
+              size="sm"
+              onClick={onAgenciesToggle}
+              className="w-full gap-2"
+            >
+              <Building2 className="h-4 w-4" />
+              {agenciesOnly ? 'Showing Agencies' : 'Show Agencies'}
+            </Button>
+            {user ? (
               <Button
-                variant={favoritesOnly ? "default" : "outline"}
+                variant={favoritesOnly ? 'default' : 'outline'}
                 size="sm"
                 onClick={onFavoritesToggle}
                 className="w-full gap-2"
               >
-                <Heart className={`h-4 w-4 ${favoritesOnly ? "fill-current" : ""}`} />
-                {favoritesOnly ? "Showing Favorites" : "Show Favorites"}
+                <Heart className={`h-4 w-4 ${favoritesOnly ? 'fill-current' : ''}`} />
+                {favoritesOnly ? 'Showing Favorites' : 'Show Favorites'}
               </Button>
-            </div>
-          )}
+            ) : null}
+          </div>
 
           <Accordion type="multiple" defaultValue={['category', 'revenue', 'traffic']}>
             <AccordionItem value="category">
@@ -149,9 +175,9 @@ export function FilterSidebar({
               <AccordionContent>
                 <p className="mb-3 text-xs text-muted-foreground leading-snug">
                   Default labels plus any category used by a tool (including
-                  AI-suggested). Each tool has at most three categories; new
-                  labels appear here automatically. Near-duplicates map to the
-                  closest default when possible.
+                  AI-suggested). Service agencies use the Show Agencies control
+                  and a ribbon on cards—not this list. Each tool has at most
+                  three categories; new labels appear here automatically.
                 </p>
                 <div className="space-y-3">
                   <Label
@@ -237,6 +263,32 @@ export function FilterSidebar({
             <div className="mt-6 space-y-2">
               <h3 className="text-sm font-medium">Active Filters</h3>
               <div className="flex flex-wrap gap-2">
+                {agenciesOnly && (
+                  <Badge variant="secondary" className="gap-1">
+                    Agencies
+                    <button
+                      type="button"
+                      onClick={onAgenciesToggle}
+                      className="ml-1 rounded-full hover:bg-background"
+                      aria-label="Remove agencies filter"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                )}
+                {favoritesOnly && (
+                  <Badge variant="secondary" className="gap-1">
+                    Favorites
+                    <button
+                      type="button"
+                      onClick={onFavoritesToggle}
+                      className="ml-1 rounded-full hover:bg-background"
+                      aria-label="Remove favorites filter"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                )}
                 {selectedCategories.map((category) => (
                   <Badge key={category} variant="secondary" className="gap-1">
                     {category}

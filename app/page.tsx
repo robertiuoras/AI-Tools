@@ -22,10 +22,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { GraduationCap, Heart, Info, LayoutGrid, List } from "lucide-react";
+import {
+  GraduationCap,
+  Info,
+  LayoutGrid,
+  List,
+  RefreshCw,
+} from "lucide-react";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -37,6 +44,7 @@ import { supabase } from "@/lib/supabase";
 import type { Tool } from "@/lib/supabase";
 import { toolCategoryList } from "@/lib/tool-categories";
 import {
+  AGENCY_CATEGORY_LABEL,
   categories as defaultCategories,
   sortToolCategoryLabelsForDisplay,
 } from "@/lib/schemas";
@@ -45,6 +53,7 @@ type SortOption = "alphabetical" | "newest" | "popular" | "traffic" | "traffic-l
 type SortOrder = "asc" | "desc";
 
 const TOOLS_VIEW_STORAGE_KEY = "ai-tools-view";
+const REFRESH_ALL_STEPS = 50;
 
 /** Match Tailwind breakpoints for tool grid columns (sm/lg/xl). */
 function useToolGridColumnCount() {
@@ -75,14 +84,21 @@ function HomePageContent() {
   const [sort, setSort] = useState<SortOption>("popular");
   const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
   const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [agenciesOnly, setAgenciesOnly] = useState(false);
   const [user, setUser] = useState<any>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [tourReplayNonce, setTourReplayNonce] = useState(0);
   const [viewMode, setViewMode] = useState<ToolCardLayout>("grid");
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshAllOpen, setRefreshAllOpen] = useState(false);
+  const [refreshAllStep, setRefreshAllStep] = useState({
+    step: 0,
+    total: REFRESH_ALL_STEPS,
+  });
   const toolGridCols = useToolGridColumnCount();
   const toolsRef = useRef<Tool[]>([]);
   toolsRef.current = tools;
+  const refreshModalBlockingRef = useRef(false);
 
   useEffect(() => {
     try {
@@ -105,23 +121,35 @@ function HomePageContent() {
   const searchSuggestions = useMemo(() => {
     if (!tools || tools.length === 0) return [];
     const names = tools.map((t) => t.name);
-    const cats = tools.flatMap((t) => toolCategoryList(t));
+    const cats = tools
+      .flatMap((t) => toolCategoryList(t))
+      .filter((c) => c !== AGENCY_CATEGORY_LABEL);
     return Array.from(new Set([...names, ...cats]));
   }, [tools]);
 
   const availableCategories = useMemo(() => {
     const seen = new Set<string>();
-    for (const c of defaultCategories) seen.add(c);
+    for (const c of defaultCategories) {
+      if (c !== AGENCY_CATEGORY_LABEL) seen.add(c);
+    }
     for (const t of tools) {
       for (const c of toolCategoryList(t)) {
-        if (c?.trim()) seen.add(c.trim());
+        const x = c?.trim();
+        if (x && x !== AGENCY_CATEGORY_LABEL) seen.add(x);
       }
     }
     for (const c of selectedCategories) {
-      if (c?.trim()) seen.add(c.trim());
+      const x = c?.trim();
+      if (x && x !== AGENCY_CATEGORY_LABEL) seen.add(x);
     }
     return sortToolCategoryLabelsForDisplay(Array.from(seen));
   }, [tools, selectedCategories]);
+
+  useEffect(() => {
+    setSelectedCategories((prev) =>
+      prev.filter((c) => c !== AGENCY_CATEGORY_LABEL),
+    );
+  }, []);
 
   /** Search filters in the browser — no network per keystroke (fast vs full refetch + loading). */
   const displayedTools = useMemo(() => {
@@ -269,6 +297,7 @@ function HomePageContent() {
       params.append("sort", sort);
       params.append("order", sortOrder);
       if (favoritesOnly) params.append("favoritesOnly", "true");
+      if (agenciesOnly) params.append("agenciesOnly", "true");
 
       const session = await supabase.auth.getSession();
       const token = (await session).data.session?.access_token;
@@ -325,9 +354,33 @@ function HomePageContent() {
     sort,
     sortOrder,
     favoritesOnly,
+    agenciesOnly,
     // Removed user from dependencies - it causes unnecessary refetches
     // Search is client-side only (see displayedTools)
   ]);
+
+  const handleRefreshAll = useCallback(async () => {
+    refreshModalBlockingRef.current = true;
+    setRefreshAllOpen(true);
+    setRefreshAllStep({ step: 0, total: REFRESH_ALL_STEPS });
+    let step = 0;
+    const intervalId = window.setInterval(() => {
+      step = Math.min(step + 1, REFRESH_ALL_STEPS - 1);
+      setRefreshAllStep({ step, total: REFRESH_ALL_STEPS });
+    }, 40);
+    try {
+      await fetchTools();
+    } finally {
+      window.clearInterval(intervalId);
+      setRefreshAllStep({
+        step: REFRESH_ALL_STEPS,
+        total: REFRESH_ALL_STEPS,
+      });
+      await new Promise((r) => window.setTimeout(r, 320));
+      refreshModalBlockingRef.current = false;
+      setRefreshAllOpen(false);
+    }
+  }, [fetchTools]);
 
   useEffect(() => {
     void fetchTools();
@@ -348,6 +401,8 @@ function HomePageContent() {
               onRevenueChange={setSelectedRevenue}
               favoritesOnly={favoritesOnly}
               onFavoritesToggle={() => setFavoritesOnly(!favoritesOnly)}
+              agenciesOnly={agenciesOnly}
+              onAgenciesToggle={() => setAgenciesOnly(!agenciesOnly)}
               user={user}
               availableCategories={availableCategories}
             />
@@ -371,6 +426,20 @@ function HomePageContent() {
                 ) : null}
               </div>
               <UpvoteTimer />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 shrink-0 gap-1.5"
+                disabled={refreshing || refreshAllOpen}
+                onClick={() => void handleRefreshAll()}
+                title="Reload tools from the server"
+              >
+                <RefreshCw
+                  className={`h-3.5 w-3.5 ${refreshing || refreshAllOpen ? "animate-spin" : ""}`}
+                />
+                Refresh all
+              </Button>
               <div className="flex flex-wrap items-center gap-2">
                 <div
                   className="flex rounded-md border border-border bg-muted/30 p-0.5"
@@ -593,6 +662,47 @@ function HomePageContent() {
           </Button>
         </div>
       )}
+
+      <Dialog
+        open={refreshAllOpen}
+        onOpenChange={(open) => {
+          if (!open && refreshModalBlockingRef.current) return;
+          setRefreshAllOpen(open);
+        }}
+      >
+        <DialogContent className="sm:max-w-md [&>button]:hidden">
+          <DialogHeader>
+            <DialogTitle>Refreshing tools</DialogTitle>
+            <DialogDescription>
+              Reloading the full list from the server. This may take a few
+              seconds on slow connections.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 pt-2">
+            <p
+              className="text-center text-2xl font-semibold tabular-nums tracking-tight"
+              aria-live="polite"
+            >
+              {refreshAllStep.step}/{refreshAllStep.total}
+            </p>
+            <div
+              className="h-2.5 w-full overflow-hidden rounded-full bg-muted"
+              role="progressbar"
+              aria-valuenow={refreshAllStep.step}
+              aria-valuemin={0}
+              aria-valuemax={refreshAllStep.total}
+            >
+              <div
+                className="h-full rounded-full bg-primary transition-[width] duration-150 ease-out"
+                style={{
+                  width: `${(refreshAllStep.step / refreshAllStep.total) * 100}%`,
+                }}
+              />
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <SiteTour adminReplayNonce={tourReplayNonce} />
     </div>
   );

@@ -25,7 +25,11 @@ import {
   videoCategories,
 } from '@/lib/schemas'
 import { toolCategoryBadgeClass } from '@/lib/tool-category-styles'
-import { toolCategoryList } from '@/lib/tool-categories'
+import {
+  toolCategoryList,
+  toolCategoryListForBadges,
+  toolIsAgency,
+} from '@/lib/tool-categories'
 import type { Tool, Video } from '@/lib/supabase'
 import { cn } from '@/lib/utils'
 import { Loader2, Plus, Trash2, Edit2, Sparkles, RefreshCw, Star, Youtube, Music2, Check, DollarSign, ExternalLink, AlertCircle, CheckCircle2, XCircle } from 'lucide-react'
@@ -2481,18 +2485,34 @@ export default function AdminPage() {
                       maxHeight: 'min(70vh, calc(8.45 * (80px + 8px)))',
                     }}
                   >
-                    {filteredAdminTools.map((tool) => (
+                    {filteredAdminTools.map((tool) => {
+                      const isAgency = toolIsAgency(tool)
+                      return (
                   <div
                     key={tool.id}
-                    className="flex items-start justify-between rounded-xl border border-border/60 p-4 hover:bg-muted/40 hover:border-violet-200 dark:hover:border-violet-800/50 transition-all min-h-[80px]"
+                    className={cn(
+                      'overflow-hidden rounded-xl border transition-all min-h-[80px]',
+                      isAgency
+                        ? 'border-orange-300/80 bg-orange-50/95 shadow-sm shadow-orange-200/40 dark:border-orange-800/55 dark:bg-orange-950/35 dark:shadow-orange-950/25 dark:hover:bg-orange-950/45'
+                        : 'border-border/60 hover:bg-muted/40 hover:border-violet-200 dark:hover:border-violet-800/50',
+                    )}
                   >
+                    {isAgency ? (
+                      <div
+                        className="w-full bg-gradient-to-r from-orange-600 via-amber-500 to-orange-500 px-3 py-1.5 text-center text-[11px] font-semibold uppercase tracking-[0.12em] text-white"
+                        role="note"
+                      >
+                        Agency
+                      </div>
+                    ) : null}
+                    <div className="flex items-start justify-between p-4">
                     <div className="flex-1 min-w-0 pr-4">
                       <h3 className="font-semibold truncate">{tool.name}</h3>
                       <p className="text-sm text-muted-foreground line-clamp-2 mt-1">
                         {tool.description}
                       </p>
                       <div className="mt-2 flex flex-wrap items-center gap-1.5 gap-y-1">
-                        {toolCategoryList(tool).map((c) => (
+                        {toolCategoryListForBadges(tool).map((c) => (
                           <Badge
                             key={c}
                             variant="outline"
@@ -2548,8 +2568,10 @@ export default function AdminPage() {
                         <Trash2 className="h-4 w-4 text-destructive" />
                       </Button>
                     </div>
+                    </div>
                   </div>
-                    ))}
+                      )
+                    })}
                   </div>
                   <div
                     className="pointer-events-none absolute bottom-0 left-0 right-2 h-12 rounded-b-lg bg-gradient-to-t from-card to-transparent dark:from-card"
