@@ -27,16 +27,18 @@ export function logOpenAIUsage(
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number },
 ): void {
   const cost = estimateCost(model, usage.prompt_tokens, usage.completion_tokens)
+  const row = {
+    model,
+    operation,
+    prompt_tokens: usage.prompt_tokens,
+    completion_tokens: usage.completion_tokens,
+    total_tokens: usage.total_tokens,
+    estimated_cost_usd: cost,
+  }
+  // Table is created via openai-usage-migration.sql but not in generated Supabase types yet.
   supabaseAdmin
     .from('openai_usage_log')
-    .insert({
-      model,
-      operation,
-      prompt_tokens: usage.prompt_tokens,
-      completion_tokens: usage.completion_tokens,
-      total_tokens: usage.total_tokens,
-      estimated_cost_usd: cost,
-    })
+    .insert(row as never)
     .then(({ error }) => {
       if (error) console.error('[OpenAI Usage] Failed to log:', error.message)
     })
