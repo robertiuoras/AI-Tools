@@ -36,11 +36,15 @@ export function logOpenAIUsage(
     estimated_cost_usd: cost,
   }
   // Table is created via openai-usage-migration.sql but not in generated Supabase types yet.
-  supabaseAdmin
-    .from('openai_usage_log')
-    .insert(row as never)
+  void Promise.resolve(
+    supabaseAdmin.from('openai_usage_log').insert(row as never) as Promise<{
+      error: { message: string } | null
+    }>,
+  )
     .then(({ error }) => {
       if (error) console.error('[OpenAI Usage] Failed to log:', error.message)
     })
-    .catch((e) => console.error('[OpenAI Usage] Failed to log:', e))
+    .catch((e: unknown) =>
+      console.error('[OpenAI Usage] Failed to log:', e),
+    )
 }
