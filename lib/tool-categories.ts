@@ -3,6 +3,7 @@ import { AGENCY_CATEGORY_LABEL, normalizeToolCategory } from '@/lib/schemas'
 export type ToolCategoryRow = {
   category?: string | null
   categories?: string[] | null
+  isAgency?: boolean | null
 }
 
 /**
@@ -26,6 +27,7 @@ export function toolCategoryList(row: ToolCategoryRow): string[] {
 }
 
 export function toolIsAgency(row: ToolCategoryRow): boolean {
+  if (row.isAgency === true) return true
   return toolCategoryList(row).some((c) => c === AGENCY_CATEGORY_LABEL)
 }
 

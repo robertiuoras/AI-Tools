@@ -57,7 +57,7 @@ export function logOpenAIUsage(
     total_tokens: usage.total_tokens,
     estimated_cost_usd: cost,
   }
-  // Table is created via openai-usage-migration.sql but not in generated Supabase types yet.
+  // Table is created via supabase/sql/openai-usage-migration.sql but not in generated Supabase types yet.
   void Promise.resolve(
     supabaseAdmin.from('openai_usage_log').insert(row as never) as unknown as Promise<{
       error: { message: string } | null

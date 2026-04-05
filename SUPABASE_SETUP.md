@@ -81,6 +81,8 @@ CREATE INDEX idx_tool_revenue ON tool(revenue);
 
 **Note:** Table name must be lowercase `tool` (not `Tool`).
 
+**Full app schema** (users, upvotes, downvotes, favorites, notes, videos, RLS): run the SQL files in `supabase/sql/` in the order listed in `supabase/sql/README.txt` (start with `supabase-migration.sql`). If you already created `tool` manually, the migration uses `IF NOT EXISTS` where possible; resolve any duplicate-table errors by skipping the overlapping section.
+
 ## Step 4: Verify the Connection
 
 1. Start your development server:

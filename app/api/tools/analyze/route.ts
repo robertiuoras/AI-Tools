@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import {
+  AGENCY_CATEGORY_LABEL,
   augmentCategoriesWithAgencySignals,
   augmentCategoriesWithIndustryVerticals,
   categories,
   finalizeToolCategoriesList,
   MAX_TOOL_CATEGORIES,
   normalizeToolCategory,
+  parseOptionalBool,
+  stripAgencyFromCategoriesForStorage,
 } from '@/lib/schemas'
 import {
   estimateOpenAiUsageCostUsd,
@@ -44,6 +47,8 @@ interface AnalysisResult {
   category: string
   /** 1–3 labels (preferred + custom mix), best match first */
   categories: string[]
+  /** Service / implementation firm — separate from category slots */
+  isAgency: boolean
   tags: string
   revenue: 'free' | 'freemium' | 'paid' | 'enterprise' | null
   traffic: 'low' | 'medium' | 'high' | 'unknown'
@@ -396,14 +401,15 @@ Industry verticals (required when copy is explicit): If the title, description, 
 Pair the vertical with function labels (**AI Agents**, **Voice & Audio**, **Customer Support**, **SaaS**, etc.) up to ${MAX_TOOL_CATEGORIES} total.
 
 Category quality — **how they sell** matters as much as **what** they sell:
-- **Self-serve product vendor**: instant signup, transparent pricing tiers, little or no bespoke integration — use **Insurance**, **SaaS**, **AI Automation**, etc. Usually **not** "Agencies".
-- **Client-services / implementation firm** (use **"Agencies"**): sells **custom delivery** — e.g. integrate with **your** existing systems, configure to **your** standards, **book a call / diagnostic**, **phased rollout**, **“live in 30 days”**, **we build** your deployment, one client pilots then you refine and roll out. This includes **vertical specialists** (e.g. broker automation shops like BlueHorizon-style sites). Pair **Agencies** with **Insurance** + **AI Automation** when the vertical is insurance and delivery is bespoke.
-- **Marketing/creative/digital agency**: retainers, campaigns, creative production — **Agencies** plus **Marketing** / **Design** / **Advertising** when relevant.
+- **Self-serve product vendor**: instant signup, transparent pricing tiers, little or no bespoke integration — use **Insurance**, **SaaS**, **AI Automation**, etc. Set **isAgency** to **false**.
+- **Client-services / implementation firm**: sells **custom delivery** — e.g. integrate with **your** existing systems, configure to **your** standards, **book a call / diagnostic**, **phased rollout**, **“live in 30 days”**, **we build** your deployment. Set **isAgency** **true** and use categories like **Insurance** + **AI Automation** when the vertical is insurance and delivery is bespoke.
+- **Marketing/creative/digital agency**: retainers, campaigns, creative production — **isAgency** **true**; categories **Marketing** / **Design** / **Advertising** when relevant (never put **"Agencies"** in **categories**).
 
 Return JSON:
 {
   "name": "Tool name (max 50 chars)",
   "description": "2-3 sentence description",
+  "isAgency": true or false,
   "categories": ["Primary", "Second if needed", "Third if needed"],
   "tags": "ai, tag1, tag2 (3-5 tags)",
   "revenue": "free|freemium|paid|enterprise|null",
@@ -419,8 +425,9 @@ Rules:
 - categories: Return 1 to ${MAX_TOOL_CATEGORIES} labels only (most tools: 2–3). Order by relevance (first = primary). **List labels are preferred**; add **at most one** custom when needed (see above). Examples: ["News", "Education"]; ["Healthcare", "AI Agents", "Voice & Audio"] (all list); ["SaaS", "E-commerce"] (one broad custom). No duplicates. Never use pipes inside strings.
 - categories: Custom labels **will appear in the site’s category filter** for everyone — keep them **reusable and not overly narrow**. Prefer specific list labels over "Other". Do NOT include "Other" if you already have two or more other specific categories.
 - categories: Use "News" for AI news sites, newsletters, daily digests, curated industry updates, or headline aggregators. Add "Education" when the product clearly teaches, explains, or trains (courses, tutorials, learning tracks alongside news).
-- categories: **Agencies** = client-services or **custom implementation** firm (see above), not only ad agencies. **Not** Agencies: purely self-serve SaaS with no bespoke rollout story.
-- categories: Do not pad; prefer list labels. Use 2–3 when needed (e.g. **Agencies**, **Insurance**, **AI Automation**). Do not stack multiple custom categories.
+- isAgency: **true** for client-services / **custom implementation** firms and marketing/creative agencies (see above). **false** for purely self-serve SaaS with no bespoke rollout story.
+- categories: Use **only** industry verticals + functional labels (e.g. **Healthcare**, **Insurance**, **AI Automation**, **Marketing**). Do **not** put **"Agencies"** in the categories array — agency status is **isAgency** only.
+- categories: Do not pad; prefer list labels. Use 2–3 when needed. Do not stack multiple custom categories.
 - Return ONLY valid JSON, no markdown formatting`
 
     console.log('🚀 [OpenAI] ==========================================')
@@ -438,7 +445,7 @@ Rules:
           {
             role: 'system',
             content:
-              `Analyze AI tools. Return valid JSON only. Use 1–${MAX_TOOL_CATEGORIES} categories per tool. Prefer canonical list labels; add at most one broad custom label when the list has no good fit — customs show in public filters, so keep wording reusable, not hyper-niche. When copy names an industry, include that list vertical (Healthcare, Insurance, Legal, …) with functional categories. Agencies for marketing/creative and bespoke implementation partners. Self-serve-only SaaS usually not Agencies. News + Education when appropriate. Avoid unnecessary Other.`,
+              `Analyze AI tools. Return valid JSON only. Use 1–${MAX_TOOL_CATEGORIES} categories per tool (never put "Agencies" in categories — set isAgency instead). Prefer canonical list labels; add at most one broad custom label when the list has no good fit — customs show in public filters, so keep wording reusable, not hyper-niche. When copy names an industry, include that list vertical (Healthcare, Insurance, Legal, …) with functional categories. isAgency true for marketing/creative and bespoke implementation partners; false for self-serve-only SaaS. News + Education when appropriate. Avoid unnecessary Other.`,
           },
           { role: 'user', content: prompt },
         ],
@@ -658,6 +665,11 @@ Rules:
     console.log('✅ [OpenAI] ==========================================')
 
     const cats = categoriesFromAiContent(content)
+    const modelAgency = parseOptionalBool(content.isAgency)
+    const isAgencyHint =
+      modelAgency !== undefined
+        ? modelAgency
+        : cats.includes(AGENCY_CATEGORY_LABEL)
     const usage = data.usage as
       | {
           prompt_tokens: number
@@ -673,6 +685,7 @@ Rules:
       description: content.description || description,
       categories: cats,
       category: cats[0],
+      isAgency: isAgencyHint,
       tags: content.tags || '',
       revenue: content.revenue || null,
       traffic: content.traffic || 'unknown',
@@ -917,15 +930,19 @@ export async function POST(request: NextRequest) {
       .filter(Boolean)
       .join('\n')
       .slice(0, 8000)
-    const cats = augmentCategoriesWithIndustryVerticals(
+    const catsAugmented = augmentCategoriesWithIndustryVerticals(
       augmentCategoriesWithAgencySignals(catsBase, corpusForAgency),
       corpusForAgency,
     )
+    const { categories: catsStored, isAgency: isAgencyFromCats } =
+      stripAgencyFromCategoriesForStorage(catsAugmented)
+    const isAgency = isAgencyFromCats || analysis.isAgency === true
     const result: AnalysisResult = {
       name: analysis.name || scraped.title || validUrl.hostname.replace('www.', ''),
       description: analysis.description || scraped.description || 'AI tool',
-      categories: cats,
-      category: cats[0],
+      categories: catsStored,
+      category: catsStored[0],
+      isAgency,
       tags: analysis.tags || '',
       revenue: analysis.revenue ?? null,
       traffic: analysis.traffic ?? 'unknown',

@@ -408,6 +408,36 @@ export function finalizeToolCategoriesList(normalized: string[]): string[] {
 }
 
 /**
+ * Agencies use a dedicated `isAgency` flag in the DB — they must not consume a category slot.
+ * Call this before persisting: returns up to {@link MAX_TOOL_CATEGORIES} non-agency labels.
+ */
+export function stripAgencyFromCategoriesForStorage(
+  categoriesIn: string[],
+): { categories: string[]; isAgency: boolean } {
+  const normalized = categoriesIn
+    .map((c) => normalizeToolCategory(String(c)))
+    .filter(Boolean)
+  const finalized = finalizeToolCategoriesList(normalized)
+  const isAgency = finalized.includes(AGENCY_CATEGORY_LABEL)
+  const rest = finalized.filter((c) => c !== AGENCY_CATEGORY_LABEL)
+  const categories = finalizeToolCategoriesList(
+    rest.length > 0 ? rest : ['Other'],
+  )
+  return { categories, isAgency }
+}
+
+export function parseOptionalBool(v: unknown): boolean | undefined {
+  if (v === true) return true
+  if (v === false) return false
+  if (typeof v === 'string') {
+    const s = v.trim().toLowerCase()
+    if (s === 'true' || s === '1' || s === 'yes') return true
+    if (s === 'false' || s === '0' || s === 'no') return false
+  }
+  return undefined
+}
+
+/**
  * If the page clearly describes a services or implementation firm but the model omitted "Agencies", add it.
  * Vertical B2B wording (e.g. “for brokers”) no longer blocks when implementation / book-a-call signals match.
  */
@@ -483,31 +513,42 @@ const toolObjectSchema = z.object({
   revenue: z.enum(['free', 'freemium', 'paid', 'enterprise']).optional().nullable(),
   rating: z.number().min(0).max(5).optional().nullable(),
   estimatedVisits: z.number().int().positive().optional().nullable(),
+  /** Service / implementation firm — stored separately; not in categories[]. */
+  isAgency: z.boolean(),
 })
 
 const preprocessTool = z.preprocess((data: any) => {
   if (typeof data === 'object' && data !== null) {
-    let categories: string[] = []
+    let fromList: string[] = []
     if (Array.isArray(data.categories) && data.categories.length > 0) {
-      const fromArr: string[] = data.categories.map((c: unknown) =>
+      fromList = data.categories.map((c: unknown) =>
         normalizeToolCategory(String(c)),
-      )
-      categories = finalizeToolCategoriesList(
-        [...new Set(fromArr)].filter((c) => c.length > 0),
       )
     }
     if (
-      categories.length === 0 &&
+      fromList.length === 0 &&
       data.category != null &&
       String(data.category).trim()
     ) {
-      categories = finalizeToolCategoriesList([
-        normalizeToolCategory(String(data.category)),
-      ])
+      fromList = [normalizeToolCategory(String(data.category))]
     }
+    const hadAgencyInInput = fromList.includes(AGENCY_CATEGORY_LABEL)
+    const withoutAgency = [...new Set(fromList)].filter(
+      (c) => c !== AGENCY_CATEGORY_LABEL,
+    )
+    let categories = finalizeToolCategoriesList(
+      withoutAgency.length > 0 ? withoutAgency : ['Other'],
+    )
     if (categories.length === 0) {
       categories = ['Other']
     }
+
+    const explicit = parseOptionalBool(data.isAgency)
+    let isAgency: boolean
+    if (explicit === false) isAgency = false
+    else if (explicit === true) isAgency = true
+    else isAgency = hadAgencyInInput
+
     return {
       ...data,
       logoUrl: data.logoUrl === '' ? null : data.logoUrl,
@@ -515,6 +556,7 @@ const preprocessTool = z.preprocess((data: any) => {
       traffic: data.traffic === '' ? null : data.traffic,
       revenue: data.revenue === '' ? null : data.revenue,
       categories,
+      isAgency,
     }
   }
   return data
@@ -523,6 +565,7 @@ const preprocessTool = z.preprocess((data: any) => {
 export const toolSchema = preprocessTool.transform((d) => ({
   ...d,
   category: d.categories[0],
+  isAgency: d.isAgency,
 }))
 
 export type ToolInput = z.infer<typeof toolObjectSchema> & { category: string }

@@ -28,7 +28,7 @@ export async function GET() {
       // Table doesn't exist yet — guide the user
       if (error.code === '42P01') {
         return NextResponse.json(
-          { error: 'Usage table not created yet. Run openai-usage-migration.sql in your Supabase SQL editor.' },
+          { error: 'Usage table not created yet. Run supabase/sql/openai-usage-migration.sql in your Supabase SQL editor.' },
           { status: 400 },
         )
       }

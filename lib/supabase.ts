@@ -57,6 +57,8 @@ export interface Tool {
   category: string;
   /** Multiple categories (when column exists in DB); `category` is the primary (first). */
   categories?: string[] | null;
+  /** Service / implementation firm (orange ribbon); not stored in categories[]. */
+  isAgency?: boolean | null;
   tags: string | null;
   traffic: "low" | "medium" | "high" | "unknown" | null;
   revenue: "free" | "freemium" | "paid" | "enterprise" | null;

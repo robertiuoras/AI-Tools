@@ -27,7 +27,7 @@
 
 1. Go to your Supabase Dashboard
 2. Navigate to **SQL Editor**
-3. Run the contents of `upvote-system-migration.sql`
+3. Run the contents of `supabase/sql/upvote-system-migration.sql`
 
 This migration will:
 
@@ -123,4 +123,4 @@ To manually trigger a monthly reset (optional):
 - `components/UpvoteTimer.tsx` - New component showing reset timers
 - `app/page.tsx` - Added UpvoteTimer to landing page
 - `app/api/admin/set-role/route.ts` - New endpoint for role management
-- `upvote-system-migration.sql` - Database migration script
+- `supabase/sql/upvote-system-migration.sql` - Database migration script

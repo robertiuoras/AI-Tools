@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase";
-import { AGENCY_CATEGORY_LABEL, toolSchema } from "@/lib/schemas";
-import { toolCategoryList } from "@/lib/tool-categories";
+import { toolSchema } from "@/lib/schemas";
+import { toolCategoryList, toolIsAgency } from "@/lib/tool-categories";
 import { createClient } from "@supabase/supabase-js";
 import {
   getLocalMonthStartIso,
@@ -29,7 +29,7 @@ function jsonbCountsToMap(obj: unknown): Map<string, number> {
   return m;
 }
 
-/** One DB round-trip for all tools’ monthly vote totals (see supabase-batch-vote-counts.sql). */
+/** One DB round-trip for all tools’ monthly vote totals (see supabase/sql/supabase-batch-vote-counts.sql). */
 async function fetchMonthlyVoteCountMaps(
   admin: any,
   toolIds: string[],
@@ -219,9 +219,7 @@ export async function GET(request: NextRequest) {
     }
 
     if (agenciesOnly) {
-      filteredTools = filteredTools.filter((tool: any) =>
-        toolCategoryList(tool).some((c) => c === AGENCY_CATEGORY_LABEL),
-      );
+      filteredTools = filteredTools.filter((tool: any) => toolIsAgency(tool));
     }
 
     if (filteredTools.length === 0) {
@@ -348,6 +346,7 @@ export async function POST(request: NextRequest) {
       url: validatedData.url,
       category: validatedData.category,
       categories: validatedData.categories,
+      isAgency: validatedData.isAgency,
     };
 
     // Handle optional fields - convert empty strings to null

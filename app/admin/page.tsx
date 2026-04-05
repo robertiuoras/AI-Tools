@@ -26,11 +26,14 @@ import {
 } from '@/components/ui/dialog'
 import { estimateOpenAiUsageCostUsd } from '@/lib/openai-usage'
 import {
+  AGENCY_CATEGORY_LABEL,
   categories,
   finalizeToolCategoriesList,
   MAX_TOOL_CATEGORIES,
   normalizeToolCategory,
   normalizeVideoCategory,
+  parseOptionalBool,
+  stripAgencyFromCategoriesForStorage,
   videoCategories,
 } from '@/lib/schemas'
 import { toolCategoryBadgeClass } from '@/lib/tool-category-styles'
@@ -50,6 +53,8 @@ type AdminToolFormState = {
   url: string
   logoUrl: string
   categories: string[]
+  /** Stored as DB column; not one of the 3 category chips */
+  isAgency: boolean
   tags: string
   traffic: string
   revenue: string
@@ -91,6 +96,7 @@ function buildToolPayload(
     description: fd.description.trim(),
     url: fd.url.trim(),
     categories: fd.categories,
+    isAgency: fd.isAgency,
   }
 
   if (fd.logoUrl && fd.logoUrl.trim()) {
@@ -147,9 +153,14 @@ function buildPutPayloadFromToolAnalyze(
       ? finalizeToolCategoriesList(
           analyzeData.categories
             .map((c: unknown) => normalizeToolCategory(String(c)))
+            .filter((c) => c !== AGENCY_CATEGORY_LABEL)
             .filter(Boolean),
         )
-      : finalizeToolCategoriesList(toolCategoryList(tool))
+      : stripAgencyFromCategoriesForStorage(toolCategoryList(tool)).categories
+
+  const explicitAgency = parseOptionalBool(analyzeData.isAgency)
+  const isAgency =
+    explicitAgency !== undefined ? explicitAgency : toolIsAgency(tool)
 
   const payload: Record<string, unknown> = {
     name:
@@ -163,6 +174,7 @@ function buildPutPayloadFromToolAnalyze(
         : tool.description,
     url: tool.url,
     categories: nextCategories,
+    isAgency,
   }
 
   if (typeof analyzeData.logoUrl === 'string' && analyzeData.logoUrl.trim()) {
@@ -297,6 +309,7 @@ export default function AdminPage() {
     url: '',
     logoUrl: '',
     categories: [] as string[],
+    isAgency: false,
     tags: '',
     traffic: '',
     revenue: '',
@@ -1015,7 +1028,9 @@ export default function AdminPage() {
     if (adminCategoryFilter !== 'all' && adminCategoryFilter.trim()) {
       seen.add(adminCategoryFilter.trim())
     }
-    return sortSelectedCategories(Array.from(seen))
+    return sortSelectedCategories(Array.from(seen)).filter(
+      (c) => c !== AGENCY_CATEGORY_LABEL,
+    )
   }, [tools, formData.categories, adminCategoryFilter])
 
   const toggleToolCategory = (cat: string) => {
@@ -1134,12 +1149,16 @@ export default function AdminPage() {
       clearTimeout(autoSaveSavedTimerRef.current)
       autoSaveSavedTimerRef.current = null
     }
+    const { categories: editCats } = stripAgencyFromCategoriesForStorage(
+      toolCategoryList(tool),
+    )
     const nextForm = {
       name: tool.name,
       description: tool.description,
       url: tool.url,
       logoUrl: tool.logoUrl || '',
-      categories: finalizeToolCategoriesList(toolCategoryList(tool)),
+      categories: editCats,
+      isAgency: toolIsAgency(tool),
       tags: tool.tags || '',
       traffic: tool.traffic || '',
       revenue: tool.revenue || '',
@@ -1732,13 +1751,14 @@ export default function AdminPage() {
         categories:
           Array.isArray(data.categories) && data.categories.length > 0
             ? finalizeToolCategoriesList(
-                data.categories.map((c: unknown) =>
-                  normalizeToolCategory(String(c)),
-                ),
+                data.categories
+                  .map((c: unknown) => normalizeToolCategory(String(c)))
+                  .filter((c: string) => c !== AGENCY_CATEGORY_LABEL),
               )
             : finalizeToolCategoriesList([
                 normalizeToolCategory(String(data.category || 'Other')),
               ]),
+        isAgency: data.isAgency === true,
         tags: data.tags || '',
         traffic: data.traffic || '',
         revenue: data.revenue || '',
@@ -1758,9 +1778,9 @@ export default function AdminPage() {
       const analyzedCategories =
         Array.isArray(data.categories) && data.categories.length > 0
           ? finalizeToolCategoriesList(
-              data.categories.map((c: unknown) =>
-                normalizeToolCategory(String(c)),
-              ),
+              data.categories
+                .map((c: unknown) => normalizeToolCategory(String(c)))
+                .filter((c: string) => c !== AGENCY_CATEGORY_LABEL),
             )
           : data.category
             ? finalizeToolCategoriesList([
@@ -2002,13 +2022,14 @@ export default function AdminPage() {
           categories:
             Array.isArray(data.categories) && data.categories.length > 0
               ? finalizeToolCategoriesList(
-                  data.categories.map((c: unknown) =>
-                    normalizeToolCategory(String(c)),
-                  ),
+                  data.categories
+                    .map((c: unknown) => normalizeToolCategory(String(c)))
+                    .filter((c: string) => c !== AGENCY_CATEGORY_LABEL),
                 )
               : finalizeToolCategoriesList([
                   normalizeToolCategory(String(data.category || 'Other')),
                 ]),
+          isAgency: data.isAgency === true,
         }
 
         if (data.logoUrl) payload.logoUrl = data.logoUrl
@@ -2264,6 +2285,7 @@ export default function AdminPage() {
       url: '',
       logoUrl: '',
       categories: [],
+      isAgency: false,
       tags: '',
       traffic: '',
       revenue: '',
@@ -2664,6 +2686,10 @@ export default function AdminPage() {
                     <dt className="text-xs text-muted-foreground">Categories</dt>
                     <dd>{formData.categories.length ? formData.categories.join(', ') : '—'}</dd>
                   </div>
+                  <div>
+                    <dt className="text-xs text-muted-foreground">Agency</dt>
+                    <dd>{formData.isAgency ? 'Yes' : 'No'}</dd>
+                  </div>
                   {formData.description ? (
                     <div>
                       <dt className="text-xs text-muted-foreground">Description</dt>
@@ -2816,6 +2842,25 @@ export default function AdminPage() {
                       Add
                     </Button>
                   </div>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-2 rounded-lg border border-border/60 bg-muted/15 p-3">
+                <Checkbox
+                  id="tool-is-agency"
+                  checked={formData.isAgency}
+                  onCheckedChange={(v) =>
+                    setFormData((prev) => ({ ...prev, isAgency: v === true }))
+                  }
+                />
+                <div className="space-y-0.5">
+                  <Label htmlFor="tool-is-agency" className="cursor-pointer font-medium">
+                    Agency / implementation firm
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Separate from the three category slots. Shows the orange ribbon on the home page and
+                    “Show Agencies” filter — not a category chip.
+                  </p>
                 </div>
               </div>
 
