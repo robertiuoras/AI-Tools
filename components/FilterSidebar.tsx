@@ -179,10 +179,8 @@ export function FilterSidebar({
               <AccordionTrigger>Category</AccordionTrigger>
               <AccordionContent>
                 <p className="mb-3 text-xs text-muted-foreground leading-snug">
-                  Default labels plus any category used by a tool (including
-                  AI-suggested). Service agencies use the Show Agencies control
-                  and a ribbon on cards—not this list. Each tool has at most
-                  three categories; new labels appear here automatically.
+                  List + labels in use. Agencies: use Show Agencies (orange ribbon
+                  on cards). Up to 3 per tool.
                 </p>
                 <div className="space-y-3">
                   <Label

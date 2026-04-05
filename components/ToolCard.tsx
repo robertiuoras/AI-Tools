@@ -442,7 +442,7 @@ export function ToolCard({
 
   const agencyBanner = isAgency ? (
     <div
-      className="w-full bg-gradient-to-r from-orange-600 via-amber-500 to-orange-500 px-3 py-1.5 text-center text-[11px] font-semibold uppercase tracking-[0.12em] text-white shadow-sm"
+      className="w-full rounded-t-lg bg-gradient-to-r from-orange-600 via-amber-500 to-orange-500 px-3 py-1.5 text-center text-[11px] font-semibold uppercase tracking-[0.12em] text-white shadow-sm"
       role="note"
     >
       Agency

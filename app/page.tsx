@@ -127,6 +127,7 @@ function HomePageContent() {
     return Array.from(new Set([...names, ...cats]));
   }, [tools]);
 
+  /** Union of default + every category on any loaded tool (full list; filters applied client-side). */
   const availableCategories = useMemo(() => {
     const seen = new Set<string>();
     for (const c of defaultCategories) {
@@ -151,12 +152,63 @@ function HomePageContent() {
     );
   }, []);
 
+  /** Sidebar filters (client-side so category checklist stays complete while filtering). */
+  const sidebarFilteredTools = useMemo(() => {
+    let list = tools;
+    if (selectedCategories.length > 0) {
+      const needles = new Set(
+        selectedCategories.map((c) => c.toLowerCase()),
+      );
+      list = list.filter((t) =>
+        toolCategoryList(t).some((c) => needles.has(c.toLowerCase())),
+      );
+    }
+    if (selectedTraffic.length > 0) {
+      list = list.filter(
+        (t) =>
+          t.traffic != null && selectedTraffic.includes(t.traffic),
+      );
+    }
+    if (selectedRevenue.length > 0) {
+      list = list.filter(
+        (t) =>
+          t.revenue != null && selectedRevenue.includes(t.revenue),
+      );
+    }
+    if (favoritesOnly) {
+      list = list.filter((t) => t.userFavorited === true);
+    }
+    if (agenciesOnly) {
+      list = list.filter((t) =>
+        toolCategoryList(t).some((c) => c === AGENCY_CATEGORY_LABEL),
+      );
+    }
+    return list;
+  }, [
+    tools,
+    selectedCategories,
+    selectedTraffic,
+    selectedRevenue,
+    favoritesOnly,
+    agenciesOnly,
+  ]);
+
+  const toolsAddedTodayCount = useMemo(() => {
+    if (tools.length === 0) return 0;
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    return tools.filter((t) => {
+      const created = new Date(t.createdAt);
+      return !Number.isNaN(created.getTime()) && created >= start;
+    }).length;
+  }, [tools]);
+
   /** Search filters in the browser — no network per keystroke (fast vs full refetch + loading). */
   const displayedTools = useMemo(() => {
     const raw = search.trim();
     const q = raw.toLowerCase();
-    if (!q) return tools;
-    const matches = tools.filter(
+    if (!q) return sidebarFilteredTools;
+    const matches = sidebarFilteredTools.filter(
       (t) =>
         t.name?.toLowerCase().includes(q) ||
         t.description?.toLowerCase().includes(q) ||
@@ -169,7 +221,7 @@ function HomePageContent() {
     );
     if (exactName.length === 1) return exactName;
     return matches;
-  }, [tools, search]);
+  }, [sidebarFilteredTools, search]);
 
   // Get user session
   useEffect(() => {
@@ -291,13 +343,10 @@ function HomePageContent() {
     else setLoading(true);
     try {
       const params = new URLSearchParams();
-      selectedCategories.forEach((c) => params.append("category", c));
-      selectedTraffic.forEach((t) => params.append("traffic", t));
-      selectedRevenue.forEach((r) => params.append("revenue", r));
+      // Category / traffic / revenue / agencies / favorites: applied client-side so the
+      // filter list always reflects every label present in the loaded directory.
       params.append("sort", sort);
       params.append("order", sortOrder);
-      if (favoritesOnly) params.append("favoritesOnly", "true");
-      if (agenciesOnly) params.append("agenciesOnly", "true");
 
       const session = await supabase.auth.getSession();
       const token = (await session).data.session?.access_token;
@@ -347,17 +396,7 @@ function HomePageContent() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [
-    selectedCategories,
-    selectedTraffic,
-    selectedRevenue,
-    sort,
-    sortOrder,
-    favoritesOnly,
-    agenciesOnly,
-    // Removed user from dependencies - it causes unnecessary refetches
-    // Search is client-side only (see displayedTools)
-  ]);
+  }, [sort, sortOrder, user?.id]);
 
   const handleRefreshAll = useCallback(async () => {
     refreshModalBlockingRef.current = true;
@@ -409,6 +448,18 @@ function HomePageContent() {
           </div>
 
           <div className="flex-1 space-y-6">
+            {toolsAddedTodayCount > 0 ? (
+              <div
+                className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-4 py-2.5 text-center text-sm text-foreground shadow-sm dark:border-emerald-500/30 dark:bg-emerald-950/40"
+                role="status"
+              >
+                <span className="font-semibold tabular-nums text-emerald-800 dark:text-emerald-200">
+                  {toolsAddedTodayCount}
+                </span>
+                {" "}
+                new tool{toolsAddedTodayCount !== 1 ? "s" : ""} added today
+              </div>
+            ) : null}
             <div className="scroll-mt-24 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex-1 max-w-2xl space-y-1" data-tutorial="search-bar">
                 <SearchBar
@@ -583,7 +634,14 @@ function HomePageContent() {
               ) : tools.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-16 text-center">
                   <p className="text-lg text-muted-foreground">
-                    No tools found. Try adjusting your filters or search.
+                    No tools found. Try again later or refresh the list.
+                  </p>
+                </div>
+              ) : sidebarFilteredTools.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 text-center">
+                  <p className="text-lg text-muted-foreground">
+                    No tools match your current filters. Adjust or clear filters
+                    in the sidebar.
                   </p>
                 </div>
               ) : displayedTools.length === 0 ? (
@@ -598,8 +656,9 @@ function HomePageContent() {
                   <p className="text-sm text-muted-foreground">
                     Showing {displayedTools.length} tool
                     {displayedTools.length !== 1 ? "s" : ""}
-                    {search.trim() && tools.length !== displayedTools.length
-                      ? ` (${tools.length} total with current filters)`
+                    {search.trim() &&
+                    sidebarFilteredTools.length !== displayedTools.length
+                      ? ` (${sidebarFilteredTools.length} match current filters)`
                       : ""}
                   </p>
                   {(() => {
