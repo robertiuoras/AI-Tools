@@ -10,6 +10,7 @@ export const categories = [
   'Customer Support',
   'Design',
   'Education',
+  'Healthcare',
   'Image Generation',
   'Insurance',
   'Job',
@@ -86,6 +87,18 @@ export const LEGACY_TOOL_CATEGORY_ALIASES: Record<string, Category> = {
   Graphics: 'Design',
   Elearning: 'Education',
   'E-learning': 'Education',
+  Health: 'Healthcare',
+  health: 'Healthcare',
+  Healthcare: 'Healthcare',
+  healthcare: 'Healthcare',
+  Medical: 'Healthcare',
+  medical: 'Healthcare',
+  Healthtech: 'Healthcare',
+  healthtech: 'Healthcare',
+  Telehealth: 'Healthcare',
+  telehealth: 'Healthcare',
+  Clinical: 'Healthcare',
+  HIPAA: 'Healthcare',
   Photo: 'Image Generation',
   Art: 'Image Generation',
   Career: 'Job',
@@ -417,6 +430,42 @@ export function augmentCategoriesWithAgencySignals(
   }
 
   return finalizeToolCategoriesList(['Agencies', ...categories])
+}
+
+/**
+ * When scraped/title/body clearly names an industry vertical but the model omitted that list label, add it.
+ * Uses tight regexes so generic words alone (e.g. “insurance” on a healthcare page) do not mis-tag.
+ */
+export function augmentCategoriesWithIndustryVerticals(
+  categories: string[],
+  corpus: string,
+): string[] {
+  if (!corpus?.trim() || categories.length === 0) return categories
+
+  const verticals: { label: Category; re: RegExp }[] = [
+    {
+      label: 'Healthcare',
+      re: /\b(healthcare|health\s+care|health[- ]?tech|specifically\s+designed\s+for\s+healthcare|designed\s+for\s+healthcare|for\s+healthcare|healthcare\s+practices?|medical\s+practices?|hospitals?|physicians?|patient\s+intake|\bpatients?\b.*\b(practices?|appointments?|scheduling|calls)\b|dental\s+practices?|\bdentists?\b|telehealth|\behr\b|\bemr\b|\bhipaa\b|clinical\s+workflows?\b)/i,
+    },
+    {
+      label: 'Legal',
+      re: /\b(law\s+firms?|legal\s+practices?|litigation\s+support|for\s+attorneys?|paralegal)\b/i,
+    },
+    {
+      label: 'Insurance',
+      re: /\b(insurtech|for\s+insurance\s+brokers?|insurance\s+brokerages?|underwriting\s+(platform|software)|claims\s+(automation|software))\b/i,
+    },
+  ]
+
+  let out = categories
+  for (const { label, re } of verticals) {
+    if (!categorySet.has(label)) continue
+    if (out.includes(label)) continue
+    if (re.test(corpus)) {
+      out = finalizeToolCategoriesList([label, ...out])
+    }
+  }
+  return out
 }
 
 // Pre-process schema to handle empty strings for tools + legacy single `category`

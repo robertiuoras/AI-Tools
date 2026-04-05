@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import {
   augmentCategoriesWithAgencySignals,
+  augmentCategoriesWithIndustryVerticals,
   categories,
   finalizeToolCategoriesList,
   MAX_TOOL_CATEGORIES,
@@ -388,7 +389,11 @@ ${categories.map((c) => `- "${c}"`).join('\n')}
 
 You may also use custom category strings when needed (2–4 words, Title Case, max 40 characters each). Prefer copying from the list above when it fits; use custom labels only when nothing on the list is close enough. Map near-synonyms to the closest list label instead of inventing duplicates.
 
-Industry verticals: when the offer targets one sector (e.g. insurance brokerages), include **"Insurance"** when that fits, plus **AI Automation** / **SaaS** as appropriate.
+Industry verticals (required when copy is explicit): If the title, description, or page text **clearly** names a sector, you **must** include the matching list label — do not omit it for generic labels only.
+- Examples: “for healthcare practices”, “designed for healthcare”, “medical offices”, “patient intake”, “HIPAA”, dentists → include **"Healthcare"**.
+- Insurance brokers, carriers, claims platforms → **"Insurance"** (when that is the industry sold to, not a passing word like “insurance inquiries” on a healthcare product).
+- Law firms, attorneys → **"Legal"**.
+Pair the vertical with function labels (**AI Agents**, **Voice & Audio**, **Customer Support**, **SaaS**, etc.) up to ${MAX_TOOL_CATEGORIES} total.
 
 Category quality — **how they sell** matters as much as **what** they sell:
 - **Self-serve product vendor**: instant signup, transparent pricing tiers, little or no bespoke integration — use **Insurance**, **SaaS**, **AI Automation**, etc. Usually **not** "Agencies".
@@ -433,7 +438,7 @@ Rules:
           {
             role: 'system',
             content:
-              `Analyze AI tools. Return valid JSON only. Use 1–${MAX_TOOL_CATEGORIES} categories per tool. Prefer list labels. Use "Agencies" for marketing/creative shops AND for custom implementation / integration partners (book a call, diagnostic, phased rollout, configure to client systems). Use "Insurance" etc. for vertical focus; combine Agencies + Insurance + AI Automation when a vertical specialist delivers bespoke services. Self-serve-only SaaS without custom rollout is usually not Agencies. News + Education when appropriate. Avoid unnecessary Other.`,
+              `Analyze AI tools. Return valid JSON only. Use 1–${MAX_TOOL_CATEGORIES} categories per tool. Prefer list labels. When copy names an industry (healthcare practices, medical, legal, insurance brokers, etc.), include that vertical label from the list (e.g. Healthcare, Insurance, Legal) alongside functional categories — never drop an obvious vertical. Use "Agencies" for marketing/creative shops and bespoke implementation partners. Self-serve-only SaaS without custom rollout is usually not Agencies. News + Education when appropriate. Avoid unnecessary Other.`,
           },
           { role: 'user', content: prompt },
         ],
@@ -912,7 +917,10 @@ export async function POST(request: NextRequest) {
       .filter(Boolean)
       .join('\n')
       .slice(0, 8000)
-    const cats = augmentCategoriesWithAgencySignals(catsBase, corpusForAgency)
+    const cats = augmentCategoriesWithIndustryVerticals(
+      augmentCategoriesWithAgencySignals(catsBase, corpusForAgency),
+      corpusForAgency,
+    )
     const result: AnalysisResult = {
       name: analysis.name || scraped.title || validUrl.hostname.replace('www.', ''),
       description: analysis.description || scraped.description || 'AI tool',

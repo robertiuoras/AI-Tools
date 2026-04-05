@@ -18,6 +18,8 @@ export const toolCategoryBadgeClassName = (category: string): string => {
       'bg-sky-500/10 text-sky-700 dark:text-sky-400 border-sky-500/25',
     Design: 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/25',
     Education: 'bg-teal-500/10 text-teal-700 dark:text-teal-400 border-teal-500/25',
+    Healthcare:
+      'bg-red-500/8 text-red-900 dark:text-red-300 border-red-500/25',
     'Image Generation':
       'bg-pink-500/10 text-pink-700 dark:text-pink-400 border-pink-500/25',
     Insurance:
