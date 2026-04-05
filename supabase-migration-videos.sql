@@ -72,3 +72,6 @@ CREATE POLICY "Users can mark watched videos" ON "video_watch"
 CREATE POLICY "Users can clear watched videos" ON "video_watch"
   FOR DELETE USING (auth.uid() = "userId");
 
+-- Optional data cleanup: align stored video.category with lib/schemas.ts `videoCategories`.
+-- Inspect current values: SELECT category, COUNT(*) FROM video GROUP BY category ORDER BY COUNT(*) DESC;
+-- Then run targeted UPDATEs, e.g. UPDATE video SET category = 'Education & Tutorials', "updatedAt" = NOW() WHERE category = 'Education';

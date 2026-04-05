@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { videoCategories } from '@/lib/schemas'
+import { logOpenAIUsage } from '@/lib/openai-usage'
 
 /**
  * Analyze a YouTube or TikTok video URL and return metadata for the Add Video form.
@@ -174,7 +175,8 @@ async function suggestCategoryDescriptionAndTags(
       signal: AbortSignal.timeout(12000),
     })
     if (!res.ok) return { category: null, shortDescription: null, tags: null }
-    const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> }
+    const data = (await res.json()) as { model?: string; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }; choices?: Array<{ message?: { content?: string } }> }
+    if (data.usage) logOpenAIUsage(data.model ?? 'gpt-4o-mini', 'video_analyze', data.usage)
     const raw = data.choices?.[0]?.message?.content?.trim()
     if (!raw) return { category: null, shortDescription: null, tags: null }
     const cleaned = raw.replace(/^```json?\s*|\s*```$/g, '').trim()

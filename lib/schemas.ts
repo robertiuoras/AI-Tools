@@ -33,6 +33,18 @@ const categorySet = new Set<string>(categories)
 /** Max categories per tool (1–3; primary = first). */
 export const MAX_TOOL_CATEGORIES = 3
 
+/** Sort labels for filter UIs: known categories follow `categories` order; unknown/custom tail, A–Z. */
+export function sortToolCategoryLabelsForDisplay(labels: string[]): string[] {
+  const known = labels.filter((c) => categorySet.has(c))
+  const unknown = labels.filter((c) => !categorySet.has(c))
+  const sortedKnown = [...known].sort(
+    (a, b) =>
+      categories.indexOf(a as Category) - categories.indexOf(b as Category),
+  )
+  const sortedUnknown = [...unknown].sort((a, b) => a.localeCompare(b))
+  return [...sortedKnown, ...sortedUnknown]
+}
+
 /**
  * Map legacy tool category strings (before list renames) to current `categories` values.
  * Extend as you audit the `tool` table or imports.
@@ -90,6 +102,14 @@ export const LEGACY_TOOL_CATEGORY_ALIASES: Record<string, Category> = {
   'Creative Agency': 'Agencies',
   'Advertising Agency': 'Agencies',
   'Ad Agency': 'Agencies',
+  'digital agency': 'Agencies',
+  'marketing agency': 'Agencies',
+  'creative agency': 'Agencies',
+  'advertising agency': 'Agencies',
+  'design agency': 'Agencies',
+  'growth agency': 'Agencies',
+  'media agency': 'Agencies',
+  'brand agency': 'Agencies',
   Music: 'Music & Audio',
   Sound: 'Music & Audio',
   Podcast: 'Music & Audio',
@@ -219,6 +239,27 @@ function canonicalCaseIfMatches(s: string): string {
   return s
 }
 
+/** Map free-text / AI labels that clearly mean a services agency → canonical Agencies. */
+function inferAgenciesCategory(segment: string): Category | null {
+  const n = segment.trim().toLowerCase()
+  if (!n) return null
+  if (n === 'agency' || n === 'agencies') return 'Agencies'
+  if (
+    /\b(marketing|digital|creative|advertising|design|brand|growth|media)\s+agenc(y|ies)\b/.test(
+      n,
+    )
+  ) {
+    return 'Agencies'
+  }
+  if (
+    /\bagenc(y|ies)\b/.test(n) &&
+    /\b(studio|consultancy|consulting|consultants?|clients?|retainers?)\b/.test(n)
+  ) {
+    return 'Agencies'
+  }
+  return null
+}
+
 /**
  * Collapse bad data (e.g. "Video Editing|AI Automation|SaaS") to one known category.
  * Picks the first segment that matches our category list; otherwise legacy alias or Other.
@@ -228,10 +269,11 @@ export function normalizeToolCategory(raw: string | null | undefined): string {
   const s = raw.trim()
   if (!s) return 'Other'
   if (categorySet.has(s)) return s
-  const lower = s.toLowerCase()
   const parts = s.split('|').map((p) => p.trim()).filter(Boolean)
   for (const p of parts) {
     if (categorySet.has(p)) return p
+    const agency = inferAgenciesCategory(p)
+    if (agency) return agency
     const pl = p.toLowerCase()
     const legacy = LEGACY_TOOL_CATEGORY_ALIASES[p] ?? LEGACY_TOOL_CATEGORY_ALIASES[pl]
     if (legacy && categorySet.has(legacy)) return legacy

@@ -415,7 +415,7 @@ Rules:
           {
             role: 'system',
             content:
-              `Analyze AI tools. Return valid JSON only. Use 1–${MAX_TOOL_CATEGORIES} categories per tool. Prefer labels from the provided list; add custom labels only when needed. Map near-synonyms to the closest list label. Use "Agencies" for agency-style service businesses (marketing, creative, digital shops). News + Education is appropriate for products that combine daily AI news with learning content. Avoid unnecessary Other.`,
+              `Analyze AI tools. Return valid JSON only. Use 1–${MAX_TOOL_CATEGORIES} categories per tool. Prefer labels from the provided list; add custom labels only when needed. Map near-synonyms to the closest list label. For marketing/creative/digital/advertising agencies and client-service studios (retainers, bespoke client work), use the list label "Agencies" and put it first in the categories array when that positioning is dominant—not just "Marketing" or "Design". News + Education is appropriate for products that combine daily AI news with learning content. Avoid unnecessary Other.`,
           },
           { role: 'user', content: prompt },
         ],

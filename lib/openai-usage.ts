@@ -37,7 +37,7 @@ export function logOpenAIUsage(
   }
   // Table is created via openai-usage-migration.sql but not in generated Supabase types yet.
   void Promise.resolve(
-    supabaseAdmin.from('openai_usage_log').insert(row as never) as Promise<{
+    supabaseAdmin.from('openai_usage_log').insert(row as never) as unknown as Promise<{
       error: { message: string } | null
     }>,
   )

@@ -36,7 +36,10 @@ import type { ToolCardLayout } from "@/components/ToolCard";
 import { supabase } from "@/lib/supabase";
 import type { Tool } from "@/lib/supabase";
 import { toolCategoryList } from "@/lib/tool-categories";
-import { categories as defaultCategories } from "@/lib/schemas";
+import {
+  categories as defaultCategories,
+  sortToolCategoryLabelsForDisplay,
+} from "@/lib/schemas";
 
 type SortOption = "alphabetical" | "newest" | "popular" | "traffic" | "traffic-low" | "upvotes";
 type SortOrder = "asc" | "desc";
@@ -117,7 +120,7 @@ function HomePageContent() {
     for (const c of selectedCategories) {
       if (c?.trim()) seen.add(c.trim());
     }
-    return Array.from(seen).sort((a, b) => a.localeCompare(b));
+    return sortToolCategoryLabelsForDisplay(Array.from(seen));
   }, [tools, selectedCategories]);
 
   /** Search filters in the browser — no network per keystroke (fast vs full refetch + loading). */
