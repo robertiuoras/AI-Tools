@@ -201,6 +201,18 @@ export default function AdminPage() {
   const submitVideoCoreRef = useRef<() => Promise<boolean>>(async () => false)
   const startVideoAutoAddCountdownRef = useRef<() => void>(() => {})
 
+  const [toolAutoAddSeconds, setToolAutoAddSeconds] = useState<number | null>(
+    null,
+  )
+  const toolAutoAddIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
+    null,
+  )
+  const toolAutoAddSessionRef = useRef(0)
+  const submitToolQuickAddRef = useRef<() => Promise<boolean>>(
+    async () => false,
+  )
+  const startToolAutoAddCountdownRef = useRef<() => void>(() => {})
+
   // Usage tab state
   type OpenAIUsage = {
     totalCostDollars: number
@@ -254,11 +266,23 @@ export default function AdminPage() {
     setVideoAutoAddSeconds(null)
   }, [])
 
+  const clearToolAutoAdd = useCallback(() => {
+    if (toolAutoAddIntervalRef.current) {
+      clearInterval(toolAutoAddIntervalRef.current)
+      toolAutoAddIntervalRef.current = null
+    }
+    setToolAutoAddSeconds(null)
+  }, [])
+
   useEffect(() => {
     return () => {
       if (videoAutoAddIntervalRef.current) {
         clearInterval(videoAutoAddIntervalRef.current)
         videoAutoAddIntervalRef.current = null
+      }
+      if (toolAutoAddIntervalRef.current) {
+        clearInterval(toolAutoAddIntervalRef.current)
+        toolAutoAddIntervalRef.current = null
       }
     }
   }, [])
@@ -645,6 +669,7 @@ export default function AdminPage() {
   }
 
   const handleEdit = (tool: Tool) => {
+    clearToolAutoAdd()
     if (autoSaveDebounceRef.current) {
       clearTimeout(autoSaveDebounceRef.current)
       autoSaveDebounceRef.current = null
@@ -1134,6 +1159,8 @@ export default function AdminPage() {
       }
     }
 
+    toolAutoAddSessionRef.current += 1
+    clearToolAutoAdd()
     setAnalyzing(true)
     setIsProcessing(true)
     try {
@@ -1295,8 +1322,7 @@ export default function AdminPage() {
       })
 
       setQuickAddUrl('')
-      
-      // Auto-submit immediately (no cooldown)
+
       const analyzedCategories =
         Array.isArray(data.categories) && data.categories.length > 0
           ? finalizeToolCategoriesList(
@@ -1314,76 +1340,17 @@ export default function AdminPage() {
         data.description &&
         data.url &&
         analyzedCategories.length > 0 &&
-        !editingId
+        !editingIdRef.current
       ) {
-        const payload: any = {
-          name: data.name.trim(),
-          description: data.description.trim(),
-          url: data.url.trim(),
-          categories: analyzedCategories,
-        }
-
-        // Optional fields
-        if (data.logoUrl && data.logoUrl.trim()) {
-          payload.logoUrl = data.logoUrl.trim()
-        }
-        if (data.tags && data.tags.trim()) {
-          payload.tags = data.tags.trim()
-        }
-        if (data.traffic && data.traffic.trim()) {
-          payload.traffic = data.traffic
-        }
-        if (data.revenue && data.revenue.trim()) {
-          payload.revenue = data.revenue
-        }
-        if (data.rating !== null && data.rating !== undefined) {
-          payload.rating = data.rating
-        }
-        if (data.estimatedVisits !== null && data.estimatedVisits !== undefined) {
-          payload.estimatedVisits = data.estimatedVisits
-        }
-
-        // Submit immediately
-        setSubmitting(true)
-        setIsProcessing(true)
-        try {
-          const response = await fetch('/api/tools', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          })
-
-          if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}))
-            if (response.status === 409) {
-              const errorMessage = errorData.message || 'A tool with this URL already exists'
-              addToast({
-                variant: 'error',
-                title: 'Duplicate URL',
-                description: `${errorMessage}. Please use a different URL or edit the existing tool.`,
-              })
-              setSubmitting(false)
-              setIsProcessing(false)
-              return
-            }
-            const errorMessage = errorData.details || errorData.error || errorData.message || `HTTP error! status: ${response.status}`
-            throw new Error(errorMessage)
-          }
-
-          await fetchTools()
-          resetForm()
-        } catch (error) {
-          console.error('Error saving tool:', error)
-          const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
-          addToast({
-            variant: 'error',
-            title: 'Failed to Save Tool',
-            description: errorMessage,
-          })
-        } finally {
-          setSubmitting(false)
-          setIsProcessing(false)
-        }
+        addToast({
+          variant: 'success',
+          title: 'Tool scanned',
+          description:
+            'Adding automatically in 5s — Cancel to stop, or use Save to directory now if you cancelled the countdown.',
+          duration: 6000,
+        })
+        setIsProcessing(false)
+        startToolAutoAddCountdownRef.current()
       } else {
         setIsProcessing(false)
       }
@@ -1672,6 +1639,7 @@ export default function AdminPage() {
   }
 
   const resetForm = () => {
+    clearToolAutoAdd()
     if (autoSaveDebounceRef.current) {
       clearTimeout(autoSaveDebounceRef.current)
       autoSaveDebounceRef.current = null
@@ -1698,6 +1666,85 @@ export default function AdminPage() {
     setQuickAddUrl('')
     setIsProcessing(false)
   }
+
+  const submitToolQuickAddCore = async (): Promise<boolean> => {
+    if (editingIdRef.current) return false
+    const built = buildToolPayload(
+      formDataRef.current,
+      null,
+      toolsRef.current,
+    )
+    if (!built.ok) return false
+    setSubmitting(true)
+    setIsProcessing(true)
+    try {
+      const response = await fetch('/api/tools', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(built.payload),
+      })
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        if (response.status === 409) {
+          const errorMessage =
+            errorData.message || 'A tool with this URL already exists'
+          addToast({
+            variant: 'error',
+            title: 'Duplicate URL',
+            description: `${errorMessage}. Please use a different URL or edit the existing tool.`,
+          })
+          return false
+        }
+        const errorMessage =
+          errorData.details ||
+          errorData.error ||
+          errorData.message ||
+          `HTTP error! status: ${response.status}`
+        throw new Error(errorMessage)
+      }
+      await fetchTools()
+      resetForm()
+      return true
+    } catch (error) {
+      console.error('Error saving tool:', error)
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error occurred'
+      addToast({
+        variant: 'error',
+        title: 'Failed to Save Tool',
+        description: errorMessage,
+      })
+      return false
+    } finally {
+      setSubmitting(false)
+      setIsProcessing(false)
+    }
+  }
+
+  const startToolAutoAddCountdown = useCallback(() => {
+    clearToolAutoAdd()
+    const mySession = toolAutoAddSessionRef.current
+    let left = 5
+    setToolAutoAddSeconds(left)
+    toolAutoAddIntervalRef.current = setInterval(() => {
+      left -= 1
+      if (left <= 0) {
+        if (toolAutoAddIntervalRef.current) {
+          clearInterval(toolAutoAddIntervalRef.current)
+          toolAutoAddIntervalRef.current = null
+        }
+        setToolAutoAddSeconds(null)
+        if (toolAutoAddSessionRef.current !== mySession) return
+        if (editingIdRef.current) return
+        void submitToolQuickAddRef.current()
+        return
+      }
+      setToolAutoAddSeconds(left)
+    }, 1000)
+  }, [clearToolAutoAdd])
+
+  submitToolQuickAddRef.current = submitToolQuickAddCore
+  startToolAutoAddCountdownRef.current = startToolAutoAddCountdown
 
   if (authLoading || loading) {
     return (
@@ -1804,7 +1851,7 @@ export default function AdminPage() {
                     <Label className="font-semibold">Quick Add by URL</Label>
                   </div>
                   <p className="text-sm text-muted-foreground mb-3">
-                    AI analyzes the site and adds the tool automatically. No manual fields here—use Edit on a tool to tweak anything.
+                    AI scans the URL, then the tool is added automatically after 5 seconds (same as videos). Cancel the countdown if you need to wait. Use Edit on a tool to change fields.
                   </p>
                   {cooldownRemaining > 0 && (
                     <div className="mb-3 p-2 rounded-md bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-200 dark:border-yellow-800">
@@ -1836,16 +1883,33 @@ export default function AdminPage() {
                       {analyzing ? (
                         <>
                           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Analyzing...
+                          Scanning…
                         </>
                       ) : (
                         <>
                           <Sparkles className="mr-2 h-4 w-4" />
-                          Analyze
+                          Scan & add
                         </>
                       )}
                     </Button>
                   </div>
+                  {toolAutoAddSeconds !== null ? (
+                    <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+                      <span>
+                        Adding this tool automatically in{' '}
+                        <strong>{toolAutoAddSeconds}</strong>s…
+                      </span>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="shrink-0 border-amber-300 bg-white hover:bg-amber-100 dark:border-amber-700 dark:bg-transparent dark:hover:bg-amber-900/50"
+                        onClick={clearToolAutoAdd}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="p-4 rounded-lg border bg-gradient-to-r from-green-50 to-blue-50 dark:from-green-950/20 dark:to-blue-950/20">
@@ -2017,7 +2081,8 @@ export default function AdminPage() {
             {!editingId &&
             (formData.name.trim() || formData.url.trim()) &&
             !analyzing &&
-            !isProcessing ? (
+            !isProcessing &&
+            toolAutoAddSeconds === null ? (
               <div className="mb-6 rounded-lg border border-border/70 bg-muted/25 p-4 text-sm">
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">
                   Draft from last scan (read-only)
