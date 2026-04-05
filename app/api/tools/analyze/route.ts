@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import {
+  augmentCategoriesWithAgencySignals,
   categories,
   finalizeToolCategoriesList,
   MAX_TOOL_CATEGORIES,
@@ -387,7 +388,11 @@ ${categories.map((c) => `- "${c}"`).join('\n')}
 
 You may also use custom category strings when needed (2–4 words, Title Case, max 40 characters each). Prefer copying from the list above when it fits; use custom labels only when nothing on the list is close enough. Map near-synonyms to the closest list label instead of inventing duplicates.
 
-Industry verticals: when the product clearly targets one sector (e.g. insurance brokerages, carriers, healthcare providers, banks), include the matching list label such as "Insurance" if present, or a tight custom vertical label. Example: AI automation for insurance brokers → categories often ["Insurance", "AI Automation"] or ["Insurance"] alone if that dominates.
+Industry verticals: when the product clearly targets one sector (e.g. insurance brokerages, carriers, healthcare providers, banks), include the matching list label such as "Insurance" if present, or a tight custom vertical label. Example: AI automation sold to insurance brokers → ["Insurance", "AI Automation"] or ["Insurance"] — not "Agencies".
+
+Category quality — decide product vs services first:
+- **Product / SaaS company**: sells a software product (signup, pricing tiers, self-serve app). Use SaaS, Marketing, AI Automation, Insurance, etc. as fits. Do **not** use "Agencies" just because customers are marketers or agencies.
+- **Services agency**: the **business is** a marketing/creative/digital/brand/advertising **shop** doing client work (retainers, campaigns, strategy, production, “our clients”, “hire us”, case studies as services). Use **"Agencies"** — usually as first or second label. You may pair **Agencies** with **Marketing**, **Design**, or **Advertising** when both the firm type and discipline apply.
 
 Return JSON:
 {
@@ -408,8 +413,8 @@ Rules:
 - categories: Return 1 to ${MAX_TOOL_CATEGORIES} labels only (most tools: 2–3). Order by relevance (first = primary). Mix preferred-list labels and custom strings as needed — e.g. a daily AI newsletter with explainers can be ["News", "Education"] or ["News", "Education", "Research"]. No duplicates. Never use pipes inside strings.
 - categories: Prefer specific labels over "Other". Do NOT include "Other" if you already have two or more other specific categories — "Other" is only for tools that truly do not fit elsewhere.
 - categories: Use "News" for AI news sites, newsletters, daily digests, curated industry updates, or headline aggregators. Add "Education" when the product clearly teaches, explains, or trains (courses, tutorials, learning tracks alongside news).
-- categories: Use "Agencies" only when the BUSINESS IS a marketing/creative/digital/advertising agency or similar shop selling ongoing client services (retainers, bespoke client work). Do NOT use "Agencies" for B2B SaaS that sells software TO brokers, marketers, or agencies (those are vertical SaaS — use "Insurance", "Marketing", "SaaS", "AI Automation", etc., instead).
-- categories: Do not pad with loosely related labels; accuracy beats quantity. If a preferred label is a close fit, use it instead of a custom near-duplicate. Use 1 category if one label captures the product; use 2–3 only when it genuinely spans multiple areas.
+- categories: **Agencies** = the listing is itself a client-services firm (see above). **Not** Agencies: packaged software for a vertical (e.g. “for insurance brokers”, “for agencies”) — use vertical + SaaS/AI labels instead.
+- categories: Do not pad with loosely related labels; accuracy beats quantity. Prefer list labels. Use 2–3 when the tool clearly spans roles (e.g. Agencies + Marketing, or Insurance + SaaS).
 - Return ONLY valid JSON, no markdown formatting`
 
     console.log('🚀 [OpenAI] ==========================================')
@@ -427,7 +432,7 @@ Rules:
           {
             role: 'system',
             content:
-              `Analyze AI tools. Return valid JSON only. Use 1–${MAX_TOOL_CATEGORIES} categories per tool. Prefer labels from the provided list; add custom labels only when needed. Map near-synonyms to the closest list label. Use "Insurance" (or another vertical from the list) when the product is clearly for that industry (e.g. brokerages, carriers). Use "Agencies" only when the vendor is itself an agency-style services business—not when they sell SaaS to agencies or brokers. News + Education when appropriate. Avoid unnecessary Other.`,
+              `Analyze AI tools. Return valid JSON only. Use 1–${MAX_TOOL_CATEGORIES} categories per tool. Prefer list labels. Distinguish SaaS/product companies from client-services agencies: use "Agencies" when the site is a marketing/creative/digital services firm; use vertical labels like "Insurance" for B2B software sold into that industry (not Agencies). Pair Agencies with Marketing or Design when appropriate. News + Education when appropriate. Avoid unnecessary Other.`,
           },
           { role: 'user', content: prompt },
         ],
@@ -890,12 +895,23 @@ export async function POST(request: NextRequest) {
       }, { status: statusCode })
     }
 
-    const cats =
+    const catsBase =
       analysis.categories && analysis.categories.length > 0
         ? analysis.categories
         : categoriesFromAiContent({
             category: analysis.category,
           })
+    const corpusForAgency = [
+      validUrl.toString(),
+      scraped.title,
+      scraped.description,
+      scraped.pricingContent,
+      scraped.pageContent,
+    ]
+      .filter(Boolean)
+      .join('\n')
+      .slice(0, 8000)
+    const cats = augmentCategoriesWithAgencySignals(catsBase, corpusForAgency)
     const result: AnalysisResult = {
       name: analysis.name || scraped.title || validUrl.hostname.replace('www.', ''),
       description: analysis.description || scraped.description || 'AI tool',

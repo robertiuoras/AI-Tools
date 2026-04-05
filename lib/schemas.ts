@@ -121,6 +121,12 @@ export const LEGACY_TOOL_CATEGORY_ALIASES: Record<string, Category> = {
   'growth agency': 'Agencies',
   'media agency': 'Agencies',
   'brand agency': 'Agencies',
+  'PR Agency': 'Agencies',
+  'pr agency': 'Agencies',
+  'Web Agency': 'Agencies',
+  'web agency': 'Agencies',
+  'Dev Agency': 'Agencies',
+  'dev agency': 'Agencies',
   Music: 'Music & Audio',
   Sound: 'Music & Audio',
   Podcast: 'Music & Audio',
@@ -250,21 +256,35 @@ function canonicalCaseIfMatches(s: string): string {
   return s
 }
 
+/** Corpus signals: B2B product for insurance / brokers — do not tag as a marketing “Agencies” shop. */
+export const CORPUS_VERTICAL_B2B_BLOCKS_AGENCIES =
+  /\b(insurtech|insurance tech|for insurers?|for brokers?|for brokerages?|insurance brokers?|insurance brokerages?|brokerage software|claims software|underwriting software|policy admin|sold to (insurers?|brokers?))\b/i
+
+/**
+ * Site text strongly suggests a marketing/creative **services** firm (retainers, client work).
+ * Used when the model returns categories but omits "Agencies".
+ */
+export const CORPUS_SERVICES_AGENCY_HINT = new RegExp(
+  [
+    String.raw`\b(digital|creative|marketing|advertising|design|brand|media|growth|seo|web|content|social|influencer|performance|ppc|paid media)\s+agenc(y|ies)\b`,
+    String.raw`\b(full[- ]service|boutique)\s+agenc(y|ies)\b`,
+    String.raw`\bwe\s+are\s+(a\s+)?(digital|creative|marketing|advertising|design|brand)\s+agency\b`,
+    String.raw`\bagency\s+(specializing|focused|based)\s+in\b`,
+  ].join('|'),
+  'i',
+)
+
 /** Map free-text / AI labels that clearly mean a services agency → canonical Agencies. */
 function inferAgenciesCategory(segment: string): Category | null {
   const n = segment.trim().toLowerCase()
   if (!n) return null
   // Vertical B2B / insurtech — not “Agencies” (marketing shops)
-  if (
-    /\b(insurtech|insurance tech|for insurers?|for brokers?|for brokerages?|insurance brokers?|insurance brokerages?|brokerage software|claims software|underwriting software|policy admin)\b/i.test(
-      n,
-    )
-  ) {
+  if (CORPUS_VERTICAL_B2B_BLOCKS_AGENCIES.test(n)) {
     return null
   }
   if (n === 'agency' || n === 'agencies') return 'Agencies'
   if (
-    /\b(marketing|digital|creative|advertising|design|brand|growth|media)\s+agenc(y|ies)\b/.test(
+    /\b(marketing|digital|creative|advertising|design|brand|growth|media|seo|web|development|dev|content|social|influencer|performance|ppc|paid media|ux|ui)\s+agenc(y|ies)\b/.test(
       n,
     )
   ) {
@@ -274,6 +294,20 @@ function inferAgenciesCategory(segment: string): Category | null {
     /\bagenc(y|ies)\b/.test(n) &&
     /\b(studio|consultancy|consulting|consultants?|clients?|retainers?)\b/.test(n)
   ) {
+    return 'Agencies'
+  }
+  // Other “X agency” strings (e.g. PR agency, dev agency) — exclude non–marketing-agency meanings
+  if (/\bagenc(y|ies)\b/.test(n)) {
+    if (
+      /\b(insurance|insurtech|travel|recruitment|talent|employment|staffing|real estate|executive search|news|government|regulatory)\s+agenc/i.test(
+        n,
+      )
+    ) {
+      return null
+    }
+    if (/\b(software|saas|platform|tool|app)\s+for\s+agencies\b/i.test(n)) {
+      return null
+    }
     return 'Agencies'
   }
   return null
@@ -327,6 +361,21 @@ export function finalizeToolCategoriesList(normalized: string[]): string[] {
   const base = withoutOther.length > 0 ? withoutOther : out
   const capped = base.slice(0, MAX_TOOL_CATEGORIES)
   return capped.length > 0 ? capped : ['Other']
+}
+
+/**
+ * If the page clearly describes a services agency but the model omitted "Agencies", add it.
+ * Does not run when the site is vertical B2B (e.g. insurtech for brokers).
+ */
+export function augmentCategoriesWithAgencySignals(
+  categories: string[],
+  corpus: string,
+): string[] {
+  if (!corpus?.trim() || categories.length === 0) return categories
+  if (CORPUS_VERTICAL_B2B_BLOCKS_AGENCIES.test(corpus)) return categories
+  if (categories.includes('Agencies')) return categories
+  if (!CORPUS_SERVICES_AGENCY_HINT.test(corpus)) return categories
+  return finalizeToolCategoriesList(['Agencies', ...categories])
 }
 
 // Pre-process schema to handle empty strings for tools + legacy single `category`
