@@ -4,6 +4,7 @@ import {
   estimateOpenAiUsageCostUsd,
   logOpenAIUsage,
 } from '@/lib/openai-usage'
+import { enforceApiRateLimit } from '@/lib/api-rate-limit'
 
 /**
  * Analyze a YouTube or TikTok video URL and return metadata for the Add Video form.
@@ -255,6 +256,9 @@ async function fetchWithOembed(normalizedUrl: string) {
 
 export async function POST(request: NextRequest) {
   try {
+    const limited = enforceApiRateLimit(request, 'videos_analyze')
+    if (limited) return limited
+
     const { url } = await request.json()
 
     if (!url || typeof url !== 'string') {

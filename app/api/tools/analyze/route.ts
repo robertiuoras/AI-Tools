@@ -9,6 +9,7 @@ import {
   estimateOpenAiUsageCostUsd,
   logOpenAIUsage,
 } from '@/lib/openai-usage'
+import { enforceApiRateLimit } from '@/lib/api-rate-limit'
 
 /** Normalize + dedupe AI category output; drop redundant "Other"; cap length; primary = first. */
 function categoriesFromAiContent(content: {
@@ -691,6 +692,9 @@ Rules:
 
 export async function POST(request: NextRequest) {
   try {
+    const limited = enforceApiRateLimit(request, 'tools_analyze')
+    if (limited) return limited
+
     console.log('📋 [Analyze] Starting URL analysis...')
     const { url } = await request.json()
     console.log('📋 [Analyze] Received URL:', url)

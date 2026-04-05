@@ -713,7 +713,11 @@ export default function AdminPage() {
           error?: string
         }
         lastErr = errBody.error || `HTTP ${res.status}`
-        if (res.status === 429 && errBody.errorType !== 'website_rate_limit') {
+        if (
+          res.status === 429 &&
+          errBody.errorType !== 'website_rate_limit' &&
+          errBody.errorType !== 'app_rate_limit'
+        ) {
           await new Promise((r) =>
             setTimeout(r, Math.pow(2, 3 - retries) * 2000),
           )
@@ -753,9 +757,10 @@ export default function AdminPage() {
         }
         const errBody = (await res.json().catch(() => ({}))) as {
           error?: string
+          errorType?: string
         }
         lastErr = errBody.error || `HTTP ${res.status}`
-        if (res.status === 429) {
+        if (res.status === 429 && errBody.errorType !== 'app_rate_limit') {
           await new Promise((r) =>
             setTimeout(r, Math.pow(2, 3 - retries) * 2000),
           )
@@ -1628,9 +1633,11 @@ export default function AdminPage() {
           }
           
           if (response.status === 429) {
-            // Only retry for OpenAI rate limits, not website rate limits
-            if (errorType === 'website_rate_limit') {
-              // Website rate limit - don't retry
+            // Only retry for OpenAI rate limits, not website or our app limits
+            if (
+              errorType === 'website_rate_limit' ||
+              errorType === 'app_rate_limit'
+            ) {
               break
             }
             // Rate limited - wait with exponential backoff
@@ -1939,8 +1946,15 @@ export default function AdminPage() {
             
             const errorData = await response.json().catch(() => ({}))
             lastError = errorData.error || errorData.message || `HTTP ${response.status}`
-            
+            const bulkErrType = errorData.errorType as string | undefined
+
             if (response.status === 429) {
+              if (
+                bulkErrType === 'app_rate_limit' ||
+                bulkErrType === 'website_rate_limit'
+              ) {
+                break
+              }
               // Rate limited - wait with exponential backoff
               const waitTime = Math.pow(2, 3 - retries) * 2000 // 2s, 4s, 8s
               console.log(`Rate limited for ${url}, waiting ${waitTime}ms before retry ${4 - retries}/3`)
@@ -1965,7 +1979,11 @@ export default function AdminPage() {
           // Better error messages
           if (errorMessage.includes('scrape') || errorMessage.includes('Failed to scrape')) {
             errors.push(`${url}: Website could not be accessed (may be blocking requests)`)
-          } else if (errorMessage.includes('429') || errorMessage.includes('Rate Limit')) {
+          } else if (
+            errorMessage.includes('429') ||
+            errorMessage.includes('Rate Limit') ||
+            errorMessage.includes('Too many requests')
+          ) {
             errors.push(`${url}: Rate limit reached (retried 3 times)`)
           } else {
             errors.push(`${url}: ${errorMessage}`)
@@ -2117,7 +2135,11 @@ export default function AdminPage() {
             lastError =
               (errorData as { error?: string }).error ||
               `HTTP ${response.status}`
+            const vBulkType = (errorData as { errorType?: string }).errorType
             if (response.status === 429) {
+              if (vBulkType === 'app_rate_limit') {
+                break
+              }
               await new Promise((r) =>
                 setTimeout(r, Math.pow(2, 3 - retries) * 2000),
               )
