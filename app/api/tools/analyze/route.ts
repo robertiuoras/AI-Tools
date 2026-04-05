@@ -5,7 +5,10 @@ import {
   MAX_TOOL_CATEGORIES,
   normalizeToolCategory,
 } from '@/lib/schemas'
-import { logOpenAIUsage } from '@/lib/openai-usage'
+import {
+  estimateOpenAiUsageCostUsd,
+  logOpenAIUsage,
+} from '@/lib/openai-usage'
 
 /** Normalize + dedupe AI category output; drop redundant "Other"; cap length; primary = first. */
 function categoriesFromAiContent(content: {
@@ -43,7 +46,13 @@ interface AnalysisResult {
   traffic: 'low' | 'medium' | 'high' | 'unknown'
   rating: number | null
   estimatedVisits: number | null
-  logoUrl: string | null
+  logoUrl?: string | null
+  openaiUsage?: {
+    prompt_tokens: number
+    completion_tokens: number
+    total_tokens: number
+  }
+  openaiModel?: string
   _debug?: {
     usedOpenAI: boolean
     apiKeyFound: boolean
@@ -377,6 +386,8 @@ ${categories.map((c) => `- "${c}"`).join('\n')}
 
 You may also use custom category strings when needed (2–4 words, Title Case, max 40 characters each). Prefer copying from the list above when it fits; use custom labels only when nothing on the list is close enough. Map near-synonyms to the closest list label instead of inventing duplicates.
 
+Industry verticals: when the product clearly targets one sector (e.g. insurance brokerages, carriers, healthcare providers, banks), include the matching list label such as "Insurance" if present, or a tight custom vertical label. Example: AI automation for insurance brokers → categories often ["Insurance", "AI Automation"] or ["Insurance"] alone if that dominates.
+
 Return JSON:
 {
   "name": "Tool name (max 50 chars)",
@@ -396,8 +407,8 @@ Rules:
 - categories: Return 1 to ${MAX_TOOL_CATEGORIES} labels only (most tools: 2–3). Order by relevance (first = primary). Mix preferred-list labels and custom strings as needed — e.g. a daily AI newsletter with explainers can be ["News", "Education"] or ["News", "Education", "Research"]. No duplicates. Never use pipes inside strings.
 - categories: Prefer specific labels over "Other". Do NOT include "Other" if you already have two or more other specific categories — "Other" is only for tools that truly do not fit elsewhere.
 - categories: Use "News" for AI news sites, newsletters, daily digests, curated industry updates, or headline aggregators. Add "Education" when the product clearly teaches, explains, or trains (courses, tutorials, learning tracks alongside news).
-- categories: Use "Agencies" when the site is a marketing/creative/digital/advertising agency, consultancy positioning as an agency, or a studio selling services (retainers, client work) rather than primarily a self-serve SaaS product. Pair with "Marketing" or "Design" only when those also clearly apply; prefer "Agencies" as primary when agency positioning is dominant.
-- categories: Do not pad with loosely related labels; accuracy beats quantity. If a preferred label is a close fit, use it instead of a custom near-duplicate.
+- categories: Use "Agencies" only when the BUSINESS IS a marketing/creative/digital/advertising agency or similar shop selling ongoing client services (retainers, bespoke client work). Do NOT use "Agencies" for B2B SaaS that sells software TO brokers, marketers, or agencies (those are vertical SaaS — use "Insurance", "Marketing", "SaaS", "AI Automation", etc., instead).
+- categories: Do not pad with loosely related labels; accuracy beats quantity. If a preferred label is a close fit, use it instead of a custom near-duplicate. Use 1 category if one label captures the product; use 2–3 only when it genuinely spans multiple areas.
 - Return ONLY valid JSON, no markdown formatting`
 
     console.log('🚀 [OpenAI] ==========================================')
@@ -415,7 +426,7 @@ Rules:
           {
             role: 'system',
             content:
-              `Analyze AI tools. Return valid JSON only. Use 1–${MAX_TOOL_CATEGORIES} categories per tool. Prefer labels from the provided list; add custom labels only when needed. Map near-synonyms to the closest list label. For marketing/creative/digital/advertising agencies and client-service studios (retainers, bespoke client work), use the list label "Agencies" and put it first in the categories array when that positioning is dominant—not just "Marketing" or "Design". News + Education is appropriate for products that combine daily AI news with learning content. Avoid unnecessary Other.`,
+              `Analyze AI tools. Return valid JSON only. Use 1–${MAX_TOOL_CATEGORIES} categories per tool. Prefer labels from the provided list; add custom labels only when needed. Map near-synonyms to the closest list label. Use "Insurance" (or another vertical from the list) when the product is clearly for that industry (e.g. brokerages, carriers). Use "Agencies" only when the vendor is itself an agency-style services business—not when they sell SaaS to agencies or brokers. News + Education when appropriate. Avoid unnecessary Other.`,
           },
           { role: 'user', content: prompt },
         ],
@@ -635,7 +646,17 @@ Rules:
     console.log('✅ [OpenAI] ==========================================')
 
     const cats = categoriesFromAiContent(content)
-    const result = {
+    const usage = data.usage as
+      | {
+          prompt_tokens: number
+          completion_tokens: number
+          total_tokens: number
+        }
+      | undefined
+    const openaiModel =
+      typeof data.model === 'string' ? data.model : 'gpt-4o-mini'
+
+    const result: AnalysisResult = {
       name: content.name || title,
       description: content.description || description,
       categories: cats,
@@ -645,16 +666,18 @@ Rules:
       traffic: content.traffic || 'unknown',
       rating: content.rating || null,
       estimatedVisits: content.estimatedVisits || null,
+      openaiUsage: usage,
+      openaiModel,
       _debug: {
         usedOpenAI: true,
         apiKeyFound: true,
-      }
+      },
     }
-    
+
     console.log('✅ [OpenAI] Final analysis result:', JSON.stringify(result, null, 2))
     console.log('✅ [OpenAI] Analysis complete!')
     console.log('✅ [OpenAI] ✅✅✅ OPENAI WAS SUCCESSFULLY USED ✅✅✅')
-    
+
     return result
   } catch (error) {
     console.error('❌ [OpenAI] AI analysis error:', error)
@@ -894,8 +917,18 @@ export async function POST(request: NextRequest) {
     if (result._debug?.error) {
       console.log('📊 [Analyze] Error reason:', result._debug.error)
     }
-    
-    return NextResponse.json({ ...result, url: validUrl.toString() })
+
+    const estimatedCostUsd = estimateOpenAiUsageCostUsd(
+      analysis.openaiModel,
+      analysis.openaiUsage,
+    )
+
+    return NextResponse.json({
+      ...result,
+      url: validUrl.toString(),
+      openaiUsage: analysis.openaiUsage,
+      estimatedCostUsd,
+    })
   } catch (error) {
     console.error('❌ [Analyze] Unexpected error:', error)
     console.error('❌ [Analyze] Error type:', error instanceof Error ? error.constructor.name : typeof error)

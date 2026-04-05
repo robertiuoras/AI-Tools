@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { videoCategories } from '@/lib/schemas'
-import { logOpenAIUsage } from '@/lib/openai-usage'
+import {
+  estimateOpenAiUsageCostUsd,
+  logOpenAIUsage,
+} from '@/lib/openai-usage'
 
 /**
  * Analyze a YouTube or TikTok video URL and return metadata for the Add Video form.
@@ -142,13 +145,26 @@ async function fetchWithYouTubeApi(videoId: string) {
   }
 }
 
+type VideoAnalyzeAiResult = {
+  category: string | null
+  shortDescription: string | null
+  tags: string | null
+  openaiUsage?: {
+    prompt_tokens: number
+    completion_tokens: number
+    total_tokens: number
+  }
+  openaiModel?: string
+}
+
 /** Use OpenAI to suggest category, short description, and tags from title + description */
 async function suggestCategoryDescriptionAndTags(
   title: string,
   description: string
-): Promise<{ category: string | null; shortDescription: string | null; tags: string | null }> {
+): Promise<VideoAnalyzeAiResult> {
   const key = process.env.OPENAI_API_KEY
-  if (!key?.startsWith('sk-')) return { category: null, shortDescription: null, tags: null }
+  if (!key?.startsWith('sk-'))
+    return { category: null, shortDescription: null, tags: null }
   const categories = videoCategories as readonly string[]
   try {
     const res = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -175,8 +191,18 @@ async function suggestCategoryDescriptionAndTags(
       signal: AbortSignal.timeout(12000),
     })
     if (!res.ok) return { category: null, shortDescription: null, tags: null }
-    const data = (await res.json()) as { model?: string; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }; choices?: Array<{ message?: { content?: string } }> }
-    if (data.usage) logOpenAIUsage(data.model ?? 'gpt-4o-mini', 'video_analyze', data.usage)
+    const data = (await res.json()) as {
+      model?: string
+      usage?: {
+        prompt_tokens: number
+        completion_tokens: number
+        total_tokens: number
+      }
+      choices?: Array<{ message?: { content?: string } }>
+    }
+    const openaiModel =
+      typeof data.model === 'string' ? data.model : 'gpt-4o-mini'
+    if (data.usage) logOpenAIUsage(openaiModel, 'video_analyze', data.usage)
     const raw = data.choices?.[0]?.message?.content?.trim()
     if (!raw) return { category: null, shortDescription: null, tags: null }
     const cleaned = raw.replace(/^```json?\s*|\s*```$/g, '').trim()
@@ -195,7 +221,13 @@ async function suggestCategoryDescriptionAndTags(
         : null
     const tags =
       typeof parsed.tags === 'string' ? parsed.tags.slice(0, 500).trim() || null : null
-    return { category, shortDescription, tags }
+    return {
+      category,
+      shortDescription,
+      tags,
+      openaiUsage: data.usage,
+      openaiModel,
+    }
   } catch {
     return { category: null, shortDescription: null, tags: null }
   }
@@ -251,20 +283,28 @@ export async function POST(request: NextRequest) {
           { status: 422 }
         )
       }
-      const { category: suggestedCategory, shortDescription: aiDescription, tags: suggestedTags } =
-        await suggestCategoryDescriptionAndTags(oembed.title, oembed.description ?? '')
+      const ai = await suggestCategoryDescriptionAndTags(
+        oembed.title,
+        oembed.description ?? '',
+      )
+      const estimatedCostUsd = estimateOpenAiUsageCostUsd(
+        ai.openaiModel,
+        ai.openaiUsage,
+      )
       return NextResponse.json({
         url: tiktokUrl,
         source: 'tiktok',
         title: oembed.title || 'Untitled',
         youtuberName: oembed.youtuberName,
-        description: (aiDescription || '').slice(0, 200) || null,
+        description: (ai.shortDescription || '').slice(0, 200) || null,
         subscriberCount: null,
         channelVideoCount: null,
         channelThumbnailUrl: oembed.channelThumbnailUrl,
-        suggestedCategory: suggestedCategory ?? undefined,
-        suggestedTags: suggestedTags ?? undefined,
+        suggestedCategory: ai.category ?? undefined,
+        suggestedTags: ai.tags ?? undefined,
         verified: null,
+        openaiUsage: ai.openaiUsage,
+        estimatedCostUsd,
       })
     }
 
@@ -317,13 +357,18 @@ export async function POST(request: NextRequest) {
       channelVideoCount = null
     }
 
-    const { category: suggestedCategory, shortDescription: aiDescription, tags: suggestedTags } =
-      await suggestCategoryDescriptionAndTags(title, description ?? '')
+    const ai = await suggestCategoryDescriptionAndTags(title, description ?? '')
 
     const finalDescription =
-      (aiDescription && aiDescription.length > 0) || (description && description.length > 0)
-        ? (aiDescription || description || '').slice(0, 200)
+      (ai.shortDescription && ai.shortDescription.length > 0) ||
+      (description && description.length > 0)
+        ? (ai.shortDescription || description || '').slice(0, 200)
         : null
+
+    const estimatedCostUsd = estimateOpenAiUsageCostUsd(
+      ai.openaiModel,
+      ai.openaiUsage,
+    )
 
     return NextResponse.json({
       url: normalizedUrl,
@@ -334,9 +379,11 @@ export async function POST(request: NextRequest) {
       subscriberCount,
       channelVideoCount,
       channelThumbnailUrl,
-      suggestedCategory: suggestedCategory ?? undefined,
-      suggestedTags: suggestedTags ?? undefined,
+      suggestedCategory: ai.category ?? undefined,
+      suggestedTags: ai.tags ?? undefined,
       verified: null as boolean | null,
+      openaiUsage: ai.openaiUsage,
+      estimatedCostUsd,
     })
   } catch (error) {
     console.error('Videos analyze error:', error)

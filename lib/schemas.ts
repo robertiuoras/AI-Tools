@@ -11,6 +11,7 @@ export const categories = [
   'Design',
   'Education',
   'Image Generation',
+  'Insurance',
   'Job',
   'Language',
   'Legal',
@@ -93,6 +94,13 @@ export const LEGACY_TOOL_CATEGORY_ALIASES: Record<string, Category> = {
   Translation: 'Language',
   NLP: 'Language',
   Legaltech: 'Legal',
+  Insurance: 'Insurance',
+  insurance: 'Insurance',
+  Insurtech: 'Insurance',
+  insurtech: 'Insurance',
+  Brokerage: 'Insurance',
+  brokerage: 'Insurance',
+  Underwriting: 'Insurance',
   Ads: 'Marketing',
   SEO: 'Marketing',
   Social: 'Marketing',
@@ -246,6 +254,14 @@ function canonicalCaseIfMatches(s: string): string {
 function inferAgenciesCategory(segment: string): Category | null {
   const n = segment.trim().toLowerCase()
   if (!n) return null
+  // Vertical B2B / insurtech — not “Agencies” (marketing shops)
+  if (
+    /\b(insurtech|insurance tech|for insurers?|for brokers?|for brokerages?|insurance brokers?|insurance brokerages?|brokerage software|claims software|underwriting software|policy admin)\b/i.test(
+      n,
+    )
+  ) {
+    return null
+  }
   if (n === 'agency' || n === 'agencies') return 'Agencies'
   if (
     /\b(marketing|digital|creative|advertising|design|brand|growth|media)\s+agenc(y|ies)\b/.test(

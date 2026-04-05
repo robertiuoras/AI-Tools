@@ -18,6 +18,14 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useToast } from '@/components/ui/toaster'
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { estimateOpenAiUsageCostUsd } from '@/lib/openai-usage'
+import {
   categories,
   finalizeToolCategoriesList,
   MAX_TOOL_CATEGORIES,
@@ -111,6 +119,151 @@ function buildToolPayload(
   }
 
   return { ok: true, payload }
+}
+
+function accrueOpenAiCost(
+  total: number,
+  data: {
+    estimatedCostUsd?: unknown
+    openaiModel?: string
+    openaiUsage?: { prompt_tokens?: number; completion_tokens?: number }
+  },
+): number {
+  if (
+    typeof data.estimatedCostUsd === 'number' &&
+    Number.isFinite(data.estimatedCostUsd)
+  ) {
+    return total + data.estimatedCostUsd
+  }
+  return total + estimateOpenAiUsageCostUsd(data.openaiModel, data.openaiUsage)
+}
+
+function buildPutPayloadFromToolAnalyze(
+  tool: Tool,
+  analyzeData: Record<string, unknown>,
+): Record<string, unknown> {
+  const nextCategories =
+    Array.isArray(analyzeData.categories) && analyzeData.categories.length > 0
+      ? finalizeToolCategoriesList(
+          analyzeData.categories
+            .map((c: unknown) => normalizeToolCategory(String(c)))
+            .filter(Boolean),
+        )
+      : finalizeToolCategoriesList(toolCategoryList(tool))
+
+  const payload: Record<string, unknown> = {
+    name:
+      typeof analyzeData.name === 'string' && analyzeData.name.trim()
+        ? analyzeData.name.trim()
+        : tool.name,
+    description:
+      typeof analyzeData.description === 'string' &&
+      analyzeData.description.trim()
+        ? analyzeData.description.trim()
+        : tool.description,
+    url: tool.url,
+    categories: nextCategories,
+  }
+
+  if (typeof analyzeData.logoUrl === 'string' && analyzeData.logoUrl.trim()) {
+    payload.logoUrl = analyzeData.logoUrl.trim()
+  } else {
+    payload.logoUrl = tool.logoUrl || null
+  }
+
+  if (typeof analyzeData.tags === 'string' && analyzeData.tags.trim()) {
+    payload.tags = analyzeData.tags.trim()
+  } else {
+    payload.tags = tool.tags || null
+  }
+
+  const traffic = analyzeData.traffic
+  payload.traffic =
+    traffic === 'low' ||
+    traffic === 'medium' ||
+    traffic === 'high' ||
+    traffic === 'unknown'
+      ? traffic
+      : tool.traffic ?? null
+
+  const revenue = analyzeData.revenue
+  payload.revenue =
+    revenue === 'free' ||
+    revenue === 'freemium' ||
+    revenue === 'paid' ||
+    revenue === 'enterprise'
+      ? revenue
+      : tool.revenue ?? null
+
+  const r = analyzeData.rating
+  payload.rating =
+    typeof r === 'number' && !Number.isNaN(r) && r >= 0 && r <= 5
+      ? r
+      : tool.rating ?? null
+
+  const ev = analyzeData.estimatedVisits
+  payload.estimatedVisits =
+    typeof ev === 'number' && Number.isInteger(ev) && ev > 0
+      ? ev
+      : tool.estimatedVisits ?? null
+
+  return payload
+}
+
+function buildPutPayloadFromVideoAnalyze(
+  video: Video,
+  d: Record<string, unknown>,
+): Record<string, unknown> {
+  const source =
+    d.source === 'tiktok'
+      ? 'tiktok'
+      : video.source === 'tiktok'
+        ? 'tiktok'
+        : 'youtube'
+
+  const nextThumb =
+    typeof d.channelThumbnailUrl === 'string' &&
+    /^https?:\/\//i.test(d.channelThumbnailUrl.trim())
+      ? d.channelThumbnailUrl.trim()
+      : video.channelThumbnailUrl
+
+  return {
+    title:
+      typeof d.title === 'string' && d.title.trim()
+        ? d.title.trim()
+        : video.title,
+    url:
+      typeof d.url === 'string' && d.url.trim() ? d.url.trim() : video.url,
+    category: normalizeVideoCategory(
+      (typeof d.suggestedCategory === 'string' && d.suggestedCategory) ||
+        video.category,
+    ),
+    source,
+    youtuberName:
+      typeof d.youtuberName === 'string' && d.youtuberName.trim()
+        ? d.youtuberName.trim()
+        : video.youtuberName,
+    subscriberCount:
+      typeof d.subscriberCount === 'number' &&
+      Number.isInteger(d.subscriberCount)
+        ? d.subscriberCount
+        : video.subscriberCount,
+    channelThumbnailUrl: nextThumb,
+    channelVideoCount:
+      typeof d.channelVideoCount === 'number' &&
+      Number.isInteger(d.channelVideoCount)
+        ? d.channelVideoCount
+        : video.channelVideoCount,
+    verified: video.verified,
+    tags:
+      typeof d.suggestedTags === 'string' && d.suggestedTags.trim()
+        ? d.suggestedTags.trim()
+        : video.tags,
+    description:
+      typeof d.description === 'string' && d.description.trim()
+        ? d.description.trim().slice(0, 200)
+        : video.description,
+  }
 }
 
 export default function AdminPage() {
@@ -207,6 +360,18 @@ export default function AdminPage() {
   const editingVideoIdRef = useRef<string | null>(editingVideoId)
   videoFormDataRef.current = videoFormData
   editingVideoIdRef.current = editingVideoId
+
+  const videosRef = useRef(videos)
+  videosRef.current = videos
+
+  const aiBatchBlockingRef = useRef(false)
+  const [aiBatchOpen, setAiBatchOpen] = useState(false)
+  const [aiBatchRunning, setAiBatchRunning] = useState(false)
+  const [aiBatchProgress, setAiBatchProgress] = useState({
+    current: 0,
+    total: 0,
+    label: '',
+  })
 
   const [videoAutoAddSeconds, setVideoAutoAddSeconds] = useState<number | null>(null)
   const videoAutoAddIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
@@ -524,6 +689,255 @@ export default function AdminPage() {
     }
   }
 
+  async function fetchToolAnalyzeWithRetry(
+    url: string,
+  ): Promise<
+    | { ok: true; data: Record<string, unknown> }
+    | { ok: false; error: string }
+  > {
+    let retries = 3
+    let lastErr = 'Unknown error'
+    while (retries > 0) {
+      try {
+        const res = await fetch('/api/tools/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url }),
+        })
+        if (res.ok) {
+          const data = (await res.json()) as Record<string, unknown>
+          return { ok: true, data }
+        }
+        const errBody = (await res.json().catch(() => ({}))) as {
+          errorType?: string
+          error?: string
+        }
+        lastErr = errBody.error || `HTTP ${res.status}`
+        if (res.status === 429 && errBody.errorType !== 'website_rate_limit') {
+          await new Promise((r) =>
+            setTimeout(r, Math.pow(2, 3 - retries) * 2000),
+          )
+          retries--
+          continue
+        }
+        return { ok: false, error: lastErr }
+      } catch (e) {
+        lastErr = e instanceof Error ? e.message : 'Network error'
+        retries--
+        if (retries > 0) {
+          await new Promise((r) => setTimeout(r, 1000))
+        }
+      }
+    }
+    return { ok: false, error: lastErr }
+  }
+
+  async function fetchVideoAnalyzeWithRetry(
+    url: string,
+  ): Promise<
+    | { ok: true; data: Record<string, unknown> }
+    | { ok: false; error: string }
+  > {
+    let retries = 3
+    let lastErr = 'Unknown error'
+    while (retries > 0) {
+      try {
+        const res = await fetch('/api/videos/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url }),
+        })
+        if (res.ok) {
+          const data = (await res.json()) as Record<string, unknown>
+          return { ok: true, data }
+        }
+        const errBody = (await res.json().catch(() => ({}))) as {
+          error?: string
+        }
+        lastErr = errBody.error || `HTTP ${res.status}`
+        if (res.status === 429) {
+          await new Promise((r) =>
+            setTimeout(r, Math.pow(2, 3 - retries) * 2000),
+          )
+          retries--
+          continue
+        }
+        return { ok: false, error: lastErr }
+      } catch (e) {
+        lastErr = e instanceof Error ? e.message : 'Network error'
+        retries--
+        if (retries > 0) {
+          await new Promise((r) => setTimeout(r, 1000))
+        }
+      }
+    }
+    return { ok: false, error: lastErr }
+  }
+
+  const runToolsAiBatchRescan = async () => {
+    const toast = addToastRef.current
+    const list = toolsRef.current
+    if (list.length === 0) {
+      toast({
+        variant: 'warning',
+        title: 'No tools',
+        description: 'Nothing to re-scan.',
+      })
+      return
+    }
+    aiBatchBlockingRef.current = true
+    setAiBatchRunning(true)
+    setAiBatchOpen(true)
+    let costUsd = 0
+    let tokens = 0
+    let ok = 0
+    let fail = 0
+    try {
+      for (let i = 0; i < list.length; i++) {
+        const tool = list[i]
+        setAiBatchProgress({
+          current: i + 1,
+          total: list.length,
+          label: tool.name,
+        })
+        const rawUrl = tool.url?.trim()
+        if (!rawUrl) {
+          fail++
+          continue
+        }
+        const analyzed = await fetchToolAnalyzeWithRetry(rawUrl)
+        if (!analyzed.ok) {
+          fail++
+          continue
+        }
+        costUsd = accrueOpenAiCost(costUsd, analyzed.data)
+        const u = analyzed.data.openaiUsage as
+          | { total_tokens?: number }
+          | undefined
+        if (u && typeof u.total_tokens === 'number') {
+          tokens += u.total_tokens
+        }
+        const payload = buildPutPayloadFromToolAnalyze(tool, analyzed.data)
+        try {
+          const updateRes = await fetch(`/api/tools/${tool.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          })
+          if (!updateRes.ok) {
+            fail++
+            continue
+          }
+          ok++
+        } catch {
+          fail++
+        }
+        if (i < list.length - 1) {
+          await new Promise((r) => setTimeout(r, 2500))
+        }
+      }
+      await fetchTools()
+    } finally {
+      aiBatchBlockingRef.current = false
+      setAiBatchRunning(false)
+      setAiBatchOpen(false)
+      setAiBatchProgress({ current: 0, total: 0, label: '' })
+    }
+    const costStr = costUsd.toFixed(4)
+    const tokStr =
+      tokens > 0 ? ` (~${(tokens / 1000).toFixed(1)}k tokens)` : ''
+    toast({
+      variant: fail && !ok ? 'error' : fail ? 'warning' : 'success',
+      title: 'AI re-scan complete',
+      description: `Updated ${ok} tool${ok !== 1 ? 's' : ''}${
+        fail ? `, ${fail} failed` : ''
+      }. Est. API cost ~$${costStr}${tokStr}.`,
+      duration: 10000,
+    })
+  }
+
+  const runVideosAiBatchRescan = async () => {
+    const toast = addToastRef.current
+    const list = videosRef.current
+    if (list.length === 0) {
+      toast({
+        variant: 'warning',
+        title: 'No videos',
+        description: 'Nothing to re-scan.',
+      })
+      return
+    }
+    aiBatchBlockingRef.current = true
+    setAiBatchRunning(true)
+    setAiBatchOpen(true)
+    let costUsd = 0
+    let tokens = 0
+    let ok = 0
+    let fail = 0
+    try {
+      for (let i = 0; i < list.length; i++) {
+        const video = list[i]
+        setAiBatchProgress({
+          current: i + 1,
+          total: list.length,
+          label: video.title,
+        })
+        const rawUrl = video.url?.trim()
+        if (!rawUrl) {
+          fail++
+          continue
+        }
+        const analyzed = await fetchVideoAnalyzeWithRetry(rawUrl)
+        if (!analyzed.ok) {
+          fail++
+          continue
+        }
+        costUsd = accrueOpenAiCost(costUsd, analyzed.data)
+        const u = analyzed.data.openaiUsage as
+          | { total_tokens?: number }
+          | undefined
+        if (u && typeof u.total_tokens === 'number') {
+          tokens += u.total_tokens
+        }
+        const payload = buildPutPayloadFromVideoAnalyze(video, analyzed.data)
+        try {
+          const updateRes = await fetch(`/api/videos/${video.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          })
+          if (!updateRes.ok) {
+            fail++
+            continue
+          }
+          ok++
+        } catch {
+          fail++
+        }
+        if (i < list.length - 1) {
+          await new Promise((r) => setTimeout(r, 2500))
+        }
+      }
+      await fetchVideos({ background: true })
+    } finally {
+      aiBatchBlockingRef.current = false
+      setAiBatchRunning(false)
+      setAiBatchOpen(false)
+      setAiBatchProgress({ current: 0, total: 0, label: '' })
+    }
+    const costStr = costUsd.toFixed(4)
+    const tokStr =
+      tokens > 0 ? ` (~${(tokens / 1000).toFixed(1)}k tokens)` : ''
+    toast({
+      variant: fail && !ok ? 'error' : fail ? 'warning' : 'success',
+      title: 'AI re-scan complete',
+      description: `Updated ${ok} video${ok !== 1 ? 's' : ''}${
+        fail ? `, ${fail} failed` : ''
+      }. Est. API cost ~$${costStr}${tokStr}.`,
+      duration: 10000,
+    })
+  }
+
   const filteredAdminTools = useMemo(() => {
     let list = [...tools]
     const q = searchQuery.trim().toLowerCase()
@@ -778,36 +1192,10 @@ export default function AdminPage() {
         )
       }
 
-      const nextCategories =
-        Array.isArray(analyzeData.categories) &&
-        analyzeData.categories.length > 0
-          ? finalizeToolCategoriesList(
-              analyzeData.categories
-                .map((c: unknown) => normalizeToolCategory(String(c)))
-                .filter(Boolean),
-            )
-          : finalizeToolCategoriesList(toolCategoryList(tool))
-
-      const payload = {
-        name: tool.name,
-        description:
-          typeof analyzeData.description === 'string' &&
-          analyzeData.description.trim()
-            ? analyzeData.description.trim()
-            : tool.description,
-        url: tool.url,
-        logoUrl:
-          typeof analyzeData.logoUrl === 'string' &&
-          analyzeData.logoUrl.trim()
-            ? analyzeData.logoUrl.trim()
-            : tool.logoUrl || null,
-        categories: nextCategories,
-        tags: tool.tags || null,
-        traffic: tool.traffic || null,
-        revenue: tool.revenue || null,
-        rating: tool.rating ?? null,
-        estimatedVisits: tool.estimatedVisits ?? null,
-      }
+      const payload = buildPutPayloadFromToolAnalyze(
+        tool,
+        analyzeData as Record<string, unknown>,
+      )
 
       const updateRes = await fetch(`/api/tools/${tool.id}`, {
         method: 'PUT',
@@ -827,7 +1215,7 @@ export default function AdminPage() {
       addToast({
         variant: 'success',
         title: 'Tool refreshed',
-        description: `Updated logo, info, and categories for ${tool.name}.`,
+        description: `Updated categories, revenue, tags, logo, and metadata for ${tool.name}.`,
       })
     } catch (error) {
       addToast({
@@ -2519,22 +2907,42 @@ export default function AdminPage() {
                   )}
                 </CardDescription>
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="shrink-0 gap-1.5"
-                disabled={loading || adminListRefreshing === 'tools'}
-                onClick={() => void refreshToolsList()}
-              >
-                <RefreshCw
-                  className={cn(
-                    'h-4 w-4',
-                    adminListRefreshing === 'tools' && 'animate-spin',
-                  )}
-                />
-                Refresh
-              </Button>
+              <div className="flex shrink-0 flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="default"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={
+                    loading ||
+                    adminListRefreshing === 'tools' ||
+                    aiBatchRunning
+                  }
+                  onClick={() => void runToolsAiBatchRescan()}
+                >
+                  <Sparkles
+                    className={cn('h-4 w-4', aiBatchRunning && 'animate-pulse')}
+                  />
+                  Re-scan (AI)
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={loading || adminListRefreshing === 'tools'}
+                  onClick={() => void refreshToolsList()}
+                  title="Reload list from database only"
+                >
+                  <RefreshCw
+                    className={cn(
+                      'h-4 w-4',
+                      adminListRefreshing === 'tools' && 'animate-spin',
+                    )}
+                  />
+                  Refresh
+                </Button>
+              </div>
             </div>
           </CardHeader>
           <CardContent className="flex flex-col flex-1 min-h-0 p-6">
@@ -2708,8 +3116,8 @@ export default function AdminPage() {
                         variant="ghost"
                         size="icon"
                         onClick={() => void handleReanalyzeTool(tool)}
-                        title="Re-analyze logo/info/categories"
-                        disabled={reanalyzingToolId !== null}
+                        title="Re-analyze with AI (this tool only)"
+                        disabled={reanalyzingToolId !== null || aiBatchRunning}
                       >
                         <RefreshCw
                           className={cn(
@@ -3148,22 +3556,42 @@ export default function AdminPage() {
                 <CardTitle className="text-xl">All Videos ({videos.length})</CardTitle>
                 <CardDescription>/videos directory</CardDescription>
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="shrink-0 gap-1.5"
-                disabled={videosLoading || adminListRefreshing === 'videos'}
-                onClick={() => void refreshVideosList()}
-              >
-                <RefreshCw
-                  className={cn(
-                    'h-4 w-4',
-                    adminListRefreshing === 'videos' && 'animate-spin',
-                  )}
-                />
-                Refresh
-              </Button>
+              <div className="flex shrink-0 flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="default"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={
+                    videosLoading ||
+                    adminListRefreshing === 'videos' ||
+                    aiBatchRunning
+                  }
+                  onClick={() => void runVideosAiBatchRescan()}
+                >
+                  <Sparkles
+                    className={cn('h-4 w-4', aiBatchRunning && 'animate-pulse')}
+                  />
+                  Re-scan (AI)
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={videosLoading || adminListRefreshing === 'videos'}
+                  onClick={() => void refreshVideosList()}
+                  title="Reload list from database only"
+                >
+                  <RefreshCw
+                    className={cn(
+                      'h-4 w-4',
+                      adminListRefreshing === 'videos' && 'animate-spin',
+                    )}
+                  />
+                  Refresh
+                </Button>
+              </div>
             </div>
           </CardHeader>
           <CardContent className="flex flex-col flex-1 min-h-0 p-6">
@@ -3424,6 +3852,61 @@ export default function AdminPage() {
         </div>
       )}
       </div>
+
+      <Dialog
+        open={aiBatchOpen}
+        onOpenChange={(open) => {
+          if (!open && aiBatchBlockingRef.current) return
+          setAiBatchOpen(open)
+        }}
+      >
+        <DialogContent
+          onPointerDownOutside={(e) =>
+            aiBatchRunning && e.preventDefault()
+          }
+          onEscapeKeyDown={(e) => aiBatchRunning && e.preventDefault()}
+        >
+          <DialogHeader>
+            <DialogTitle>AI re-scan in progress</DialogTitle>
+            <DialogDescription>
+              Re-running analysis for each item. This uses your OpenAI quota.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">Progress</span>
+              <span className="font-medium tabular-nums">
+                {aiBatchProgress.total > 0
+                  ? `${aiBatchProgress.current} / ${aiBatchProgress.total}`
+                  : '—'}
+              </span>
+            </div>
+            <div
+              className="h-2 w-full overflow-hidden rounded-full bg-muted"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={aiBatchProgress.total || 1}
+              aria-valuenow={aiBatchProgress.current}
+            >
+              <div
+                className="h-full bg-primary transition-[width] duration-300 ease-out"
+                style={{
+                  width:
+                    aiBatchProgress.total > 0
+                      ? `${(aiBatchProgress.current / aiBatchProgress.total) * 100}%`
+                      : '0%',
+                }}
+              />
+            </div>
+            <p className="text-sm">
+              <span className="text-muted-foreground">Current: </span>
+              <span className="font-medium break-words">
+                {aiBatchProgress.label || '…'}
+              </span>
+            </p>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

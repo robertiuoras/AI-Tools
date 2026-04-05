@@ -17,6 +17,28 @@ function estimateCost(model: string, promptTokens: number, completionTokens: num
   return pricing.input * promptTokens + pricing.output * completionTokens
 }
 
+/** Client- or server-safe: estimated USD for one completion (same rates as logging). */
+export function estimateOpenAiUsageCostUsd(
+  model: string | undefined,
+  usage:
+    | { prompt_tokens?: number; completion_tokens?: number }
+    | null
+    | undefined,
+): number {
+  if (
+    !usage ||
+    typeof usage.prompt_tokens !== 'number' ||
+    typeof usage.completion_tokens !== 'number'
+  ) {
+    return 0
+  }
+  return estimateCost(
+    model ?? 'gpt-4o-mini',
+    usage.prompt_tokens,
+    usage.completion_tokens,
+  )
+}
+
 /**
  * Fire-and-forget: log one OpenAI completion call to Supabase.
  * Never throws — usage logging must never break the calling route.
