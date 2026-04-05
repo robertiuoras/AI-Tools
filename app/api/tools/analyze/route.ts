@@ -387,7 +387,7 @@ Visits (search for numbers):
 Preferred categories (match spelling exactly when you use one of these — they map to filters on the site):
 ${categories.map((c) => `- "${c}"`).join('\n')}
 
-You may also use custom category strings when needed (2–4 words, Title Case, max 40 characters each). Prefer copying from the list above when it fits; use custom labels only when nothing on the list is close enough. Map near-synonyms to the closest list label instead of inventing duplicates.
+**Custom categories** (optional): You may add **at most one** custom label per tool, and only when **no list label** is a reasonable fit for that slot. Prefer **1–2 list labels** + optional **one** broad custom (e.g. "Real Estate", "E-commerce") — not three customs, not hyper-niche one-offs (avoid long or ultra-specific phrases). Title Case, 2–4 words, max 40 characters. **Reuse the same custom wording** when the niche matches so site filters stay consistent. Map near-synonyms to the list first; do not duplicate a list concept as a custom string.
 
 Industry verticals (required when copy is explicit): If the title, description, or page text **clearly** names a sector, you **must** include the matching list label — do not omit it for generic labels only.
 - Examples: “for healthcare practices”, “designed for healthcare”, “medical offices”, “patient intake”, “HIPAA”, dentists → include **"Healthcare"**.
@@ -416,11 +416,11 @@ Rules:
 - Revenue: Analyze pricing carefully
 - Visits: Provide number if any indicators exist
 - Tags: Always provide (even if generic)
-- categories: Return 1 to ${MAX_TOOL_CATEGORIES} labels only (most tools: 2–3). Order by relevance (first = primary). Mix preferred-list labels and custom strings as needed — e.g. a daily AI newsletter with explainers can be ["News", "Education"] or ["News", "Education", "Research"]. No duplicates. Never use pipes inside strings.
-- categories: Prefer specific labels over "Other". Do NOT include "Other" if you already have two or more other specific categories — "Other" is only for tools that truly do not fit elsewhere.
+- categories: Return 1 to ${MAX_TOOL_CATEGORIES} labels only (most tools: 2–3). Order by relevance (first = primary). **List labels are preferred**; add **at most one** custom when needed (see above). Examples: ["News", "Education"]; ["Healthcare", "AI Agents", "Voice & Audio"] (all list); ["SaaS", "E-commerce"] (one broad custom). No duplicates. Never use pipes inside strings.
+- categories: Custom labels **will appear in the site’s category filter** for everyone — keep them **reusable and not overly narrow**. Prefer specific list labels over "Other". Do NOT include "Other" if you already have two or more other specific categories.
 - categories: Use "News" for AI news sites, newsletters, daily digests, curated industry updates, or headline aggregators. Add "Education" when the product clearly teaches, explains, or trains (courses, tutorials, learning tracks alongside news).
 - categories: **Agencies** = client-services or **custom implementation** firm (see above), not only ad agencies. **Not** Agencies: purely self-serve SaaS with no bespoke rollout story.
-- categories: Do not pad; prefer list labels. Use 2–3 when needed (e.g. **Agencies**, **Insurance**, **AI Automation** for bespoke broker automation).
+- categories: Do not pad; prefer list labels. Use 2–3 when needed (e.g. **Agencies**, **Insurance**, **AI Automation**). Do not stack multiple custom categories.
 - Return ONLY valid JSON, no markdown formatting`
 
     console.log('🚀 [OpenAI] ==========================================')
@@ -438,7 +438,7 @@ Rules:
           {
             role: 'system',
             content:
-              `Analyze AI tools. Return valid JSON only. Use 1–${MAX_TOOL_CATEGORIES} categories per tool. Prefer list labels. When copy names an industry (healthcare practices, medical, legal, insurance brokers, etc.), include that vertical label from the list (e.g. Healthcare, Insurance, Legal) alongside functional categories — never drop an obvious vertical. Use "Agencies" for marketing/creative shops and bespoke implementation partners. Self-serve-only SaaS without custom rollout is usually not Agencies. News + Education when appropriate. Avoid unnecessary Other.`,
+              `Analyze AI tools. Return valid JSON only. Use 1–${MAX_TOOL_CATEGORIES} categories per tool. Prefer canonical list labels; add at most one broad custom label when the list has no good fit — customs show in public filters, so keep wording reusable, not hyper-niche. When copy names an industry, include that list vertical (Healthcare, Insurance, Legal, …) with functional categories. Agencies for marketing/creative and bespoke implementation partners. Self-serve-only SaaS usually not Agencies. News + Education when appropriate. Avoid unnecessary Other.`,
           },
           { role: 'user', content: prompt },
         ],

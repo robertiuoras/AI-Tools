@@ -179,8 +179,8 @@ export function FilterSidebar({
               <AccordionTrigger>Category</AccordionTrigger>
               <AccordionContent>
                 <p className="mb-3 text-xs text-muted-foreground leading-snug">
-                  List + labels in use. Agencies: use Show Agencies (orange ribbon
-                  on cards). Up to 3 per tool.
+                  Defaults + any label on a tool (including AI customs) — all
+                  show here. Agencies: Show Agencies + ribbon. Max 3 per tool.
                 </p>
                 <div className="space-y-3">
                   <Label
