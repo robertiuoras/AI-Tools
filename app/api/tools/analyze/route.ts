@@ -5,6 +5,7 @@ import {
   MAX_TOOL_CATEGORIES,
   normalizeToolCategory,
 } from '@/lib/schemas'
+import { logOpenAIUsage } from '@/lib/openai-usage'
 
 /** Normalize + dedupe AI category output; drop redundant "Other"; cap length; primary = first. */
 function categoriesFromAiContent(content: {
@@ -395,6 +396,7 @@ Rules:
 - categories: Return 1 to ${MAX_TOOL_CATEGORIES} labels only (most tools: 2–3). Order by relevance (first = primary). Mix preferred-list labels and custom strings as needed — e.g. a daily AI newsletter with explainers can be ["News", "Education"] or ["News", "Education", "Research"]. No duplicates. Never use pipes inside strings.
 - categories: Prefer specific labels over "Other". Do NOT include "Other" if you already have two or more other specific categories — "Other" is only for tools that truly do not fit elsewhere.
 - categories: Use "News" for AI news sites, newsletters, daily digests, curated industry updates, or headline aggregators. Add "Education" when the product clearly teaches, explains, or trains (courses, tutorials, learning tracks alongside news).
+- categories: Use "Agencies" when the site is a marketing/creative/digital/advertising agency, consultancy positioning as an agency, or a studio selling services (retainers, client work) rather than primarily a self-serve SaaS product. Pair with "Marketing" or "Design" only when those also clearly apply; prefer "Agencies" as primary when agency positioning is dominant.
 - categories: Do not pad with loosely related labels; accuracy beats quantity. If a preferred label is a close fit, use it instead of a custom near-duplicate.
 - Return ONLY valid JSON, no markdown formatting`
 
@@ -413,7 +415,7 @@ Rules:
           {
             role: 'system',
             content:
-              `Analyze AI tools. Return valid JSON only. Use 1–${MAX_TOOL_CATEGORIES} categories per tool. Prefer labels from the provided list; add custom labels only when needed. Map near-synonyms to the closest list label. News + Education is appropriate for products that combine daily AI news with learning content. Avoid unnecessary Other.`,
+              `Analyze AI tools. Return valid JSON only. Use 1–${MAX_TOOL_CATEGORIES} categories per tool. Prefer labels from the provided list; add custom labels only when needed. Map near-synonyms to the closest list label. Use "Agencies" for agency-style service businesses (marketing, creative, digital shops). News + Education is appropriate for products that combine daily AI news with learning content. Avoid unnecessary Other.`,
           },
           { role: 'user', content: prompt },
         ],
@@ -621,6 +623,7 @@ Rules:
     console.log('✅ [OpenAI] Response ID:', data.id)
     console.log('✅ [OpenAI] Model used:', data.model)
     console.log('✅ [OpenAI] Usage:', JSON.stringify(data.usage, null, 2))
+    if (data.usage) logOpenAIUsage(data.model ?? 'gpt-4o-mini', 'tool_analyze', data.usage)
     console.log('✅ [OpenAI] Choices count:', data.choices?.length || 0)
     
     if (!data.choices || data.choices.length === 0) {

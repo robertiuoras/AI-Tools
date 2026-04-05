@@ -8,6 +8,8 @@ export const toolCategoryBadgeClassName = (category: string): string => {
     'AI Agents': 'bg-violet-500/10 text-violet-700 dark:text-violet-400 border-violet-500/25',
     'AI Automation':
       'bg-purple-500/10 text-purple-700 dark:text-purple-400 border-purple-500/25',
+    Agencies:
+      'bg-violet-600/10 text-violet-800 dark:text-violet-300 border-violet-500/30',
     Analytics:
       'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/25',
     'Code Assistants':

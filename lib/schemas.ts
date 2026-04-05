@@ -4,6 +4,7 @@ import { z } from 'zod'
 export const categories = [
   'AI Agents',
   'AI Automation',
+  'Agencies',
   'Analytics',
   'Code Assistants',
   'Customer Support',
@@ -80,6 +81,15 @@ export const LEGACY_TOOL_CATEGORY_ALIASES: Record<string, Category> = {
   Ads: 'Marketing',
   SEO: 'Marketing',
   Social: 'Marketing',
+  /** Service businesses / shops — not the same as productized “Marketing” SaaS */
+  Agency: 'Agencies',
+  agency: 'Agencies',
+  Agencies: 'Agencies',
+  'Marketing Agency': 'Agencies',
+  'Digital Agency': 'Agencies',
+  'Creative Agency': 'Agencies',
+  'Advertising Agency': 'Agencies',
+  'Ad Agency': 'Agencies',
   Music: 'Music & Audio',
   Sound: 'Music & Audio',
   Podcast: 'Music & Audio',
