@@ -28,7 +28,7 @@ import { toolCategoryBadgeClass } from '@/lib/tool-category-styles'
 import { toolCategoryList } from '@/lib/tool-categories'
 import type { Tool, Video } from '@/lib/supabase'
 import { cn } from '@/lib/utils'
-import { Loader2, Plus, Trash2, Edit2, Sparkles, RefreshCw, Star, Youtube, Music2, Check } from 'lucide-react'
+import { Loader2, Plus, Trash2, Edit2, Sparkles, RefreshCw, Star, Youtube, Music2, Check, DollarSign, ExternalLink, AlertCircle, CheckCircle2, XCircle } from 'lucide-react'
 
 /** Shared tool form → API body (matches handleSubmit / PUT). */
 type AdminToolFormState = {
@@ -163,8 +163,8 @@ export default function AdminPage() {
   toolsRef.current = tools
   editingIdRef.current = editingId
 
-  // Videos tab state
-  const [adminTab, setAdminTab] = useState<'tools' | 'videos'>('tools')
+  // Tab state
+  const [adminTab, setAdminTab] = useState<'tools' | 'videos' | 'usage'>('tools')
   const [videos, setVideos] = useState<Video[]>([])
   const [videosLoading, setVideosLoading] = useState(false)
   const [videoQuickAddUrl, setVideoQuickAddUrl] = useState('')
@@ -200,6 +200,51 @@ export default function AdminPage() {
   const videoAutoAddSessionRef = useRef(0)
   const submitVideoCoreRef = useRef<() => Promise<boolean>>(async () => false)
   const startVideoAutoAddCountdownRef = useRef<() => void>(() => {})
+
+  // Usage tab state
+  type OpenAIUsage = {
+    totalCostDollars: number
+    startDate: string
+    endDate: string
+    plan: string | null
+    hardLimitUsd: number | null
+    softLimitUsd: number | null
+    breakdown: { model: string; requests: number; inputTokens: number; outputTokens: number; cachedTokens: number }[]
+  }
+  type ClaudeUsage = {
+    connected: boolean
+    models: { id: string; name: string }[]
+  }
+  const [usageLoading, setUsageLoading] = useState(false)
+  const [openaiUsage, setOpenaiUsage] = useState<OpenAIUsage | null>(null)
+  const [openaiUsageError, setOpenaiUsageError] = useState<string | null>(null)
+  const [claudeUsage, setClaudeUsage] = useState<ClaudeUsage | null>(null)
+  const [claudeUsageError, setClaudeUsageError] = useState<string | null>(null)
+
+  const fetchUsage = useCallback(async () => {
+    setUsageLoading(true)
+    setOpenaiUsageError(null)
+    setClaudeUsageError(null)
+    const [openaiRes, claudeRes] = await Promise.all([
+      fetch('/api/usage/openai').catch(() => null),
+      fetch('/api/usage/claude').catch(() => null),
+    ])
+    if (openaiRes?.ok) {
+      setOpenaiUsage(await openaiRes.json())
+    } else {
+      const body = await openaiRes?.json().catch(() => ({}))
+      setOpenaiUsageError(body?.error ?? 'Failed to load OpenAI usage')
+      setOpenaiUsage(null)
+    }
+    if (claudeRes?.ok) {
+      setClaudeUsage(await claudeRes.json())
+    } else {
+      const body = await claudeRes?.json().catch(() => ({}))
+      setClaudeUsageError(body?.error ?? 'Failed to load Claude usage')
+      setClaudeUsage(null)
+    }
+    setUsageLoading(false)
+  }, [])
 
   const clearVideoAutoAdd = useCallback(() => {
     if (videoAutoAddIntervalRef.current) {
@@ -1699,6 +1744,14 @@ export default function AdminPage() {
               <Youtube className="h-4 w-4" />
               Videos
             </button>
+            <button
+              type="button"
+              onClick={() => { setAdminTab('usage'); fetchUsage() }}
+              className={`rounded-lg px-5 py-2.5 text-sm font-semibold transition-all flex items-center gap-2 ${adminTab === 'usage' ? 'bg-gradient-to-r from-violet-500/90 to-fuchsia-500/90 text-white shadow-md' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'}`}
+            >
+              <DollarSign className="h-4 w-4" />
+              Usage
+            </button>
           </div>
         </div>
 
@@ -2862,6 +2915,192 @@ export default function AdminPage() {
           </CardContent>
         </Card>
       </div>
+      )}
+
+      {adminTab === 'usage' && (
+        <div className="grid gap-6 lg:grid-cols-2">
+          {/* OpenAI Usage Card */}
+          <Card className="border-border/60 shadow-lg shadow-black/5 dark:shadow-black/20 bg-card/95">
+            <CardHeader className="pb-4">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-xl flex items-center gap-2">
+                  <DollarSign className="h-5 w-5 text-emerald-500" />
+                  OpenAI Usage
+                </CardTitle>
+                <a
+                  href="https://platform.openai.com/usage"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  Open Dashboard <ExternalLink className="h-3 w-3" />
+                </a>
+              </div>
+              <CardDescription>Current billing month cost</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {usageLoading ? (
+                <div className="flex items-center gap-2 text-muted-foreground py-6 justify-center">
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                  <span>Loading usage data…</span>
+                </div>
+              ) : openaiUsageError ? (
+                <div className="flex flex-col gap-3">
+                  <div className="flex items-start gap-2 rounded-lg bg-destructive/10 border border-destructive/20 p-3 text-sm text-destructive">
+                    <XCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                    <span>{openaiUsageError}</span>
+                  </div>
+                  {openaiUsageError.includes('not configured') && (
+                    <p className="text-xs text-muted-foreground">
+                      Add <code className="font-mono bg-muted px-1 rounded">OPENAI_API_KEY</code> to your environment variables to enable usage tracking.
+                    </p>
+                  )}
+                </div>
+              ) : openaiUsage ? (
+                <div className="flex flex-col gap-4">
+                  <div className="flex items-end gap-2">
+                    <span className="text-4xl font-bold tracking-tight">
+                      ${openaiUsage.totalCostDollars.toFixed(4)}
+                    </span>
+                    <span className="text-sm text-muted-foreground mb-1">this month</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div className="rounded-lg bg-muted/50 p-3">
+                      <p className="text-xs text-muted-foreground mb-0.5">Period</p>
+                      <p className="font-medium">{openaiUsage.startDate} → {openaiUsage.endDate}</p>
+                    </div>
+                    {openaiUsage.plan && (
+                      <div className="rounded-lg bg-muted/50 p-3">
+                        <p className="text-xs text-muted-foreground mb-0.5">Plan</p>
+                        <p className="font-medium">{openaiUsage.plan}</p>
+                      </div>
+                    )}
+                    {openaiUsage.hardLimitUsd != null && (
+                      <div className="rounded-lg bg-muted/50 p-3">
+                        <p className="text-xs text-muted-foreground mb-0.5">Hard Limit</p>
+                        <p className="font-medium">${openaiUsage.hardLimitUsd.toFixed(2)}</p>
+                      </div>
+                    )}
+                    {openaiUsage.softLimitUsd != null && (
+                      <div className="rounded-lg bg-muted/50 p-3">
+                        <p className="text-xs text-muted-foreground mb-0.5">Soft Limit</p>
+                        <p className="font-medium">${openaiUsage.softLimitUsd.toFixed(2)}</p>
+                      </div>
+                    )}
+                  </div>
+                  {openaiUsage.breakdown.length > 0 && (
+                    <div className="flex flex-col gap-2">
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Breakdown by Model</p>
+                      <div className="flex flex-col gap-1.5 max-h-56 overflow-y-auto pr-1">
+                        {openaiUsage.breakdown.map((row) => (
+                          <div key={row.model} className="flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2 text-xs">
+                            <span className="font-mono text-foreground/80 truncate max-w-[55%]">{row.model}</span>
+                            <div className="flex items-center gap-3 text-muted-foreground">
+                              <span>{row.requests.toLocaleString()} req</span>
+                              <span>{((row.inputTokens + row.outputTokens) / 1000).toFixed(1)}k tok</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          {/* Claude / Anthropic Usage Card */}
+          <Card className="border-border/60 shadow-lg shadow-black/5 dark:shadow-black/20 bg-card/95">
+            <CardHeader className="pb-4">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-xl flex items-center gap-2">
+                  <Sparkles className="h-5 w-5 text-violet-500" />
+                  Claude Usage
+                </CardTitle>
+                <a
+                  href="https://console.anthropic.com/settings/usage"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  Open Console <ExternalLink className="h-3 w-3" />
+                </a>
+              </div>
+              <CardDescription>Anthropic API status &amp; live cost dashboard</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {usageLoading ? (
+                <div className="flex items-center gap-2 text-muted-foreground py-6 justify-center">
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                  <span>Loading usage data…</span>
+                </div>
+              ) : claudeUsageError ? (
+                <div className="flex flex-col gap-3">
+                  <div className="flex items-start gap-2 rounded-lg bg-destructive/10 border border-destructive/20 p-3 text-sm text-destructive">
+                    <XCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                    <span>{claudeUsageError}</span>
+                  </div>
+                  {claudeUsageError.includes('not configured') && (
+                    <p className="text-xs text-muted-foreground">
+                      Add <code className="font-mono bg-muted px-1 rounded">ANTHROPIC_API_KEY</code> to your environment variables.
+                    </p>
+                  )}
+                </div>
+              ) : claudeUsage ? (
+                <div className="flex flex-col gap-4">
+                  <div className="flex items-center gap-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-4 py-3">
+                    <CheckCircle2 className="h-4 w-4 text-emerald-500 flex-shrink-0" />
+                    <span className="text-sm font-medium text-emerald-700 dark:text-emerald-400">API key connected</span>
+                  </div>
+
+                  <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 px-4 py-3 flex items-start gap-2">
+                    <AlertCircle className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
+                    <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
+                      Anthropic does not expose a public billing API. View real-time costs, token usage, and spend limits directly in the{' '}
+                      <a
+                        href="https://console.anthropic.com/settings/usage"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-300"
+                      >
+                        Anthropic Console
+                      </a>.
+                    </p>
+                  </div>
+
+                  {claudeUsage.models.length > 0 && (
+                    <div className="flex flex-col gap-2">
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Available Models</p>
+                      <div className="flex flex-col gap-1.5 max-h-56 overflow-y-auto pr-1">
+                        {claudeUsage.models.map((m) => (
+                          <div key={m.id} className="flex items-center gap-2 rounded-lg bg-muted/40 px-3 py-2 text-xs">
+                            <CheckCircle2 className="h-3 w-3 text-emerald-500 flex-shrink-0" />
+                            <span className="font-medium">{m.name}</span>
+                            <span className="text-muted-foreground font-mono ml-auto">{m.id}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+
+              {!usageLoading && (
+                <div className="mt-4 flex justify-end">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={fetchUsage}
+                    className="gap-1.5 text-xs"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Refresh
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
       )}
       </div>
     </div>
