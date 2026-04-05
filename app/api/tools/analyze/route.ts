@@ -388,11 +388,12 @@ ${categories.map((c) => `- "${c}"`).join('\n')}
 
 You may also use custom category strings when needed (2–4 words, Title Case, max 40 characters each). Prefer copying from the list above when it fits; use custom labels only when nothing on the list is close enough. Map near-synonyms to the closest list label instead of inventing duplicates.
 
-Industry verticals: when the product clearly targets one sector (e.g. insurance brokerages, carriers, healthcare providers, banks), include the matching list label such as "Insurance" if present, or a tight custom vertical label. Example: AI automation sold to insurance brokers → ["Insurance", "AI Automation"] or ["Insurance"] — not "Agencies".
+Industry verticals: when the offer targets one sector (e.g. insurance brokerages), include **"Insurance"** when that fits, plus **AI Automation** / **SaaS** as appropriate.
 
-Category quality — decide product vs services first:
-- **Product / SaaS company**: sells a software product (signup, pricing tiers, self-serve app). Use SaaS, Marketing, AI Automation, Insurance, etc. as fits. Do **not** use "Agencies" just because customers are marketers or agencies.
-- **Services agency**: the **business is** a marketing/creative/digital/brand/advertising **shop** doing client work (retainers, campaigns, strategy, production, “our clients”, “hire us”, case studies as services). Use **"Agencies"** — usually as first or second label. You may pair **Agencies** with **Marketing**, **Design**, or **Advertising** when both the firm type and discipline apply.
+Category quality — **how they sell** matters as much as **what** they sell:
+- **Self-serve product vendor**: instant signup, transparent pricing tiers, little or no bespoke integration — use **Insurance**, **SaaS**, **AI Automation**, etc. Usually **not** "Agencies".
+- **Client-services / implementation firm** (use **"Agencies"**): sells **custom delivery** — e.g. integrate with **your** existing systems, configure to **your** standards, **book a call / diagnostic**, **phased rollout**, **“live in 30 days”**, **we build** your deployment, one client pilots then you refine and roll out. This includes **vertical specialists** (e.g. broker automation shops like BlueHorizon-style sites). Pair **Agencies** with **Insurance** + **AI Automation** when the vertical is insurance and delivery is bespoke.
+- **Marketing/creative/digital agency**: retainers, campaigns, creative production — **Agencies** plus **Marketing** / **Design** / **Advertising** when relevant.
 
 Return JSON:
 {
@@ -413,8 +414,8 @@ Rules:
 - categories: Return 1 to ${MAX_TOOL_CATEGORIES} labels only (most tools: 2–3). Order by relevance (first = primary). Mix preferred-list labels and custom strings as needed — e.g. a daily AI newsletter with explainers can be ["News", "Education"] or ["News", "Education", "Research"]. No duplicates. Never use pipes inside strings.
 - categories: Prefer specific labels over "Other". Do NOT include "Other" if you already have two or more other specific categories — "Other" is only for tools that truly do not fit elsewhere.
 - categories: Use "News" for AI news sites, newsletters, daily digests, curated industry updates, or headline aggregators. Add "Education" when the product clearly teaches, explains, or trains (courses, tutorials, learning tracks alongside news).
-- categories: **Agencies** = the listing is itself a client-services firm (see above). **Not** Agencies: packaged software for a vertical (e.g. “for insurance brokers”, “for agencies”) — use vertical + SaaS/AI labels instead.
-- categories: Do not pad with loosely related labels; accuracy beats quantity. Prefer list labels. Use 2–3 when the tool clearly spans roles (e.g. Agencies + Marketing, or Insurance + SaaS).
+- categories: **Agencies** = client-services or **custom implementation** firm (see above), not only ad agencies. **Not** Agencies: purely self-serve SaaS with no bespoke rollout story.
+- categories: Do not pad; prefer list labels. Use 2–3 when needed (e.g. **Agencies**, **Insurance**, **AI Automation** for bespoke broker automation).
 - Return ONLY valid JSON, no markdown formatting`
 
     console.log('🚀 [OpenAI] ==========================================')
@@ -432,7 +433,7 @@ Rules:
           {
             role: 'system',
             content:
-              `Analyze AI tools. Return valid JSON only. Use 1–${MAX_TOOL_CATEGORIES} categories per tool. Prefer list labels. Distinguish SaaS/product companies from client-services agencies: use "Agencies" when the site is a marketing/creative/digital services firm; use vertical labels like "Insurance" for B2B software sold into that industry (not Agencies). Pair Agencies with Marketing or Design when appropriate. News + Education when appropriate. Avoid unnecessary Other.`,
+              `Analyze AI tools. Return valid JSON only. Use 1–${MAX_TOOL_CATEGORIES} categories per tool. Prefer list labels. Use "Agencies" for marketing/creative shops AND for custom implementation / integration partners (book a call, diagnostic, phased rollout, configure to client systems). Use "Insurance" etc. for vertical focus; combine Agencies + Insurance + AI Automation when a vertical specialist delivers bespoke services. Self-serve-only SaaS without custom rollout is usually not Agencies. News + Education when appropriate. Avoid unnecessary Other.`,
           },
           { role: 'user', content: prompt },
         ],

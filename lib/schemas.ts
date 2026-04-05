@@ -256,7 +256,10 @@ function canonicalCaseIfMatches(s: string): string {
   return s
 }
 
-/** Corpus signals: B2B product for insurance / brokers — do not tag as a marketing “Agencies” shop. */
+/**
+ * Vertical B2B / insurtech product language. Alone it blocks adding "Agencies" via corpus
+ * augmentation — unless implementation- or marketing-agency signals also match.
+ */
 export const CORPUS_VERTICAL_B2B_BLOCKS_AGENCIES =
   /\b(insurtech|insurance tech|for insurers?|for brokers?|for brokerages?|insurance brokers?|insurance brokerages?|brokerage software|claims software|underwriting software|policy admin|sold to (insurers?|brokers?))\b/i
 
@@ -270,6 +273,34 @@ export const CORPUS_SERVICES_AGENCY_HINT = new RegExp(
     String.raw`\b(full[- ]service|boutique)\s+agenc(y|ies)\b`,
     String.raw`\bwe\s+are\s+(a\s+)?(digital|creative|marketing|advertising|design|brand)\s+agency\b`,
     String.raw`\bagency\s+(specializing|focused|based)\s+in\b`,
+  ].join('|'),
+  'i',
+)
+
+/**
+ * Custom implementation / integration shops: book-a-call motion, diagnostics, phased rollout,
+ * “live in N days”, integrate with client systems — including vertical specialists (e.g. broker automation).
+ */
+export const CORPUS_IMPLEMENTATION_SERVICES_HINT = new RegExp(
+  [
+    String.raw`\bbook\s+(a\s+)?(call|consultation|demo|strategy|discovery)\b`,
+    String.raw`\b(schedule|request)\s+(a\s+)?(call|demo|consultation|discovery)\b`,
+    String.raw`\b(free\s+)?diagnostic\b`,
+    String.raw`\bintegrat(e|ion)\s+with\s+your\s+(existing\s+)?`,
+    String.raw`\b(live|go\s+live)\s+in\s+\d+\s*(days?|weeks?|months?)\b`,
+    String.raw`\b\d+\s+days?\s+or\s+less\b`,
+    String.raw`\b(system|solution)\s+is\s+live\s+in\b`,
+    String.raw`\bconfigure(d)?\s+to\s+your\s+(standards?|workflows?|needs?)\b`,
+    String.raw`\btemplates?\s+to\s+your\s+standards?\b`,
+    String.raw`\broll[- ]?out\b`,
+    String.raw`\broll\s+(it\s+)?out\b`,
+    String.raw`\bphased\s+(rollout|deployment|launch)\b`,
+    String.raw`\bwe\s+refine\b`,
+    String.raw`\bwe\s+build\b`,
+    String.raw`\b(custom|bespoke)\s+(implementation|build|deployment|integration|solution)\b`,
+    String.raw`\bimplementation\s+(partner|services?|team)\b`,
+    String.raw`\b(done[- ]for[- ]you|white[- ]glove)\s+(setup|onboarding|implementation)\b`,
+    String.raw`\bno\s+(sales\s+)?pitch\b`,
   ].join('|'),
   'i',
 )
@@ -364,17 +395,27 @@ export function finalizeToolCategoriesList(normalized: string[]): string[] {
 }
 
 /**
- * If the page clearly describes a services agency but the model omitted "Agencies", add it.
- * Does not run when the site is vertical B2B (e.g. insurtech for brokers).
+ * If the page clearly describes a services or implementation firm but the model omitted "Agencies", add it.
+ * Vertical B2B wording (e.g. “for brokers”) no longer blocks when implementation / book-a-call signals match.
  */
 export function augmentCategoriesWithAgencySignals(
   categories: string[],
   corpus: string,
 ): string[] {
   if (!corpus?.trim() || categories.length === 0) return categories
-  if (CORPUS_VERTICAL_B2B_BLOCKS_AGENCIES.test(corpus)) return categories
   if (categories.includes('Agencies')) return categories
-  if (!CORPUS_SERVICES_AGENCY_HINT.test(corpus)) return categories
+
+  const verticalProduct = CORPUS_VERTICAL_B2B_BLOCKS_AGENCIES.test(corpus)
+  const marketingAgency = CORPUS_SERVICES_AGENCY_HINT.test(corpus)
+  const implServices = CORPUS_IMPLEMENTATION_SERVICES_HINT.test(corpus)
+
+  if (verticalProduct && !implServices && !marketingAgency) {
+    return categories
+  }
+  if (!marketingAgency && !implServices) {
+    return categories
+  }
+
   return finalizeToolCategoriesList(['Agencies', ...categories])
 }
 
