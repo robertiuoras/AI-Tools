@@ -1206,7 +1206,8 @@ export default function AdminPage() {
             addToast({
               variant: 'info',
               title: 'Analysis Complete (Limited Data)',
-              description: 'The website blocked our scraping, but we analyzed it using AI with just the URL. Please review and fill in any missing details manually.',
+              description:
+                'The website blocked our scraping; we still analyzed using the URL. If the tool does not auto-add, use the draft below or Edit after adding.',
               duration: 8000,
             })
           }
@@ -1249,8 +1250,6 @@ export default function AdminPage() {
       })
 
       setQuickAddUrl('')
-      // Silently fill the form - no popup
-      window.scrollTo({ top: 0, behavior: 'smooth' })
       
       // Auto-submit immediately (no cooldown)
       const analyzedCategories =
@@ -1340,6 +1339,8 @@ export default function AdminPage() {
           setSubmitting(false)
           setIsProcessing(false)
         }
+      } else {
+        setIsProcessing(false)
       }
     } catch (error) {
       console.error('Error analyzing URL:', error)
@@ -1356,14 +1357,14 @@ export default function AdminPage() {
           addToast({
             variant: 'warning',
             title: 'Website Rate Limited - Using AI Analysis',
-            description: `The website is rate limiting our scraping, but we're still trying to analyze it with AI using just the URL. If the analysis is incomplete, you can fill in the form manually.`,
+            description: `The website is rate limiting our scraping; we're still trying AI with just the URL. If add fails, check the draft panel or try again.`,
             duration: 8000,
           })
         } else {
           addToast({
             variant: 'warning',
             title: 'Website Rate Limit (Not OpenAI)',
-            description: `The website itself is rate limiting our requests, not OpenAI. ${errorMessage}\n\nWait a few minutes and try again, or fill in the form manually.`,
+            description: `The website itself is rate limiting our requests, not OpenAI. ${errorMessage}\n\nWait a few minutes and try again.`,
             duration: 10000,
           })
         }
@@ -1421,14 +1422,14 @@ export default function AdminPage() {
         addToast({
           variant: 'warning',
           title: 'Website Scraping Failed',
-          description: `Could not fetch website content for ${quickAddUrl}. The website may be blocking requests or unreachable. You can still fill the form manually.`,
+          description: `Could not fetch website content for ${quickAddUrl}. The site may be blocking requests or unreachable. Try again later or another URL.`,
           duration: 6000,
         })
       } else {
         addToast({
           variant: 'error',
           title: 'Failed to Analyze URL',
-          description: `${errorMessage}. Please fill in the form manually.`,
+          description: `${errorMessage}. Try another URL or check the draft panel if partial data appeared.`,
           duration: 6000,
         })
       }
@@ -1738,7 +1739,7 @@ export default function AdminPage() {
             <CardDescription>
               {editingId
                 ? 'Changes save automatically after you stop typing or changing categories'
-                : 'Fill in the details to add a new AI tool'}
+                : 'Quick Add and Bulk Add use AI only. To change name, URL, categories, etc., pick a tool in the list and click Edit.'}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -1750,7 +1751,7 @@ export default function AdminPage() {
                     <Label className="font-semibold">Quick Add by URL</Label>
                   </div>
                   <p className="text-sm text-muted-foreground mb-3">
-                    Paste a website URL and let AI analyze it to auto-fill the form
+                    AI analyzes the site and adds the tool automatically. No manual fields here—use Edit on a tool to tweak anything.
                   </p>
                   {cooldownRemaining > 0 && (
                     <div className="mb-3 p-2 rounded-md bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-200 dark:border-yellow-800">
@@ -1960,11 +1961,74 @@ export default function AdminPage() {
                   </div>
               </div>
             )}
+            {!editingId &&
+            (formData.name.trim() || formData.url.trim()) &&
+            !analyzing &&
+            !isProcessing ? (
+              <div className="mb-6 rounded-lg border border-border/70 bg-muted/25 p-4 text-sm">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">
+                  Draft from last scan (read-only)
+                </p>
+                <p className="mb-3 text-muted-foreground">
+                  This appears if analysis returned data but did not auto-save (e.g. missing fields or duplicate). You can save once if the draft is complete, or clear and try again.
+                </p>
+                <dl className="mb-4 space-y-2">
+                  <div>
+                    <dt className="text-xs text-muted-foreground">Name</dt>
+                    <dd className="font-medium">{formData.name || '—'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-muted-foreground">URL</dt>
+                    <dd className="break-all text-muted-foreground">{formData.url || '—'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-muted-foreground">Categories</dt>
+                    <dd>{formData.categories.length ? formData.categories.join(', ') : '—'}</dd>
+                  </div>
+                  {formData.description ? (
+                    <div>
+                      <dt className="text-xs text-muted-foreground">Description</dt>
+                      <dd className="line-clamp-4 text-muted-foreground">{formData.description}</dd>
+                    </div>
+                  ) : null}
+                </dl>
+                <div className="flex flex-wrap gap-2">
+                  {buildToolPayload(formData, null, tools).ok ? (
+                    <Button
+                      type="button"
+                      disabled={submitting}
+                      onClick={() =>
+                        void handleSubmit({
+                          preventDefault() {},
+                        } as React.FormEvent)
+                      }
+                    >
+                      {submitting ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Saving…
+                        </>
+                      ) : (
+                        <>
+                          <Plus className="mr-2 h-4 w-4" />
+                          Save to directory now
+                        </>
+                      )}
+                    </Button>
+                  ) : (
+                    <p className="text-xs text-amber-700 dark:text-amber-300">
+                      Not enough data to save (need name, description, URL, and at least one category). Run Analyze again or use a different URL.
+                    </p>
+                  )}
+                  <Button type="button" variant="outline" onClick={resetForm}>
+                    Clear draft
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+            {editingId ? (
             <form
-              onSubmit={(e) => {
-                e.preventDefault()
-                if (!editingId) void handleSubmit(e)
-              }}
+              onSubmit={(e) => e.preventDefault()}
               className="space-y-4"
             >
               <div className="space-y-2">
@@ -2158,28 +2222,12 @@ export default function AdminPage() {
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                {!editingId && (
-                  <Button type="submit" disabled={submitting}>
-                    {submitting ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Saving...
-                      </>
-                    ) : (
-                      <>
-                        <Plus className="mr-2 h-4 w-4" />
-                        Add Tool
-                      </>
-                    )}
-                  </Button>
-                )}
-                {editingId && (
-                  <Button type="button" variant="outline" onClick={resetForm}>
-                    Cancel
-                  </Button>
-                )}
+                <Button type="button" variant="outline" onClick={resetForm}>
+                  Cancel
+                </Button>
               </div>
             </form>
+            ) : null}
           </CardContent>
         </Card>
 
@@ -2207,7 +2255,7 @@ export default function AdminPage() {
               </div>
             ) : tools.length === 0 ? (
               <p className="text-center text-muted-foreground py-8">
-                No tools yet. Add your first tool!
+                No tools yet. Use Quick Add or Bulk Add on the left—then Edit a tool to change details.
               </p>
             ) : (
               <>
