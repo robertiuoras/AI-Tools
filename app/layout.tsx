@@ -1,6 +1,6 @@
 import type { Metadata } from 'next'
 import { Suspense } from 'react'
-import { Inter } from 'next/font/google'
+import { Plus_Jakarta_Sans } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/react'
 import { SpeedInsights } from '@vercel/speed-insights/next'
 import './globals.css'
@@ -12,7 +12,7 @@ import { AdminNavLink } from '@/components/AdminNavLink'
 import { ToolsCatalogProvider } from '@/components/ToolsCatalogProvider'
 import { AuthSessionProvider } from '@/components/AuthSessionProvider'
 
-const inter = Inter({ subsets: ['latin'] })
+const plusJakartaSans = Plus_Jakarta_Sans({ subsets: ['latin'], weight: ['400', '500', '600', '700'] })
 
 export const metadata: Metadata = {
   title: 'AI Tools Directory - Discover the Best AI Tools',
@@ -26,7 +26,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={inter.className} suppressHydrationWarning>
+      <body className={plusJakartaSans.className} suppressHydrationWarning>
         <ToastProvider>
           <AuthSessionProvider>
           <ToolsCatalogProvider>

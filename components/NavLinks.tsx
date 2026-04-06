@@ -6,7 +6,7 @@ import { usePathname, useSearchParams } from 'next/navigation'
 import { useAuthSession } from '@/components/AuthSessionProvider'
 import { cn } from '@/lib/utils'
 
-const HOVER_MS = 'duration-500'
+const HOVER_MS = 'duration-200'
 const HOVER_EASE = 'ease-out'
 type GradientSpec = {
   from: string

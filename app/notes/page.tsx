@@ -87,6 +87,7 @@ import {
 } from "@/lib/note-html";
 import { NoteColorPicker } from "@/components/NoteColorPicker";
 import { TopLoadingBar } from "@/components/TopLoadingBar";
+import { NotesPageLoader, NotesOverlayLoader } from "@/components/NotesLoader";
 import { useToast } from "@/components/ui/toaster";
 import {
   Dialog,
@@ -3717,17 +3718,8 @@ export default function NotesPage() {
 
   if (!authSessionReady || showInitialNotesWorkspaceLoader) {
     return (
-      <div
-        className="container mx-auto flex min-h-[min(70vh,560px)] flex-col items-center justify-center gap-3 px-4 py-24 text-muted-foreground"
-        aria-busy
-        aria-label={!authSessionReady ? "Loading" : "Loading notes workspace"}
-      >
-        <div className="h-1.5 w-40 max-w-[85vw] overflow-hidden rounded-full bg-muted">
-          <div className="notes-loading-bar h-full w-1/3 rounded-full bg-gradient-to-r from-primary/70 to-accent/70" />
-        </div>
-        <span className="text-sm">
-          {!authSessionReady ? "Loading…" : "Loading workspace…"}
-        </span>
+      <div className="container mx-auto px-4">
+        <NotesPageLoader message={!authSessionReady ? "Loading…" : "Loading workspace…"} />
       </div>
     );
   }
@@ -3792,18 +3784,7 @@ export default function NotesPage() {
       ) : (
         <div className="relative grid min-h-[min(70vh,560px)] grid-cols-1 gap-4 lg:grid-cols-[minmax(0,280px)_minmax(0,320px)_minmax(0,1fr)] lg:items-start">
           {notesLoading && initialNotesBootstrapDone ? (
-            <div
-              className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 rounded-xl border border-border/50 bg-background/90 p-6 backdrop-blur-sm"
-              aria-busy
-              aria-label="Loading notes for this page"
-            >
-              <div className="h-1.5 w-40 max-w-[85vw] overflow-hidden rounded-full bg-muted">
-                <div className="notes-loading-bar h-full w-1/3 rounded-full bg-gradient-to-r from-primary/70 to-accent/70" />
-              </div>
-              <span className="text-sm text-muted-foreground">
-                Loading notes…
-              </span>
-            </div>
+            <NotesOverlayLoader message="Loading notes…" />
           ) : null}
           <section className="min-w-0 cursor-default rounded-xl border bg-card p-3 space-y-3">
             <Label className="text-xs text-muted-foreground">Pages</Label>

@@ -46,7 +46,7 @@ export function HomeSplashLoader({ loading }: HomeSplashLoaderProps) {
   const rounded = Math.min(100, Math.round(barPct));
   const widthPct = `${Math.min(100, barPct)}%`;
   const fillClass =
-    "h-full min-w-0 rounded-full bg-gradient-to-r from-primary via-accent to-secondary transition-[width] duration-200 ease-out";
+    "relative h-full min-w-0 overflow-hidden rounded-full bg-gradient-to-r from-primary via-accent to-secondary transition-[width] duration-200 ease-out progress-shimmer";
 
   return (
     <div

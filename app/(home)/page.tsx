@@ -48,6 +48,7 @@ import { toolCategoryList, toolIsAgency } from "@/lib/tool-categories";
 import { AGENCY_CATEGORY_LABEL, categories as defaultCategories, sortToolCategoryLabelsForDisplay } from "@/lib/schemas";
 import { NewToolsBanner } from "@/components/NewToolsBanner";
 import { HomeSplashLoader } from "@/components/HomeSplashLoader";
+import { ToolCardGridSkeleton, ToolCardListSkeleton } from "@/components/ToolCardSkeleton";
 import { useToolsCatalog } from "@/components/ToolsCatalogProvider";
 import {
   clearHomeSplashSession,
@@ -596,46 +597,27 @@ function HomePageContent() {
             <div className="min-h-[8rem] space-y-4 scroll-mt-24">
               {loading && tools.length === 0 ? (
                 viewMode === "grid" ? (
-                  <>
-                    <div
-                      data-tutorial="tool-results-first-row"
-                      className="grid min-w-0 grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
-                    >
-                      {Array.from({ length: toolGridCols }).map((_, i) => (
-                        <div
-                          key={`s1-${i}`}
-                          className="h-64 min-h-0 animate-pulse rounded-lg border bg-muted"
-                        />
-                      ))}
-                    </div>
-                    <div className="grid min-w-0 grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                      {Array.from({
-                        length: Math.max(0, 8 - toolGridCols),
-                      }).map((_, i) => (
-                        <div
-                          key={`s2-${i}`}
-                          className="h-64 min-h-0 animate-pulse rounded-lg border bg-muted"
-                        />
-                      ))}
-                    </div>
-                  </>
+                  <div
+                    data-tutorial="tool-results-first-row"
+                    className="grid min-w-0 grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+                    aria-label="Loading tools"
+                    aria-busy
+                  >
+                    {Array.from({ length: 8 }).map((_, i) => (
+                      <ToolCardGridSkeleton key={`sk-${i}`} />
+                    ))}
+                  </div>
                 ) : (
-                  <>
-                    <div
-                      data-tutorial="tool-results-first-row"
-                      className="flex min-w-0 flex-col gap-3"
-                    >
-                      <div className="h-[4.5rem] animate-pulse rounded-lg border bg-muted" />
-                    </div>
-                    <div className="flex min-w-0 flex-col gap-3">
-                      {[...Array(7)].map((_, i) => (
-                        <div
-                          key={i}
-                          className="h-[4.5rem] animate-pulse rounded-lg border bg-muted"
-                        />
-                      ))}
-                    </div>
-                  </>
+                  <div
+                    data-tutorial="tool-results-first-row"
+                    className="flex min-w-0 flex-col gap-3"
+                    aria-label="Loading tools"
+                    aria-busy
+                  >
+                    {Array.from({ length: 8 }).map((_, i) => (
+                      <ToolCardListSkeleton key={`sk-${i}`} />
+                    ))}
+                  </div>
                 )
               ) : tools.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-16 text-center">

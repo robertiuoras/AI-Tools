@@ -791,7 +791,7 @@ export function ToolCard({
           <Button
             asChild
             variant="ghost"
-            className="h-9 w-full group-hover:bg-primary/10"
+            className="h-9 w-full font-medium transition-colors duration-200 group-hover:bg-primary/12 group-hover:text-primary"
           >
             <Link
               href={tool.url}
