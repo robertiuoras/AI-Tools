@@ -4,7 +4,8 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
+    /* Slightly off-white page background so cards (white) have contrast */
+    --background: 220 18% 96%;
     --foreground: 222.2 84% 4.9%;
     --card: 0 0% 100%;
     --card-foreground: 222.2 84% 4.9%;
@@ -14,14 +15,14 @@
     --primary-foreground: 210 40% 98%;
     --secondary: 210 40% 96.1%;
     --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
+    --muted: 210 30% 93%;
     --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
+    --accent: 210 30% 93%;
     --accent-foreground: 222.2 47.4% 11.2%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
+    --border: 214.3 25% 87%;
+    --input: 214.3 25% 87%;
     --ring: 222.2 84% 4.9%;
     --radius: 0.5rem;
   }
@@ -89,27 +90,48 @@
   color: hsl(222.2 47.4% 11.2%) !important;
 }
 
-/* Dark note body: visible scrollbar on dark backgrounds */
+/* Note body scrollbar — always visible in both modes */
+.note-html-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.22) rgba(0, 0, 0, 0.05);
+}
+.note-html-scroll::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+.note-html-scroll::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 5px;
+}
+.note-html-scroll::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.note-html-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.38);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+/* Dark mode: white scrollbar thumb */
 .dark .note-html-scroll {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.75) rgba(255, 255, 255, 0.08);
-}
-.dark .note-html-scroll::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  scrollbar-color: rgba(255, 255, 255, 0.72) rgba(255, 255, 255, 0.07);
 }
 .dark .note-html-scroll::-webkit-scrollbar-track {
   background: rgba(255, 255, 255, 0.06);
   border-radius: 5px;
 }
 .dark .note-html-scroll::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.72);
   border-radius: 5px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 .dark .note-html-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.9);
   border: 2px solid transparent;
   background-clip: padding-box;
 }
@@ -149,22 +171,85 @@
 }
 
 /* Notes editor: image resize/rotate handles — only when figure is selected */
-.note-html-scroll figure[data-note-image="1"] [data-note-image-handle="1"] {
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.12s ease;
-}
-.note-html-scroll figure[data-note-image="1"][data-note-image-selected="1"] {
-  outline: 2px solid rgb(99 102 241);
-  outline-offset: 2px;
-  border-radius: 4px;
+/* display:none avoids compositor “ghost” pixels that opacity:0 can still leave */
+.note-html-scroll
+  figure[data-note-image="1"]:not([data-note-image-selected="1"])
+  [data-note-image-handle="1"] {
+  display: none !important;
 }
 .note-html-scroll
   figure[data-note-image="1"][data-note-image-selected="1"]
   [data-note-image-handle="1"] {
-  opacity: 1;
-  pointer-events: auto;
+  display: block;
+}
+.note-html-scroll figure[data-note-image="1"][data-note-image-selected="1"] {
+  /* box-shadow avoids outline repaint “trails” when dragging/transforming */
+  outline: none;
+  box-shadow: 0 0 0 2px rgb(99 102 241);
+  border-radius: 4px;
+}
+/* Isolate stacking while reordering vertically to reduce handle repaint trails */
+.note-html-scroll figure[data-note-image="1"][data-note-image-reordering="1"] {
+  isolation: isolate;
 }
 .dark .note-html-view a[href^="http"]:hover {
   color: rgb(147 197 253);
+}
+
+/* Notes editor: avoid Tailwind space-y margins between blocks — that gap isn't editable for caret placement */
+.note-html-scroll.note-html-view[contenteditable="true"] figure[data-note-image="1"] {
+  margin-top: 0;
+  margin-bottom: 0;
+  padding: 0;
+}
+.note-html-scroll.note-html-view[contenteditable="true"] p {
+  margin-top: 0;
+  margin-bottom: 0;
+  padding-top: 0.2em;
+  padding-bottom: 0.2em;
+}
+.note-html-scroll.note-html-view[contenteditable="true"] p.note-editor-gap-p {
+  min-height: 1.35em;
+  padding-top: 0.15em;
+  padding-bottom: 0.15em;
+}
+
+/* Home page splash — subtle motion without extra JS */
+@keyframes home-splash-blob {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+    opacity: 0.55;
+  }
+  40% {
+    transform: translate(6%, -5%) scale(1.06);
+    opacity: 0.85;
+  }
+  70% {
+    transform: translate(-4%, 6%) scale(0.96);
+    opacity: 0.65;
+  }
+}
+.home-splash-blob {
+  animation: home-splash-blob 14s ease-in-out infinite;
+}
+.home-splash-blob-delayed {
+  animation: home-splash-blob 18s ease-in-out infinite;
+  animation-delay: -4s;
+}
+.home-splash-blob-slow {
+  animation: home-splash-blob 22s ease-in-out infinite;
+  animation-delay: -8s;
+}
+
+@keyframes notes-loading-bar {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(380%);
+  }
+}
+.notes-loading-bar {
+  animation: notes-loading-bar 1.6s ease-in-out infinite;
 }

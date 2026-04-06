@@ -792,6 +792,30 @@ export function noteContentToEditorHtml(content: string): string {
   return s;
 }
 
+/**
+ * Notes can be image/figure-only; `textContent` is then empty. Treating that as
+ * "empty" used to return "" and wipe real content on autosave.
+ */
+function hasMeaningfulNonTextContent(html: string): boolean {
+  if (typeof document === "undefined") {
+    return /<(img|figure|picture|video|svg|hr|table|iframe|canvas|object|embed|audio|map|math)\b/i.test(
+      html,
+    );
+  }
+  try {
+    const doc = new DOMParser().parseFromString(`<div>${html}</div>`, "text/html");
+    const root = doc.body.firstElementChild;
+    if (!root) return false;
+    return (
+      root.querySelector(
+        "img,figure,picture,video,svg,hr,table,canvas,iframe,object,embed,map,audio,source,math",
+      ) !== null
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Before persist: normalize empty-ish editor output. */
 export function normalizeNoteHtmlForSave(html: string): string {
   let s = normalizeNoteHtmlStructure(html);
@@ -800,7 +824,10 @@ export function normalizeNoteHtmlForSave(html: string): string {
       ? new DOMParser().parseFromString(`<div>${s}</div>`, "text/html").body
           .textContent ?? ""
       : s.replace(/<[^>]+>/g, "");
-  if (!tmp.replace(/\u00a0/g, " ").trim()) return "";
+  if (!tmp.replace(/\u00a0/g, " ").trim()) {
+    if (hasMeaningfulNonTextContent(s)) return s;
+    return "";
+  }
   return s;
 }
 

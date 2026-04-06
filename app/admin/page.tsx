@@ -16,21 +16,40 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  BulkRefreshProgressDialog,
+  type BulkRefreshProgressState,
+} from '@/components/admin/BulkRefreshProgressDialog'
+import {
+  BULK_REFRESH_DELAY_MS_TOOL,
+  BULK_REFRESH_DELAY_MS_VIDEO,
+  estimateUsdPerToolAnalyzeCall,
+  estimateUsdPerVideoAnalyzeCall,
+  estimateUsdToolAnalyzeCalls,
+  estimateUsdVideoAnalyzeCalls,
+  formatUsdEstimate,
+  MAX_BULK_CONSECUTIVE_FAILURES,
+  MAX_BULK_REFRESH_ITEMS,
+  openAiCostNote,
+  videoAnalyzeCostHint,
+} from '@/lib/admin-openai-cost'
 import { useToast } from '@/components/ui/toaster'
 import {
   categories,
   finalizeToolCategoriesList,
+  finalizeVideoAiCategories,
   MAX_TOOL_CATEGORIES,
+  MAX_VIDEO_CATEGORIES,
   normalizeToolCategory,
-  videoCategories,
 } from '@/lib/schemas'
 import { toolCategoryBadgeClass } from '@/lib/tool-category-styles'
-import { toolCategoryList } from '@/lib/tool-categories'
+import { toolHasDownloadableApp, toolIsAgency } from '@/lib/tool-flags'
+import { toolCategoryList, videoCategoryList } from '@/lib/tool-categories'
 import type { Tool, Video } from '@/lib/supabase'
 import { cn } from '@/lib/utils'
-import { Loader2, Plus, Trash2, Edit2, Sparkles, RefreshCw, Star, Youtube, Music2, Check } from 'lucide-react'
+import { Loader2, Plus, Trash2, Edit2, Sparkles, RefreshCw, Star, Youtube, Music2, Check, X } from 'lucide-react'
 
-/** Shared tool form → API body (matches handleSubmit / PUT). */
+/** Shared tool form → API body (matches PUT / auto-save). */
 type AdminToolFormState = {
   name: string
   description: string
@@ -42,6 +61,8 @@ type AdminToolFormState = {
   revenue: string
   rating: string
   estimatedVisits: string
+  isAgency: boolean
+  hasDownloadableApp: boolean
 }
 
 function buildToolPayload(
@@ -105,7 +126,66 @@ function buildToolPayload(
     }
   }
 
+  payload.isAgency = fd.isAgency === true
+  payload.hasDownloadableApp = fd.hasDownloadableApp === true
+
   return { ok: true, payload }
+}
+
+/** Coerce /api/tools/analyze JSON flags; avoids losing true when value is not typeof boolean. */
+function booleanFromAnalyzeField(value: unknown, fallback: boolean): boolean {
+  if (value === true || value === 1) return true
+  if (value === false || value === 0) return false
+  if (typeof value === 'string') {
+    const s = value.trim().toLowerCase()
+    if (s === 'true' || s === '1') return true
+    if (s === 'false' || s === '0') return false
+  }
+  return fallback
+}
+
+function isLikelyHttpUrl(text: string): boolean {
+  const t = text.trim()
+  if (!t) return false
+  if (/^https?:\/\//i.test(t)) return true
+  return /^[\w.-]+\.[a-z]{2,}([/:?#].*)?$/i.test(t)
+}
+
+function buildToolPostPayloadFromAnalyze(
+  data: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const name = String(data.name || '').trim()
+  const description = String(data.description || '').trim()
+  const url = String(data.url || '').trim()
+  const categories =
+    Array.isArray(data.categories) && data.categories.length > 0
+      ? finalizeToolCategoriesList(
+          data.categories.map((c: unknown) =>
+            normalizeToolCategory(String(c)),
+          ),
+        )
+      : finalizeToolCategoriesList([
+          normalizeToolCategory(String(data.category || 'Other')),
+        ])
+  if (!name || !description || !url || categories.length === 0) return null
+  const payload: Record<string, unknown> = {
+    name,
+    description,
+    url,
+    categories,
+  }
+  if (data.logoUrl && String(data.logoUrl).trim())
+    payload.logoUrl = String(data.logoUrl).trim()
+  if (data.tags && String(data.tags).trim())
+    payload.tags = String(data.tags).trim()
+  if (data.traffic) payload.traffic = data.traffic
+  if (data.revenue) payload.revenue = data.revenue
+  if (data.rating !== null && data.rating !== undefined) payload.rating = data.rating
+  if (data.estimatedVisits !== null && data.estimatedVisits !== undefined)
+    payload.estimatedVisits = data.estimatedVisits
+  if (data.isAgency === true) payload.isAgency = true
+  if (data.hasDownloadableApp === true) payload.hasDownloadableApp = true
+  return payload
 }
 
 export default function AdminPage() {
@@ -122,6 +202,15 @@ export default function AdminPage() {
   const [bulkProcessing, setBulkProcessing] = useState(false)
   const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0, currentUrl: '' })
   const [reanalyzingToolId, setReanalyzingToolId] = useState<string | null>(null)
+  const [reanalyzingVideoId, setReanalyzingVideoId] = useState<string | null>(null)
+  const [refreshingAllVideos, setRefreshingAllVideos] = useState(false)
+  /** Live progress while bulk refresh runs (modal + bar). */
+  const [videoBulkRefreshProgress, setVideoBulkRefreshProgress] =
+    useState<BulkRefreshProgressState | null>(null)
+  const [bulkRefreshTick, setBulkRefreshTick] = useState(0)
+  const [refreshingAllTools, setRefreshingAllTools] = useState(false)
+  const [toolBulkRefreshProgress, setToolBulkRefreshProgress] =
+    useState<BulkRefreshProgressState | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [adminCategoryFilter, setAdminCategoryFilter] = useState<string>('all')
@@ -144,6 +233,8 @@ export default function AdminPage() {
     revenue: '',
     rating: '',
     estimatedVisits: '',
+    isAgency: false,
+    hasDownloadableApp: false,
   })
 
   const [autoSaveStatus, setAutoSaveStatus] = useState<
@@ -174,10 +265,11 @@ export default function AdminPage() {
   const [videoSearchQuery, setVideoSearchQuery] = useState('')
   const [videoThumbnailGenerating, setVideoThumbnailGenerating] = useState(false)
   const [videoThumbImgError, setVideoThumbImgError] = useState(false)
+  const [videoCustomCategoryInput, setVideoCustomCategoryInput] = useState('')
   const [videoFormData, setVideoFormData] = useState({
     title: '',
     url: '',
-    category: 'Other' as (typeof videoCategories)[number],
+    categories: ['Other'] as string[],
     source: 'youtube' as 'youtube' | 'tiktok',
     youtuberName: '',
     subscriberCount: '',
@@ -201,6 +293,27 @@ export default function AdminPage() {
   const submitVideoCoreRef = useRef<() => Promise<boolean>>(async () => false)
   const startVideoAutoAddCountdownRef = useRef<() => void>(() => {})
 
+  const [toolAutoAddSeconds, setToolAutoAddSeconds] = useState<number | null>(null)
+  const toolAutoAddIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const toolAutoAddSessionRef = useRef(0)
+  const pendingToolPostRef = useRef<Record<string, unknown> | null>(null)
+
+  /** Stops the 5s countdown only; keeps pending POST payload until save or cancel. */
+  const stopToolAutoAddCountdown = useCallback(() => {
+    if (toolAutoAddIntervalRef.current) {
+      clearInterval(toolAutoAddIntervalRef.current)
+      toolAutoAddIntervalRef.current = null
+    }
+    setToolAutoAddSeconds(null)
+  }, [])
+
+  const cancelToolAutoAdd = useCallback(() => {
+    stopToolAutoAddCountdown()
+    pendingToolPostRef.current = null
+  }, [stopToolAutoAddCountdown])
+
+  const startToolAutoAddCountdownRef = useRef<() => void>(() => {})
+
   const clearVideoAutoAdd = useCallback(() => {
     if (videoAutoAddIntervalRef.current) {
       clearInterval(videoAutoAddIntervalRef.current)
@@ -215,8 +328,15 @@ export default function AdminPage() {
         clearInterval(videoAutoAddIntervalRef.current)
         videoAutoAddIntervalRef.current = null
       }
+      stopToolAutoAddCountdown()
     }
-  }, [])
+  }, [stopToolAutoAddCountdown])
+
+  useEffect(() => {
+    if (!refreshingAllVideos && !refreshingAllTools) return
+    const id = setInterval(() => setBulkRefreshTick((x) => x + 1), 500)
+    return () => clearInterval(id)
+  }, [refreshingAllVideos, refreshingAllTools])
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -493,6 +613,19 @@ export default function AdminPage() {
     return sortSelectedCategories(Array.from(seen))
   }, [tools, formData.categories, adminCategoryFilter])
 
+  const availableVideoCategories = useMemo(() => {
+    const seen = new Set<string>(categories as readonly string[])
+    for (const video of videos) {
+      for (const c of videoCategoryList(video)) {
+        if (c?.trim()) seen.add(c.trim())
+      }
+    }
+    for (const c of videoFormData.categories) {
+      if (c?.trim()) seen.add(c.trim())
+    }
+    return sortSelectedCategories(Array.from(seen))
+  }, [videos, videoFormData.categories])
+
   const toggleToolCategory = (cat: string) => {
     setFormData((prev) => {
       const has = prev.categories.includes(cat)
@@ -510,6 +643,35 @@ export default function AdminPage() {
     })
   }
 
+  const toggleVideoCategory = (cat: string) => {
+    setVideoFormData((prev) => {
+      const has = prev.categories.includes(cat)
+      if (has) {
+        const next = prev.categories.filter((c) => c !== cat)
+        return {
+          ...prev,
+          categories: next.length > 0 ? next : ['Other'],
+        }
+      }
+      if (prev.categories.length >= MAX_VIDEO_CATEGORIES) return prev
+      return {
+        ...prev,
+        categories: sortSelectedCategories([...prev.categories, cat]),
+      }
+    })
+  }
+
+  const addVideoCustomCategory = () => {
+    const raw = videoCustomCategoryInput.trim()
+    if (!raw) return
+    const normalized = normalizeToolCategory(raw)
+    const existing = availableVideoCategories.find(
+      (c) => c.toLowerCase() === normalized.toLowerCase(),
+    )
+    toggleVideoCategory(existing ?? normalized)
+    setVideoCustomCategoryInput('')
+  }
+
   const addCustomCategory = () => {
     const raw = customCategoryInput.trim()
     if (!raw) return
@@ -519,84 +681,6 @@ export default function AdminPage() {
     )
     toggleToolCategory(existing ?? normalized)
     setCustomCategoryInput('')
-  }
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (editingId) return
-
-    setSubmitting(true)
-
-    try {
-      const built = buildToolPayload(formData, null, tools)
-      if (!built.ok) {
-        if (built.reason === 'incomplete') {
-          addToast({
-            variant: 'warning',
-            title: 'Missing Required Fields',
-            description:
-              'Please fill in Name, Description, URL, and at least one category',
-          })
-        } else if (built.reason === 'duplicate') {
-          addToast({
-            variant: 'warning',
-            title: 'Duplicate URL',
-            description: built.existingName
-              ? `A tool with this URL already exists: ${built.existingName}. Please edit the existing tool instead.`
-              : 'A tool with this URL already exists.',
-          })
-        }
-        setSubmitting(false)
-        return
-      }
-
-      const payload = built.payload
-      console.log('Submitting payload:', payload)
-
-      const response = await fetch('/api/tools', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        // Handle duplicate URL error (409 status)
-        if (response.status === 409) {
-          const errorMessage = errorData.message || 'A tool with this URL already exists'
-          addToast({
-            variant: 'error',
-            title: 'Duplicate URL',
-            description: `${errorMessage}. Please use a different URL or edit the existing tool.`,
-          })
-          setSubmitting(false)
-          return
-        }
-        const errorMessage = errorData.details || errorData.error || errorData.message || `HTTP error! status: ${response.status}`
-        console.error('API Error:', errorData)
-        throw new Error(errorMessage)
-      }
-
-      const result = await response.json()
-      console.log('Tool saved successfully:', result)
-
-      // Wait a bit for the database to update
-      await new Promise(resolve => setTimeout(resolve, 500))
-      
-      resetForm()
-      await fetchTools()
-      setIsProcessing(false)
-      // No success popup - only show errors
-    } catch (error) {
-      console.error('Error saving tool:', error)
-      const errorMessage = error instanceof Error 
-        ? error.message 
-        : 'Unknown error occurred. Check console for details.'
-      alert(`Failed to save tool: ${errorMessage}`)
-      setIsProcessing(false)
-    } finally {
-      setSubmitting(false)
-    }
   }
 
   const handleEdit = (tool: Tool) => {
@@ -619,6 +703,8 @@ export default function AdminPage() {
       revenue: tool.revenue || '',
       rating: tool.rating?.toString() || '',
       estimatedVisits: tool.estimatedVisits?.toString() || '',
+      isAgency: toolIsAgency(tool),
+      hasDownloadableApp: toolHasDownloadableApp(tool),
     }
     setEditingId(tool.id)
     setFormData(nextForm)
@@ -644,19 +730,19 @@ export default function AdminPage() {
     }
   }
 
-  const handleReanalyzeTool = async (tool: Tool) => {
-    const rawUrl = tool.url?.trim()
-    if (!rawUrl) {
-      addToast({
-        variant: 'warning',
-        title: 'Missing URL',
-        description: 'This tool has no URL to analyze.',
-      })
-      return
-    }
-    if (reanalyzingToolId) return
-    setReanalyzingToolId(tool.id)
-    try {
+  const reanalyzeToolCore = useCallback(
+    async (tool: Tool, options?: { silent?: boolean }): Promise<boolean> => {
+      const rawUrl = tool.url?.trim()
+      if (!rawUrl) {
+        if (!options?.silent) {
+          addToast({
+            variant: 'warning',
+            title: 'Missing URL',
+            description: 'This tool has no URL to analyze.',
+          })
+        }
+        return false
+      }
       const analyzeRes = await fetch('/api/tools/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -664,11 +750,17 @@ export default function AdminPage() {
       })
       const analyzeData = await analyzeRes.json().catch(() => ({}))
       if (!analyzeRes.ok) {
-        throw new Error(
-          analyzeData?.error ||
-            analyzeData?.details ||
-            `Failed to analyze tool (${analyzeRes.status})`,
-        )
+        if (!options?.silent) {
+          addToast({
+            variant: 'error',
+            title: 'Re-analyze failed',
+            description:
+              analyzeData?.error ||
+              analyzeData?.details ||
+              `Failed to analyze tool (${analyzeRes.status})`,
+          })
+        }
+        return false
       }
 
       const nextCategories =
@@ -697,9 +789,20 @@ export default function AdminPage() {
         categories: nextCategories,
         tags: tool.tags || null,
         traffic: tool.traffic || null,
-        revenue: tool.revenue || null,
+        revenue:
+          analyzeData.revenue != null && String(analyzeData.revenue).trim()
+            ? analyzeData.revenue
+            : tool.revenue || null,
         rating: tool.rating ?? null,
         estimatedVisits: tool.estimatedVisits ?? null,
+        isAgency: booleanFromAnalyzeField(
+          analyzeData.isAgency,
+          toolIsAgency(tool),
+        ),
+        hasDownloadableApp: booleanFromAnalyzeField(
+          analyzeData.hasDownloadableApp,
+          toolHasDownloadableApp(tool),
+        ),
       }
 
       const updateRes = await fetch(`/api/tools/${tool.id}`, {
@@ -709,29 +812,377 @@ export default function AdminPage() {
       })
       const updateData = await updateRes.json().catch(() => ({}))
       if (!updateRes.ok) {
-        throw new Error(
-          updateData?.error ||
-            updateData?.details ||
-            `Failed to update tool (${updateRes.status})`,
-        )
+        if (!options?.silent) {
+          addToast({
+            variant: 'error',
+            title: 'Failed to update tool',
+            description:
+              updateData?.error ||
+              updateData?.details ||
+              `Failed to update tool (${updateRes.status})`,
+          })
+        }
+        return false
       }
+      return true
+    },
+    [addToast],
+  )
 
-      await fetchTools()
-      addToast({
-        variant: 'success',
-        title: 'Tool refreshed',
-        description: `Updated logo, info, and categories for ${tool.name}.`,
-      })
-    } catch (error) {
-      addToast({
-        variant: 'error',
-        title: 'Re-analyze failed',
-        description:
-          error instanceof Error ? error.message : 'Please try again.',
-      })
+  const handleReanalyzeTool = async (tool: Tool) => {
+    if (reanalyzingToolId || refreshingAllTools || refreshingAllVideos) return
+    setReanalyzingToolId(tool.id)
+    try {
+      const ok = await reanalyzeToolCore(tool)
+      if (ok) {
+        await fetchTools()
+        addToast({
+          variant: 'success',
+          title: 'Tool refreshed',
+          description: `Updated logo, info, categories, agency, and downloadable app flags for ${tool.name}. ${openAiCostNote(estimateUsdPerToolAnalyzeCall())}`,
+        })
+      }
     } finally {
       setReanalyzingToolId(null)
     }
+  }
+
+  /** Re-fetch /api/videos/analyze + PUT; used for single refresh and bulk refresh. */
+  const reanalyzeVideoCore = useCallback(
+    async (video: Video, options?: { silent?: boolean }): Promise<boolean> => {
+      const rawUrl = video.url?.trim()
+      if (!rawUrl) {
+        if (!options?.silent) {
+          addToast({
+            variant: 'warning',
+            title: 'Missing URL',
+            description: 'This video has no URL to analyze.',
+          })
+        }
+        return false
+      }
+      const analyzeRes = await fetch('/api/videos/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: rawUrl }),
+      })
+      const analyzeData = await analyzeRes.json().catch(() => ({}))
+      if (!analyzeRes.ok) {
+        if (!options?.silent) {
+          addToast({
+            variant: 'error',
+            title: 'Could not analyze video',
+            description:
+              analyzeData?.error ||
+              analyzeData?.details ||
+              `Failed to analyze (${analyzeRes.status})`,
+          })
+        }
+        return false
+      }
+
+      const rawCats = Array.isArray(analyzeData.suggestedCategories)
+        ? analyzeData.suggestedCategories
+        : analyzeData.suggestedCategory
+          ? [analyzeData.suggestedCategory]
+          : []
+      const nextCats = finalizeVideoAiCategories(
+        rawCats.map((c: unknown) => String(c).trim()).filter(Boolean),
+      )
+      const fallbackCats = finalizeToolCategoriesList(videoCategoryList(video))
+      const categories = nextCats.length > 0 ? nextCats : fallbackCats
+
+      const title =
+        typeof analyzeData.title === 'string' && analyzeData.title.trim()
+          ? analyzeData.title.trim()
+          : video.title
+      const nextUrl =
+        typeof analyzeData.url === 'string' && analyzeData.url.trim()
+          ? analyzeData.url.trim()
+          : video.url
+      const source = analyzeData.source === 'tiktok' ? 'tiktok' : 'youtube'
+
+      const ynRaw = analyzeData.youtuberName
+      const youtuberName =
+        ynRaw != null && String(ynRaw).trim() ? String(ynRaw).trim() : video.youtuberName ?? null
+
+      const sub =
+        analyzeData.subscriberCount != null &&
+        Number.isFinite(Number(analyzeData.subscriberCount))
+          ? Number(analyzeData.subscriberCount)
+          : video.subscriberCount ?? null
+
+      const thumb =
+        typeof analyzeData.channelThumbnailUrl === 'string' && analyzeData.channelThumbnailUrl.trim()
+          ? analyzeData.channelThumbnailUrl.trim()
+          : video.channelThumbnailUrl ?? null
+
+      const cvCount =
+        analyzeData.channelVideoCount != null &&
+        Number.isFinite(Number(analyzeData.channelVideoCount))
+          ? Number(analyzeData.channelVideoCount)
+          : video.channelVideoCount ?? null
+
+      const payload: Record<string, unknown> = {
+        title,
+        url: nextUrl,
+        categories,
+        category: categories[0],
+        source,
+        youtuberName,
+        subscriberCount: sub,
+        channelThumbnailUrl: thumb,
+        channelVideoCount: cvCount,
+        verified: (video as { verified?: boolean | null }).verified ?? null,
+        tags:
+          typeof analyzeData.suggestedTags === 'string' && analyzeData.suggestedTags.trim()
+            ? analyzeData.suggestedTags.trim()
+            : video.tags ?? null,
+        description:
+          typeof analyzeData.description === 'string' && analyzeData.description.trim()
+            ? analyzeData.description.trim()
+            : video.description ?? null,
+      }
+
+      const updateRes = await fetch(`/api/videos/${video.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const updateData = await updateRes.json().catch(() => ({}))
+      if (!updateRes.ok) {
+        if (!options?.silent) {
+          addToast({
+            variant: 'error',
+            title: 'Failed to update video',
+            description:
+              updateData?.error ||
+              updateData?.details ||
+              `Failed to save (${updateRes.status})`,
+          })
+        }
+        return false
+      }
+      return true
+    },
+    [addToast],
+  )
+
+  const handleReanalyzeVideo = async (video: Video) => {
+    if (
+      reanalyzingVideoId ||
+      refreshingAllVideos ||
+      refreshingAllTools ||
+      videoAnalyzing
+    )
+      return
+    setReanalyzingVideoId(video.id)
+    try {
+      const ok = await reanalyzeVideoCore(video)
+      if (ok) {
+        await fetchVideos()
+        addToast({
+          variant: 'success',
+          title: 'Video refreshed',
+          description: `Updated categories and metadata for ${video.title}. ${openAiCostNote(estimateUsdPerVideoAnalyzeCall())}`,
+        })
+      }
+    } finally {
+      setReanalyzingVideoId(null)
+    }
+  }
+
+  const handleRefreshAllVideos = async () => {
+    if (
+      refreshingAllVideos ||
+      refreshingAllTools ||
+      reanalyzingVideoId ||
+      videoAnalyzing ||
+      videos.length === 0
+    )
+      return
+    const list = videos.slice(0, MAX_BULK_REFRESH_ITEMS)
+    const truncated = videos.length > list.length
+    const estMax = estimateUsdVideoAnalyzeCalls(list.length)
+    const confirmMsg = [
+      `Re-analyze up to ${list.length} video(s)?`,
+      truncated
+        ? `Only the first ${MAX_BULK_REFRESH_ITEMS} are processed (safety limit).`
+        : null,
+      `Rough max OpenAI cost if every call succeeds: ${formatUsdEstimate(estMax)}.`,
+      'This may take several minutes.',
+    ]
+      .filter(Boolean)
+      .join('\n')
+    if (!window.confirm(confirmMsg)) return
+
+    const startedAt = Date.now()
+    setRefreshingAllVideos(true)
+    setVideoBulkRefreshProgress({
+      total: list.length,
+      currentIndex: 1,
+      currentTitle: list[0]?.title ?? '',
+      completed: 0,
+      succeeded: 0,
+      failed: 0,
+      startedAt,
+    })
+    let ok = 0
+    let fail = 0
+    let consecutiveFailures = 0
+    try {
+      for (let i = 0; i < list.length; i++) {
+        const v = list[i]
+        setReanalyzingVideoId(v.id)
+        setVideoBulkRefreshProgress({
+          total: list.length,
+          currentIndex: i + 1,
+          currentTitle: v.title,
+          completed: i,
+          succeeded: ok,
+          failed: fail,
+          startedAt,
+        })
+        const success = await reanalyzeVideoCore(v, { silent: true })
+        if (success) {
+          ok++
+          consecutiveFailures = 0
+        } else {
+          fail++
+          consecutiveFailures++
+          if (consecutiveFailures >= MAX_BULK_CONSECUTIVE_FAILURES) {
+            addToast({
+              variant: 'warning',
+              title: 'Bulk refresh stopped',
+              description: `${MAX_BULK_CONSECUTIVE_FAILURES} failures in a row. Check API keys, quotas, and network, then run again.`,
+            })
+            break
+          }
+        }
+        setVideoBulkRefreshProgress({
+          total: list.length,
+          currentIndex: i + 1,
+          currentTitle: v.title,
+          completed: i + 1,
+          succeeded: ok,
+          failed: fail,
+          startedAt,
+        })
+        if (i < list.length - 1) {
+          await new Promise((r) => setTimeout(r, BULK_REFRESH_DELAY_MS_VIDEO))
+        }
+      }
+    } finally {
+      setReanalyzingVideoId(null)
+      setRefreshingAllVideos(false)
+      setVideoBulkRefreshProgress(null)
+    }
+    await fetchVideos()
+    const costLine = openAiCostNote(estimateUsdVideoAnalyzeCalls(ok))
+    addToast({
+      variant: fail === 0 ? 'success' : 'default',
+      title: 'Bulk refresh complete',
+      description:
+        fail === 0
+          ? `Updated ${ok} video(s). ${costLine}`
+          : `Updated ${ok} video(s). ${fail} failed. ${costLine}`,
+    })
+  }
+
+  const handleRefreshAllTools = async () => {
+    if (
+      refreshingAllTools ||
+      refreshingAllVideos ||
+      reanalyzingToolId ||
+      tools.length === 0
+    )
+      return
+    const list = tools.slice(0, MAX_BULK_REFRESH_ITEMS)
+    const truncated = tools.length > list.length
+    const estMax = estimateUsdToolAnalyzeCalls(list.length)
+    const confirmMsg = [
+      `Re-analyze up to ${list.length} tool(s)? Same as each row’s refresh (logo, description, categories, agency, app flags).`,
+      truncated
+        ? `Only the first ${MAX_BULK_REFRESH_ITEMS} are processed (safety limit).`
+        : null,
+      `Rough max OpenAI cost if every call succeeds: ${formatUsdEstimate(estMax)}.`,
+      'This may take several minutes.',
+    ]
+      .filter(Boolean)
+      .join('\n')
+    if (!window.confirm(confirmMsg)) return
+
+    const startedAt = Date.now()
+    setRefreshingAllTools(true)
+    setToolBulkRefreshProgress({
+      total: list.length,
+      currentIndex: 1,
+      currentTitle: list[0]?.name ?? '',
+      completed: 0,
+      succeeded: 0,
+      failed: 0,
+      startedAt,
+    })
+    let ok = 0
+    let fail = 0
+    let consecutiveFailures = 0
+    try {
+      for (let i = 0; i < list.length; i++) {
+        const tool = list[i]
+        setReanalyzingToolId(tool.id)
+        setToolBulkRefreshProgress({
+          total: list.length,
+          currentIndex: i + 1,
+          currentTitle: tool.name,
+          completed: i,
+          succeeded: ok,
+          failed: fail,
+          startedAt,
+        })
+        const success = await reanalyzeToolCore(tool, { silent: true })
+        if (success) {
+          ok++
+          consecutiveFailures = 0
+        } else {
+          fail++
+          consecutiveFailures++
+          if (consecutiveFailures >= MAX_BULK_CONSECUTIVE_FAILURES) {
+            addToast({
+              variant: 'warning',
+              title: 'Bulk refresh stopped',
+              description: `${MAX_BULK_CONSECUTIVE_FAILURES} failures in a row. Check API keys, quotas, and network, then run again.`,
+            })
+            break
+          }
+        }
+        setToolBulkRefreshProgress({
+          total: list.length,
+          currentIndex: i + 1,
+          currentTitle: tool.name,
+          completed: i + 1,
+          succeeded: ok,
+          failed: fail,
+          startedAt,
+        })
+        if (i < list.length - 1) {
+          await new Promise((r) => setTimeout(r, BULK_REFRESH_DELAY_MS_TOOL))
+        }
+      }
+    } finally {
+      setReanalyzingToolId(null)
+      setRefreshingAllTools(false)
+      setToolBulkRefreshProgress(null)
+    }
+    await fetchTools()
+    const costLine = openAiCostNote(estimateUsdToolAnalyzeCalls(ok))
+    addToast({
+      variant: fail === 0 ? 'success' : 'default',
+      title: 'Bulk tool refresh complete',
+      description:
+        fail === 0
+          ? `Updated ${ok} tool(s). ${costLine}`
+          : `Updated ${ok} tool(s). ${fail} failed. ${costLine}`,
+    })
   }
 
   /** Heuristic for paste-to-fetch (YouTube / TikTok). */
@@ -752,7 +1203,7 @@ export default function AdminPage() {
     setVideoFormData({
       title: '',
       url: '',
-      category: 'Other',
+      categories: ['Other'],
       source: 'youtube',
       youtuberName: '',
       subscriberCount: '',
@@ -762,26 +1213,29 @@ export default function AdminPage() {
       tags: '',
       description: '',
     })
+    setVideoCustomCategoryInput('')
     setEditingVideoId(null)
   }, [clearVideoAutoAdd])
 
   const submitVideoCore = useCallback(async (): Promise<boolean> => {
     const fd = videoFormDataRef.current
     const editId = editingVideoIdRef.current
-    if (!fd.title.trim() || !fd.url.trim() || !fd.category) {
+    if (!fd.title.trim() || !fd.url.trim() || fd.categories.length === 0) {
       addToast({
         variant: 'warning',
         title: 'Missing fields',
-        description: 'Title, URL, and Category are required.',
+        description: 'Title, URL, and at least one category are required.',
       })
       return false
     }
     setVideoSubmitting(true)
     try {
+      const cats = finalizeToolCategoriesList(fd.categories)
       const payload: Record<string, unknown> = {
         title: fd.title.trim(),
         url: fd.url.trim(),
-        category: fd.category,
+        categories: cats,
+        category: cats[0],
         source: fd.source,
         youtuberName: fd.youtuberName.trim() || null,
         subscriberCount: fd.subscriberCount.trim()
@@ -863,7 +1317,7 @@ export default function AdminPage() {
       addToast({ variant: 'warning', title: 'URL Required', description: 'Paste a YouTube or TikTok video URL.' })
       return
     }
-    if (videoAnalyzing) return
+    if (videoAnalyzing || refreshingAllVideos || refreshingAllTools) return
     videoAutoAddSessionRef.current += 1
     clearVideoAutoAdd()
     setVideoAnalyzing(true)
@@ -886,29 +1340,37 @@ export default function AdminPage() {
         })
         return
       }
-      setVideoFormData((prev) => ({
-        ...prev,
-        url: data.url || urlToFetch,
-        title: data.title || '',
-        source: data.source === 'tiktok' ? 'tiktok' : 'youtube',
-        youtuberName: data.youtuberName || '',
-        subscriberCount: data.subscriberCount != null ? String(data.subscriberCount) : '',
-        description: data.description || '',
-        channelThumbnailUrl: data.channelThumbnailUrl || '',
-        channelVideoCount: data.channelVideoCount != null ? String(data.channelVideoCount) : prev.channelVideoCount,
-        verified: data.verified === true,
-        category: data.suggestedCategory && videoCategories.includes(data.suggestedCategory as any)
-          ? (data.suggestedCategory as (typeof videoCategories)[number])
-          : prev.category,
-        tags: data.suggestedTags ?? prev.tags,
-      }))
+      setVideoFormData((prev) => {
+        const rawCats = Array.isArray(data.suggestedCategories)
+          ? data.suggestedCategories
+          : data.suggestedCategory
+            ? [data.suggestedCategory]
+            : prev.categories
+        const nextCats = finalizeVideoAiCategories(
+          rawCats.map((c: unknown) => String(c).trim()).filter(Boolean),
+        )
+        return {
+          ...prev,
+          url: data.url || urlToFetch,
+          title: data.title || '',
+          source: data.source === 'tiktok' ? 'tiktok' : 'youtube',
+          youtuberName: data.youtuberName || '',
+          subscriberCount: data.subscriberCount != null ? String(data.subscriberCount) : '',
+          description: data.description || '',
+          channelThumbnailUrl: data.channelThumbnailUrl || '',
+          channelVideoCount: data.channelVideoCount != null ? String(data.channelVideoCount) : prev.channelVideoCount,
+          verified: data.verified === true,
+          categories: nextCats.length > 0 ? nextCats : prev.categories,
+          tags: data.suggestedTags ?? prev.tags,
+        }
+      })
       if (clearQuick) setVideoQuickAddUrl('')
       window.scrollTo({ top: 0, behavior: 'smooth' })
 
       addToast({
         variant: 'success',
         title: 'Video details loaded',
-        description: `Saving automatically in 5s — edit the form or press Cancel to stop.`,
+        description: `Saving automatically in 5s — edit the form or press Cancel to stop. ${videoAnalyzeCostHint()}`,
         duration: 6000,
       })
 
@@ -948,7 +1410,7 @@ export default function AdminPage() {
     setVideoFormData({
       title: video.title,
       url: video.url,
-      category: video.category as (typeof videoCategories)[number],
+      categories: finalizeToolCategoriesList(videoCategoryList(video)),
       source: (video as { source?: 'youtube' | 'tiktok' }).source === 'tiktok' ? 'tiktok' : 'youtube',
       youtuberName: video.youtuberName || '',
       subscriberCount: video.subscriberCount != null ? String(video.subscriberCount) : '',
@@ -1056,8 +1518,9 @@ export default function AdminPage() {
     }
   }, [cooldownRemaining])
 
-  const handleQuickAdd = async () => {
-    if (!quickAddUrl.trim()) {
+  const handleQuickAdd = async (urlOverride?: string) => {
+    const rawUrl = (urlOverride ?? quickAddUrl).trim()
+    if (!rawUrl) {
       addToast({
         variant: 'warning',
         title: 'URL Required',
@@ -1072,6 +1535,15 @@ export default function AdminPage() {
         variant: 'info',
         title: 'Already Processing',
         description: 'Please wait for the current request to complete.',
+      })
+      return
+    }
+
+    if (refreshingAllTools || refreshingAllVideos) {
+      addToast({
+        variant: 'info',
+        title: 'Bulk refresh in progress',
+        description: 'Wait until the refresh-all run finishes before analyzing a new URL.',
       })
       return
     }
@@ -1096,7 +1568,7 @@ export default function AdminPage() {
     setIsProcessing(true)
     try {
       // Normalize URL (add https:// if missing)
-      let urlToAnalyze = quickAddUrl.trim()
+      let urlToAnalyze = rawUrl
       if (!urlToAnalyze.startsWith('http://') && !urlToAnalyze.startsWith('https://')) {
         urlToAnalyze = `https://${urlToAnalyze}`
       }
@@ -1193,10 +1665,10 @@ export default function AdminPage() {
       }
 
       const data = await response.json()
-      
-      // Update last request time and set cooldown
+
+      // Throttle next /analyze call; no UI cooldown here — auto-save countdown covers the gap
       setLastRequestTime(Date.now())
-      setCooldownRemaining(Math.ceil(MIN_REQUEST_DELAY / 1000))
+      setCooldownRemaining(0)
       
       console.log('Analysis result:', data)
       
@@ -1221,129 +1693,36 @@ export default function AdminPage() {
         console.warn('⚠️ No debug info available - cannot determine if OpenAI was used')
       }
 
-      // Auto-fill the form with analyzed data
-      setFormData({
-        name: data.name || '',
-        description: data.description || '',
-        url: data.url || quickAddUrl,
-        logoUrl: data.logoUrl || '',
-        categories:
-          Array.isArray(data.categories) && data.categories.length > 0
-            ? finalizeToolCategoriesList(
-                data.categories.map((c: unknown) =>
-                  normalizeToolCategory(String(c)),
-                ),
-              )
-            : finalizeToolCategoriesList([
-                normalizeToolCategory(String(data.category || 'Other')),
-              ]),
-        tags: data.tags || '',
-        traffic: data.traffic || '',
-        revenue: data.revenue || '',
-        rating: data.rating !== null && data.rating !== undefined ? data.rating.toString() : '',
-        estimatedVisits: data.estimatedVisits !== null && data.estimatedVisits !== undefined ? data.estimatedVisits.toString() : '',
-      })
-      
-      console.log('Filled form data:', {
-        revenue: data.revenue,
-        traffic: data.traffic,
-        rating: data.rating,
-        estimatedVisits: data.estimatedVisits,
-      })
-
-      setQuickAddUrl('')
-      // Silently fill the form - no popup
-      window.scrollTo({ top: 0, behavior: 'smooth' })
-      
-      // Auto-submit immediately (no cooldown)
-      const analyzedCategories =
-        Array.isArray(data.categories) && data.categories.length > 0
-          ? finalizeToolCategoriesList(
-              data.categories.map((c: unknown) =>
-                normalizeToolCategory(String(c)),
-              ),
-            )
-          : data.category
-            ? finalizeToolCategoriesList([
-                normalizeToolCategory(String(data.category)),
-              ])
-            : []
-      if (
-        data.name &&
-        data.description &&
-        data.url &&
-        analyzedCategories.length > 0 &&
-        !editingId
-      ) {
-        const payload: any = {
-          name: data.name.trim(),
-          description: data.description.trim(),
-          url: data.url.trim(),
-          categories: analyzedCategories,
-        }
-
-        // Optional fields
-        if (data.logoUrl && data.logoUrl.trim()) {
-          payload.logoUrl = data.logoUrl.trim()
-        }
-        if (data.tags && data.tags.trim()) {
-          payload.tags = data.tags.trim()
-        }
-        if (data.traffic && data.traffic.trim()) {
-          payload.traffic = data.traffic
-        }
-        if (data.revenue && data.revenue.trim()) {
-          payload.revenue = data.revenue
-        }
-        if (data.rating !== null && data.rating !== undefined) {
-          payload.rating = data.rating
-        }
-        if (data.estimatedVisits !== null && data.estimatedVisits !== undefined) {
-          payload.estimatedVisits = data.estimatedVisits
-        }
-
-        // Submit immediately
-        setSubmitting(true)
-        setIsProcessing(true)
-        try {
-          const response = await fetch('/api/tools', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          })
-
-          if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}))
-            if (response.status === 409) {
-              const errorMessage = errorData.message || 'A tool with this URL already exists'
-              addToast({
-                variant: 'error',
-                title: 'Duplicate URL',
-                description: `${errorMessage}. Please use a different URL or edit the existing tool.`,
-              })
-              setSubmitting(false)
-              setIsProcessing(false)
-              return
-            }
-            const errorMessage = errorData.details || errorData.error || errorData.message || `HTTP error! status: ${response.status}`
-            throw new Error(errorMessage)
-          }
-
-          await fetchTools()
-          resetForm()
-        } catch (error) {
-          console.error('Error saving tool:', error)
-          const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
+      const payload = buildToolPostPayloadFromAnalyze({
+        ...data,
+        url: data.url || urlToAnalyze,
+      } as Record<string, unknown>)
+      if (!payload || editingId) {
+        if (!payload) {
           addToast({
             variant: 'error',
-            title: 'Failed to Save Tool',
-            description: errorMessage,
+            title: 'Incomplete analysis',
+            description:
+              'Could not build a valid tool from this URL. Try again or use Bulk Add.',
           })
-        } finally {
-          setSubmitting(false)
-          setIsProcessing(false)
         }
+        return
       }
+
+      pendingToolPostRef.current = payload
+      setQuickAddUrl('')
+      const usedAi = Boolean((data as { _debug?: { usedOpenAI?: boolean } })._debug?.usedOpenAI)
+      addToast({
+        variant: 'success',
+        title: 'Tool analyzed',
+        description: `Saving automatically in 5s — use Cancel to stop (same as videos).${
+          usedAi ? ` ${openAiCostNote(estimateUsdPerToolAnalyzeCall())}` : ''
+        }`,
+        duration: 6000,
+      })
+      toolAutoAddSessionRef.current += 1
+      stopToolAutoAddCountdown()
+      window.setTimeout(() => startToolAutoAddCountdownRef.current(), 50)
     } catch (error) {
       console.error('Error analyzing URL:', error)
       const errorMessage = error instanceof Error ? error.message : 'Unknown error'
@@ -1424,7 +1803,7 @@ export default function AdminPage() {
         addToast({
           variant: 'warning',
           title: 'Website Scraping Failed',
-          description: `Could not fetch website content for ${quickAddUrl}. The website may be blocking requests or unreachable. You can still fill the form manually.`,
+          description: `Could not fetch website content for ${rawUrl}. The website may be blocking requests or unreachable. You can still fill the form manually.`,
           duration: 6000,
         })
       } else {
@@ -1439,6 +1818,7 @@ export default function AdminPage() {
       setIsProcessing(false)
     } finally {
       setAnalyzing(false)
+      setIsProcessing(false)
     }
   }
 
@@ -1565,6 +1945,8 @@ export default function AdminPage() {
         if (data.revenue) payload.revenue = data.revenue
         if (data.rating !== null && data.rating !== undefined) payload.rating = data.rating
         if (data.estimatedVisits !== null && data.estimatedVisits !== undefined) payload.estimatedVisits = data.estimatedVisits
+        if (data.isAgency === true) payload.isAgency = true
+        if (data.hasDownloadableApp === true) payload.hasDownloadableApp = true
 
         const submitResponse = await fetch('/api/tools', {
           method: 'POST',
@@ -1650,11 +2032,86 @@ export default function AdminPage() {
       revenue: '',
       rating: '',
       estimatedVisits: '',
+      isAgency: false,
+      hasDownloadableApp: false,
     })
     setEditingId(null)
     setQuickAddUrl('')
     setIsProcessing(false)
   }
+
+  const startToolAutoAddCountdown = useCallback(() => {
+    stopToolAutoAddCountdown()
+    const mySession = toolAutoAddSessionRef.current
+    let left = 5
+    setToolAutoAddSeconds(left)
+    toolAutoAddIntervalRef.current = setInterval(() => {
+      left -= 1
+      if (left <= 0) {
+        if (toolAutoAddIntervalRef.current) {
+          clearInterval(toolAutoAddIntervalRef.current)
+          toolAutoAddIntervalRef.current = null
+        }
+        setToolAutoAddSeconds(null)
+        if (toolAutoAddSessionRef.current !== mySession) return
+        void (async () => {
+          const payload = pendingToolPostRef.current
+          pendingToolPostRef.current = null
+          if (!payload) return
+          setSubmitting(true)
+          setIsProcessing(true)
+          try {
+            const response = await fetch('/api/tools', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            })
+            if (!response.ok) {
+              const errorData = await response.json().catch(() => ({}))
+              if (response.status === 409) {
+                addToast({
+                  variant: 'error',
+                  title: 'Duplicate URL',
+                  description:
+                    (errorData as { message?: string }).message ||
+                    'A tool with this URL already exists.',
+                })
+                return
+              }
+              const errorMessage =
+                (errorData as { details?: string }).details ||
+                (errorData as { error?: string }).error ||
+                (errorData as { message?: string }).message ||
+                `HTTP error! status: ${response.status}`
+              throw new Error(errorMessage)
+            }
+            await fetchTools()
+            resetForm()
+            addToast({
+              variant: 'success',
+              title: 'Tool added',
+              description: 'The AI tool was saved to the directory.',
+            })
+          } catch (error) {
+            console.error('Error saving tool:', error)
+            addToast({
+              variant: 'error',
+              title: 'Failed to Save Tool',
+              description:
+                error instanceof Error ? error.message : 'Unknown error',
+            })
+          } finally {
+            setSubmitting(false)
+            setIsProcessing(false)
+          }
+        })()
+      } else {
+        setToolAutoAddSeconds(left)
+      }
+    }, 1000)
+  }, [stopToolAutoAddCountdown, addToast, fetchTools, resetForm])
+
+  startToolAutoAddCountdownRef.current = startToolAutoAddCountdown
 
   if (authLoading || loading) {
     return (
@@ -1709,7 +2166,7 @@ export default function AdminPage() {
         <Card className="border-border/60 shadow-lg shadow-black/5 dark:shadow-black/20 bg-card/95">
           <CardHeader className="pb-4">
             <CardTitle className="text-xl flex flex-wrap items-center gap-3">
-              <span>{editingId ? 'Edit Tool' : 'Add New Tool'}</span>
+              <span>{editingId ? 'Edit Tool' : 'Add tools (URL)'}</span>
               {editingId && (
                 <span
                   className="flex items-center gap-2 font-normal text-muted-foreground"
@@ -1741,7 +2198,7 @@ export default function AdminPage() {
             <CardDescription>
               {editingId
                 ? 'Changes save automatically after you stop typing or changing categories'
-                : 'Fill in the details to add a new AI tool'}
+                : 'Paste or type a URL — AI analyzes it and saves the tool automatically after a short countdown (like videos).'}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -1753,7 +2210,7 @@ export default function AdminPage() {
                     <Label className="font-semibold">Quick Add by URL</Label>
                   </div>
                   <p className="text-sm text-muted-foreground mb-3">
-                    Paste a website URL and let AI analyze it to auto-fill the form
+                    Paste a site URL (or type one and press Enter) — no manual form required.
                   </p>
                   {cooldownRemaining > 0 && (
                     <div className="mb-3 p-2 rounded-md bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-200 dark:border-yellow-800">
@@ -1762,11 +2219,38 @@ export default function AdminPage() {
                       </p>
                     </div>
                   )}
+                  {toolAutoAddSeconds !== null ? (
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+                      <span>
+                        Saving this tool automatically in{' '}
+                        <strong>{toolAutoAddSeconds}</strong>s —{' '}
+                        <strong>Cancel</strong> to stop.
+                      </span>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="shrink-0 border-amber-300 bg-white hover:bg-amber-100 dark:border-amber-700 dark:bg-transparent dark:hover:bg-amber-900/50"
+                        onClick={() => cancelToolAutoAdd()}
+                      >
+                        Cancel auto-save
+                      </Button>
+                    </div>
+                  ) : null}
                   <div className="flex gap-2">
                     <Input
                       placeholder="https://example.com"
                       value={quickAddUrl}
                       onChange={(e) => setQuickAddUrl(e.target.value)}
+                      onPaste={(e) => {
+                        const text = e.clipboardData.getData('text/plain').trim()
+                        if (!isLikelyHttpUrl(text)) return
+                        e.preventDefault()
+                        setQuickAddUrl(text)
+                        if (!analyzing && !isProcessing && !bulkProcessing) {
+                          void handleQuickAdd(text)
+                        }
+                      }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' && !analyzing && !isProcessing) {
                           e.preventDefault()
@@ -1778,7 +2262,7 @@ export default function AdminPage() {
                     />
                     <Button
                       type="button"
-                      onClick={handleQuickAdd}
+                      onClick={() => void handleQuickAdd()}
                       disabled={analyzing || isProcessing || bulkProcessing || !quickAddUrl.trim() || cooldownRemaining > 0}
                       variant="default"
                     >
@@ -1790,7 +2274,7 @@ export default function AdminPage() {
                       ) : (
                         <>
                           <Sparkles className="mr-2 h-4 w-4" />
-                          Analyze
+                          Fetch & add
                         </>
                       )}
                     </Button>
@@ -1963,10 +2447,10 @@ export default function AdminPage() {
                   </div>
               </div>
             )}
+            {editingId && (
             <form
               onSubmit={(e) => {
                 e.preventDefault()
-                if (!editingId) void handleSubmit(e)
               }}
               className="space-y-4"
             >
@@ -2161,47 +2645,57 @@ export default function AdminPage() {
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                {!editingId && (
-                  <Button type="submit" disabled={submitting}>
-                    {submitting ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Saving...
-                      </>
-                    ) : (
-                      <>
-                        <Plus className="mr-2 h-4 w-4" />
-                        Add Tool
-                      </>
-                    )}
-                  </Button>
-                )}
-                {editingId && (
-                  <Button type="button" variant="outline" onClick={resetForm}>
-                    Cancel
-                  </Button>
-                )}
+                <Button type="button" variant="outline" onClick={resetForm}>
+                  Cancel edit
+                </Button>
               </div>
             </form>
+            )}
           </CardContent>
         </Card>
 
         <Card className="flex flex-col h-full border-border/60 shadow-lg shadow-black/5 dark:shadow-black/20 bg-card/95">
-          <CardHeader className="flex-shrink-0">
-            <CardTitle className="text-xl">All Tools ({tools.length})</CardTitle>
-            <CardDescription>
-              Manage existing tools in the directory
-              {tools.length > 0 && (
-                <>
-                  {' '}
-                  · Showing{' '}
-                  <span className="font-medium text-foreground">
-                    {filteredAdminTools.length}
-                  </span>{' '}
-                  of {tools.length}
-                </>
+          <CardHeader className="flex-shrink-0 space-y-0">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <CardTitle className="text-xl">All Tools ({tools.length})</CardTitle>
+                <CardDescription>
+                  Manage existing tools in the directory
+                  {tools.length > 0 && (
+                    <>
+                      {' '}
+                      · Showing{' '}
+                      <span className="font-medium text-foreground">
+                        {filteredAdminTools.length}
+                      </span>{' '}
+                      of {tools.length}
+                    </>
+                  )}
+                </CardDescription>
+              </div>
+              {!loading && tools.length > 0 && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0 gap-2"
+                  onClick={() => void handleRefreshAllTools()}
+                  disabled={
+                    refreshingAllTools ||
+                    refreshingAllVideos ||
+                    reanalyzingToolId !== null
+                  }
+                  title="Re-analyze each tool (same as row refresh): logo, description, categories, agency, app flags"
+                >
+                  {refreshingAllTools ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4" />
+                  )}
+                  Refresh all
+                </Button>
               )}
-            </CardDescription>
+            </div>
           </CardHeader>
           <CardContent className="flex flex-col flex-1 min-h-0 p-6">
             {loading ? (
@@ -2215,12 +2709,25 @@ export default function AdminPage() {
             ) : (
               <>
                 <div className="mb-4 flex-shrink-0 space-y-3">
-                  <Input
-                    placeholder="Search tools by name, description, or category..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full"
-                  />
+                  <div className="relative w-full">
+                    <Input
+                      placeholder="Search tools by name, description, or category..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full pr-9"
+                      aria-label="Search tools"
+                    />
+                    {searchQuery.trim() ? (
+                      <button
+                        type="button"
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                        onClick={() => setSearchQuery('')}
+                        aria-label="Clear search"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    ) : null}
+                  </div>
                   <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
                     <div className="grid flex-1 min-w-[10rem] gap-1.5">
                       <Label className="text-xs text-muted-foreground">
@@ -2321,10 +2828,35 @@ export default function AdminPage() {
                     {filteredAdminTools.map((tool) => (
                   <div
                     key={tool.id}
-                    className="flex items-start justify-between rounded-xl border border-border/60 p-4 hover:bg-muted/40 hover:border-violet-200 dark:hover:border-violet-800/50 transition-all min-h-[80px]"
+                    className={cn(
+                      'flex items-start justify-between rounded-xl border p-4 transition-all min-h-[80px]',
+                      toolIsAgency(tool)
+                        ? 'border-amber-500/45 bg-gradient-to-br from-amber-500/12 to-orange-500/10 hover:border-amber-500/55 dark:border-amber-500/40 dark:from-amber-500/16 dark:to-orange-500/12'
+                        : toolHasDownloadableApp(tool)
+                          ? 'border-teal-500/45 bg-gradient-to-br from-teal-500/12 to-emerald-500/10 hover:border-teal-500/55 dark:border-teal-500/40 dark:from-teal-500/16 dark:to-emerald-500/12'
+                          : 'border-border/60 hover:bg-muted/40 hover:border-violet-200 dark:hover:border-violet-800/50',
+                    )}
                   >
                     <div className="flex-1 min-w-0 pr-4">
-                      <h3 className="font-semibold truncate">{tool.name}</h3>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <h3 className="font-semibold truncate">{tool.name}</h3>
+                        {toolIsAgency(tool) ? (
+                          <Badge
+                            variant="outline"
+                            className="shrink-0 border-amber-500/50 bg-amber-500/15 text-[10px] font-semibold uppercase tracking-wide text-amber-950 dark:text-amber-100"
+                          >
+                            Agency
+                          </Badge>
+                        ) : null}
+                        {toolHasDownloadableApp(tool) ? (
+                          <Badge
+                            variant="outline"
+                            className="shrink-0 border-teal-500/50 bg-teal-500/15 text-[10px] font-semibold uppercase tracking-wide text-teal-950 dark:text-teal-100"
+                          >
+                            Downloadable app
+                          </Badge>
+                        ) : null}
+                      </div>
                       <p className="text-sm text-muted-foreground line-clamp-2 mt-1">
                         {tool.description}
                       </p>
@@ -2358,8 +2890,12 @@ export default function AdminPage() {
                         variant="ghost"
                         size="icon"
                         onClick={() => void handleReanalyzeTool(tool)}
-                        title="Re-analyze logo/info/categories"
-                        disabled={reanalyzingToolId !== null}
+                        title="Re-analyze site (logo, categories, agency, app flags)"
+                        disabled={
+                          reanalyzingToolId !== null ||
+                          refreshingAllTools ||
+                          refreshingAllVideos
+                        }
                       >
                         <RefreshCw
                           className={cn(
@@ -2520,20 +3056,66 @@ export default function AdminPage() {
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="video-category">Category *</Label>
-                <Select
-                  value={videoFormData.category}
-                  onValueChange={(v) => setVideoFormData({ ...videoFormData, category: v as (typeof videoCategories)[number] })}
-                >
-                  <SelectTrigger id="video-category">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {videoCategories.map((cat) => (
-                      <SelectItem key={cat} value={cat}>{cat}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Label>Categories *</Label>
+                <p className="text-xs text-muted-foreground">
+                  Same labels as AI tools. Pick 1–{MAX_VIDEO_CATEGORIES} (first = primary filter). AI suggests 1–3 based on how clear the topic is.
+                </p>
+                <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
+                  <div className="grid max-h-52 grid-cols-1 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
+                    {availableVideoCategories.map((cat, catIdx) => {
+                      const checked = videoFormData.categories.includes(cat)
+                      const fieldId = `admin-video-cat-${catIdx}`
+                      return (
+                        <label
+                          key={cat}
+                          htmlFor={fieldId}
+                          className={cn(
+                            'flex cursor-pointer items-center gap-2 rounded-md border px-2 py-1.5 transition-colors',
+                            checked
+                              ? 'border-primary/40 bg-background shadow-sm'
+                              : 'border-transparent hover:bg-background/60',
+                          )}
+                        >
+                          <Checkbox
+                            id={fieldId}
+                            checked={checked}
+                            onCheckedChange={() => toggleVideoCategory(cat)}
+                          />
+                          <Badge
+                            variant="outline"
+                            className={cn(
+                              'pointer-events-none text-xs font-medium capitalize',
+                              toolCategoryBadgeClass(cat),
+                            )}
+                          >
+                            {cat}
+                          </Badge>
+                        </label>
+                      )
+                    })}
+                  </div>
+                  <div className="mt-3 flex items-center gap-2">
+                    <Input
+                      value={videoCustomCategoryInput}
+                      onChange={(e) => setVideoCustomCategoryInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          addVideoCustomCategory()
+                        }
+                      }}
+                      placeholder="Add custom label if missing"
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={addVideoCustomCategory}
+                      disabled={!videoCustomCategoryInput.trim()}
+                    >
+                      Add
+                    </Button>
+                  </div>
+                </div>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="video-youtuber">Channel / Creator name</Label>
@@ -2651,9 +3233,36 @@ export default function AdminPage() {
         </Card>
 
         <Card className="flex flex-col h-full border-border/60 shadow-lg shadow-black/5 dark:shadow-black/20 bg-card/95">
-          <CardHeader className="flex-shrink-0">
-            <CardTitle className="text-xl">All Videos ({videos.length})</CardTitle>
-            <CardDescription>Manage videos shown on /videos</CardDescription>
+          <CardHeader className="flex-shrink-0 space-y-0">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <CardTitle className="text-xl">All Videos ({videos.length})</CardTitle>
+                <CardDescription>Manage videos shown on /videos</CardDescription>
+              </div>
+              {!videosLoading && videos.length > 0 && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0 gap-2"
+                  onClick={() => void handleRefreshAllVideos()}
+                  disabled={
+                    refreshingAllVideos ||
+                    refreshingAllTools ||
+                    reanalyzingVideoId !== null ||
+                    videoAnalyzing
+                  }
+                  title="Re-fetch each video from YouTube/TikTok and re-run AI categories (OpenAI)"
+                >
+                  {refreshingAllVideos ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4" />
+                  )}
+                  Refresh all
+                </Button>
+              )}
+            </div>
           </CardHeader>
           <CardContent className="flex flex-col flex-1 min-h-0 p-6">
             {videosLoading ? (
@@ -2697,7 +3306,15 @@ export default function AdminPage() {
                             {video.description || video.url}
                           </p>
                           <div className="mt-2 flex flex-wrap items-center gap-2">
-                            <span className="text-xs text-muted-foreground">{video.category}</span>
+                            {videoCategoryList(video).map((c) => (
+                              <Badge
+                                key={c}
+                                variant="outline"
+                                className={cn('text-xs font-medium capitalize', toolCategoryBadgeClass(c))}
+                              >
+                                {c}
+                              </Badge>
+                            ))}
                             <span className="text-xs text-muted-foreground capitalize">
                               {(video as { source?: string }).source === 'tiktok' ? 'TikTok' : 'YouTube'}
                             </span>
@@ -2707,6 +3324,25 @@ export default function AdminPage() {
                           </div>
                         </div>
                         <div className="flex gap-2 flex-shrink-0">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => void handleReanalyzeVideo(video)}
+                            disabled={
+                              reanalyzingVideoId !== null ||
+                              refreshingAllVideos ||
+                              refreshingAllTools ||
+                              videoAnalyzing
+                            }
+                            title="Re-fetch metadata and AI categories from URL"
+                          >
+                            <RefreshCw
+                              className={cn(
+                                'h-4 w-4',
+                                reanalyzingVideoId === video.id && 'animate-spin',
+                              )}
+                            />
+                          </Button>
                           <Button
                             variant="ghost"
                             size="icon"
@@ -2734,6 +3370,27 @@ export default function AdminPage() {
       </div>
       )}
       </div>
+
+      <BulkRefreshProgressDialog
+        open={videoBulkRefreshProgress !== null}
+        busy={refreshingAllVideos}
+        progress={videoBulkRefreshProgress}
+        title="Refreshing all videos"
+        tick={bulkRefreshTick}
+        onOpenChange={(open) => {
+          if (!open) setVideoBulkRefreshProgress(null)
+        }}
+      />
+      <BulkRefreshProgressDialog
+        open={toolBulkRefreshProgress !== null}
+        busy={refreshingAllTools}
+        progress={toolBulkRefreshProgress}
+        title="Refreshing all tools"
+        tick={bulkRefreshTick}
+        onOpenChange={(open) => {
+          if (!open) setToolBulkRefreshProgress(null)
+        }}
+      />
     </div>
   )
 }

@@ -1,7 +1,38 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase";
-import { normalizeVideoCategory, videoSchema } from "@/lib/schemas";
+import {
+  parseVideoCategoriesFromRow,
+  videoSchema,
+} from "@/lib/schemas";
+
+function sortVideos(
+  list: any[],
+  sort: string,
+  order: string,
+): any[] {
+  const asc = order === "asc";
+  const copy = [...list];
+  if (sort === "alphabetical") {
+    copy.sort((a, b) => {
+      const ta = (a.title || "").localeCompare(b.title || "");
+      return asc ? ta : -ta;
+    });
+  } else if (sort === "subscribers") {
+    copy.sort((a, b) => {
+      const sa = a.subscriberCount ?? -1;
+      const sb = b.subscriberCount ?? -1;
+      return asc ? sa - sb : sb - sa;
+    });
+  } else {
+    copy.sort((a, b) => {
+      const ta = new Date(a.createdAt || 0).getTime();
+      const tb = new Date(b.createdAt || 0).getTime();
+      return asc ? ta - tb : tb - ta;
+    });
+  }
+  return copy;
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -15,41 +46,73 @@ export async function GET(request: NextRequest) {
 
     const admin = supabaseAdmin as any;
 
-    let query = admin.from("video").select("*");
+    let filtered: any[] = [];
 
     if (category) {
-      query = query.eq("category", category);
-    }
+      let rows: any[] | null = null;
+      const { data: rpcData, error: rpcError } = await admin.rpc(
+        "match_video_category",
+        { p_cat: category },
+      );
+      if (!rpcError && Array.isArray(rpcData)) {
+        rows = rpcData;
+      } else {
+        let q = admin.from("video").select("*").eq("category", category);
+        if (source === "youtube" || source === "tiktok") {
+          q = q.eq("source", source);
+        }
+        if (youtuber) {
+          q = q.ilike("youtuberName", youtuber);
+        }
+        const { data: fb } = await q;
+        rows = fb || [];
+      }
 
-    if (source === "youtube" || source === "tiktok") {
-      query = query.eq("source", source);
-    }
+      filtered = rows || [];
 
-    if (youtuber) {
-      query = query.ilike("youtuberName", youtuber);
-    }
+      if (source === "youtube" || source === "tiktok") {
+        filtered = filtered.filter((v: any) => v.source === source);
+      }
+      if (youtuber) {
+        filtered = filtered.filter(
+          (v: any) =>
+            v.youtuberName &&
+            String(v.youtuberName).toLowerCase() === youtuber.toLowerCase(),
+        );
+      }
 
-    // Sorting
-    if (sort === "alphabetical") {
-      query = query.order("title", { ascending: order === "asc" });
-    } else if (sort === "subscribers") {
-      query = query.order("subscriberCount", {
-        ascending: order === "asc",
-        nullsFirst: false,
-      });
+      filtered = sortVideos(filtered, sort, order);
     } else {
-      // newest
-      query = query.order("createdAt", { ascending: order === "asc" });
+      let query = admin.from("video").select("*");
+
+      if (source === "youtube" || source === "tiktok") {
+        query = query.eq("source", source);
+      }
+
+      if (youtuber) {
+        query = query.ilike("youtuberName", youtuber);
+      }
+
+      if (sort === "alphabetical") {
+        query = query.order("title", { ascending: order === "asc" });
+      } else if (sort === "subscribers") {
+        query = query.order("subscriberCount", {
+          ascending: order === "asc",
+          nullsFirst: false,
+        });
+      } else {
+        query = query.order("createdAt", { ascending: order === "asc" });
+      }
+
+      const { data: videos, error } = await query;
+
+      if (error) {
+        console.error("❌ Supabase error fetching videos:", error);
+        return NextResponse.json([], { status: 200 });
+      }
+
+      filtered = videos || [];
     }
-
-    const { data: videos, error } = await query;
-
-    if (error) {
-      console.error("❌ Supabase error fetching videos:", error);
-      return NextResponse.json([], { status: 200 });
-    }
-
-    let filtered = videos || [];
 
     if (search) {
       const q = search.toLowerCase();
@@ -63,10 +126,14 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    filtered = filtered.map((video: any) => ({
-      ...video,
-      category: normalizeVideoCategory(video.category),
-    }));
+    filtered = filtered.map((video: any) => {
+      const cats = parseVideoCategoriesFromRow(video);
+      return {
+        ...video,
+        category: cats[0] ?? "Other",
+        categories: cats,
+      };
+    });
 
     return NextResponse.json(filtered);
   } catch (error) {
@@ -91,6 +158,7 @@ export async function POST(request: NextRequest) {
       title: validated.title,
       url: validated.url,
       category: validated.category,
+      categories: validated.categories,
       source,
       youtuberName: validated.youtuberName ?? null,
       subscriberCount: validated.subscriberCount ?? null,
@@ -141,7 +209,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    return NextResponse.json(video, { status: 201 });
+    const v = video as Record<string, unknown>;
+    const cats = parseVideoCategoriesFromRow(v as { category?: string; categories?: unknown });
+    return NextResponse.json(
+      { ...v, category: cats[0] ?? "Other", categories: cats },
+      { status: 201 }
+    );
   } catch (error: any) {
     console.error("❌ Error creating video:", error);
 
@@ -172,4 +245,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-

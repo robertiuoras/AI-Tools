@@ -1,4 +1,4 @@
-import { normalizeToolCategory } from '@/lib/schemas'
+import { normalizeToolCategory, parseVideoCategoriesFromRow } from '@/lib/schemas'
 
 export type ToolCategoryRow = {
   category?: string | null
@@ -8,6 +8,14 @@ export type ToolCategoryRow = {
 /**
  * Ordered unique categories for a tool (from `categories[]` or legacy `category`).
  */
+/** Video rows: 1–3 labels from `categories` JSON or legacy `category`. */
+export function videoCategoryList(row: {
+  category?: string | null
+  categories?: unknown
+}): string[] {
+  return parseVideoCategoriesFromRow(row)
+}
+
 export function toolCategoryList(row: ToolCategoryRow): string[] {
   const raw = row.categories
   if (Array.isArray(raw) && raw.length > 0) {

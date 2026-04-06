@@ -8,6 +8,7 @@ import {
   getLocalMonthStartIso,
   popularityScore,
 } from "@/lib/tool-popularity";
+import { toolHasDownloadableApp, toolIsAgency } from "@/lib/tool-flags";
 
 /** Logged-in users see favorited tools first; order within each group is unchanged. */
 function sortWithFavoritesFirst<T extends { userFavorited?: boolean }>(
@@ -116,6 +117,8 @@ export async function GET(request: NextRequest) {
     const sort = searchParams.get("sort") || "popular";
     const order = searchParams.get("order") || "desc";
     const favoritesOnly = searchParams.get("favoritesOnly") === "true";
+    const agenciesOnly = searchParams.get("agenciesOnly") === "true";
+    const downloadableOnly = searchParams.get("downloadableOnly") === "true";
 
     // Get authorization header (used later for user authentication)
     const authHeader = request.headers.get("authorization");
@@ -152,6 +155,14 @@ export async function GET(request: NextRequest) {
 
     if (revenue.length > 0) {
       query = query.in("revenue", revenue);
+    }
+
+    if (agenciesOnly) {
+      query = query.eq("isAgency", true);
+    }
+
+    if (downloadableOnly) {
+      query = query.eq("hasDownloadableApp", true);
     }
 
     // DB ordering: use stable columns only. "popular" / "upvotes" are sorted in memory
@@ -274,6 +285,8 @@ export async function GET(request: NextRequest) {
       const cats = toolCategoryList(tool);
       return {
         ...tool,
+        isAgency: toolIsAgency(tool),
+        hasDownloadableApp: toolHasDownloadableApp(tool),
         categories: cats,
         category: cats[0],
         upvoteCount: upvoteCountMap.get(tool.id) || 0,
@@ -383,6 +396,9 @@ export async function POST(request: NextRequest) {
       supabaseData.estimatedVisits = null;
     }
 
+    supabaseData.isAgency = validatedData.isAgency === true;
+    supabaseData.hasDownloadableApp = validatedData.hasDownloadableApp === true;
+
     // Add timestamps
     const now = new Date().toISOString();
     supabaseData.createdAt = now;
@@ -445,7 +461,17 @@ export async function POST(request: NextRequest) {
     }
 
     console.log("Tool created successfully:", tool?.id);
-    return NextResponse.json(tool, { status: 201 });
+    const tr = tool as Record<string, unknown>;
+    return NextResponse.json(
+      {
+        ...tr,
+        isAgency: toolIsAgency(tr as { isAgency?: unknown; is_agency?: unknown }),
+        hasDownloadableApp: toolHasDownloadableApp(
+          tr as { hasDownloadableApp?: unknown; has_downloadable_app?: unknown },
+        ),
+      },
+      { status: 201 },
+    );
   } catch (error) {
     console.error("Error creating tool:", error);
     console.error("Error type:", typeof error);

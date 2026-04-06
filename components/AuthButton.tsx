@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { useAuthSession } from '@/components/AuthSessionProvider'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -13,14 +14,12 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Loader2, LogIn, LogOut, User, Mail, Shield } from 'lucide-react'
-import type { User as SupabaseUser } from '@supabase/supabase-js'
+import { Loader2, LogIn, LogOut, User, Mail } from 'lucide-react'
 import Link from 'next/link'
 
 export function AuthButton() {
-  const [user, setUser] = useState<SupabaseUser | null>(null)
-  const [isAdmin, setIsAdmin] = useState(false)
-  const [loading, setLoading] = useState(true)
+  const { user, isReady } = useAuthSession()
+  const loading = !isReady
   const [showLogin, setShowLogin] = useState(false)
   const [showSignUp, setShowSignUp] = useState(false)
   const [email, setEmail] = useState('')
@@ -28,87 +27,6 @@ export function AuthButton() {
   const [name, setName] = useState('')
   const [authLoading, setAuthLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    // Check current session
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      setUser(session?.user ?? null)
-      setLoading(false)
-
-      // Ensure user record exists in database and check admin role
-      if (session?.user) {
-        try {
-          const response = await fetch('/api/user/ensure', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${session.access_token}`,
-            },
-          })
-
-          if (!response.ok) {
-            console.error('Failed to ensure user record exists')
-          }
-
-          // Check admin role
-          const roleResponse = await fetch('/api/auth/check', {
-            headers: {
-              'Authorization': `Bearer ${session.access_token}`,
-            },
-          })
-
-          if (roleResponse.ok) {
-            const roleData = await roleResponse.json()
-            setIsAdmin(roleData.role === 'admin')
-          }
-        } catch (err) {
-          console.error('Error ensuring user record:', err)
-        }
-      }
-    })
-
-    // Listen for auth changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      setUser(session?.user ?? null)
-
-      // Ensure user record exists when auth state changes and check admin role
-      if (session?.user) {
-        try {
-          const response = await fetch('/api/user/ensure', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${session.access_token}`,
-            },
-          })
-
-          if (!response.ok) {
-            console.error('Failed to ensure user record exists')
-          }
-
-          // Check admin role
-          const roleResponse = await fetch('/api/auth/check', {
-            headers: {
-              'Authorization': `Bearer ${session.access_token}`,
-            },
-          })
-
-          if (roleResponse.ok) {
-            const roleData = await roleResponse.json()
-            setIsAdmin(roleData.role === 'admin')
-          }
-        } catch (err) {
-          console.error('Error ensuring user record:', err)
-        }
-      } else {
-        setIsAdmin(false)
-      }
-    })
-
-    return () => subscription.unsubscribe()
-  }, [])
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -129,22 +47,6 @@ export function AuthButton() {
       if (signUpError) throw signUpError
 
       if (data.user) {
-        // Ensure user record exists in database (using API route with service role)
-        const { data: { session } } = await supabase.auth.getSession()
-        if (session) {
-          const response = await fetch('/api/user/ensure', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${session.access_token}`,
-            },
-          })
-
-          if (!response.ok) {
-            console.error('Failed to ensure user record exists')
-          }
-        }
-
         alert('Sign up successful! Please check your email to verify your account.')
         setShowSignUp(false)
         setEmail('')
@@ -170,24 +72,6 @@ export function AuthButton() {
       })
 
       if (loginError) throw loginError
-
-      // Ensure user record exists in database
-      if (data.user) {
-        const { data: { session } } = await supabase.auth.getSession()
-        if (session) {
-          const response = await fetch('/api/user/ensure', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${session.access_token}`,
-            },
-          })
-
-          if (!response.ok) {
-            console.error('Failed to ensure user record exists')
-          }
-        }
-      }
 
       setShowLogin(false)
       setEmail('')

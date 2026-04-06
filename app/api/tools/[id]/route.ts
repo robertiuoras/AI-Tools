@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { toolSchema } from '@/lib/schemas'
 import { toolCategoryList } from '@/lib/tool-categories'
+import { toolHasDownloadableApp, toolIsAgency } from '@/lib/tool-flags'
 import { createClient } from '@supabase/supabase-js'
 
 export async function GET(
@@ -29,6 +30,10 @@ export async function GET(
     })
     return NextResponse.json({
       ...row,
+      isAgency: toolIsAgency(row as { isAgency?: unknown; is_agency?: unknown }),
+      hasDownloadableApp: toolHasDownloadableApp(
+        row as { hasDownloadableApp?: unknown; has_downloadable_app?: unknown },
+      ),
       categories: cats,
       category: cats[0],
     })
@@ -51,7 +56,7 @@ export async function PUT(
     const validatedData = toolSchema.parse(body)
 
     // Prepare data for Supabase - handle null values
-    const updateData = {
+    const updateData: Record<string, unknown> = {
       name: validatedData.name,
       description: validatedData.description,
       url: validatedData.url,
@@ -64,6 +69,15 @@ export async function PUT(
       rating: validatedData.rating ?? null,
       estimatedVisits: validatedData.estimatedVisits ?? null,
       updatedAt: new Date().toISOString(), // Update timestamp
+    }
+    if (validatedData.isAgency !== undefined && validatedData.isAgency !== null) {
+      updateData.isAgency = validatedData.isAgency === true
+    }
+    if (
+      validatedData.hasDownloadableApp !== undefined &&
+      validatedData.hasDownloadableApp !== null
+    ) {
+      updateData.hasDownloadableApp = validatedData.hasDownloadableApp === true
     }
 
     // Type assertion to work around Proxy type issues
@@ -83,7 +97,14 @@ export async function PUT(
       )
     }
 
-    return NextResponse.json(tool)
+    const tr = tool as Record<string, unknown>
+    return NextResponse.json({
+      ...tr,
+      isAgency: toolIsAgency(tr as { isAgency?: unknown; is_agency?: unknown }),
+      hasDownloadableApp: toolHasDownloadableApp(
+        tr as { hasDownloadableApp?: unknown; has_downloadable_app?: unknown },
+      ),
+    })
   } catch (error) {
     console.error('Error updating tool:', error)
     if (error && typeof error === 'object' && 'issues' in error) {

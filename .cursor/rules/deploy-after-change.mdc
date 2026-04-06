@@ -1,0 +1,13 @@
+---
+description: Deploy to Vercel production after implementing code changes in this repo
+alwaysApply: true
+---
+
+# Deploy after changes
+
+After completing substantive code edits (features, fixes, refactors that affect runtime), run a production deploy so the live site stays in sync:
+
+1. Run `npm run build` and fix any failures before deploying.
+2. From the repo root: `npx vercel deploy --prod --yes`
+
+Skip deploy only when the user explicitly says not to deploy or when changes are documentation-only with no effect on the app.

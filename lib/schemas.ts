@@ -258,6 +258,37 @@ export function finalizeToolCategoriesList(normalized: string[]): string[] {
   return capped.length > 0 ? capped : ['Other']
 }
 
+/**
+ * Video AI labels: keep specific custom tags (e.g. Claude, Cursor, Web Design) instead of
+ * folding them into broad list labels via {@link closestCanonicalCategory}.
+ */
+export function normalizeVideoAiCategory(raw: string | null | undefined): string {
+  if (raw == null || typeof raw !== 'string') return 'Other'
+  const s = raw.trim()
+  if (!s) return 'Other'
+  if (categorySet.has(s)) return s
+  const parts = s.split('|').map((p) => p.trim()).filter(Boolean)
+  for (const p of parts) {
+    if (categorySet.has(p)) return p
+    const pl = p.toLowerCase()
+    const legacy =
+      LEGACY_TOOL_CATEGORY_ALIASES[p] ?? LEGACY_TOOL_CATEGORY_ALIASES[pl]
+    if (legacy && categorySet.has(legacy)) return legacy
+    for (const c of categories) {
+      if (c.toLowerCase() === pl) return c
+    }
+    const custom = sanitizeCustomCategoryLabel(p)
+    if (custom) return canonicalCaseIfMatches(custom)
+  }
+  return 'Other'
+}
+
+/** Normalize each AI video category and dedupe/cap. */
+export function finalizeVideoAiCategories(raw: string[]): string[] {
+  const mapped = raw.map((x) => normalizeVideoAiCategory(String(x)))
+  return finalizeToolCategoriesList(mapped)
+}
+
 // Pre-process schema to handle empty strings for tools + legacy single `category`
 const toolObjectSchema = z.object({
   name: z.string().min(1, 'Name is required'),
@@ -273,6 +304,10 @@ const toolObjectSchema = z.object({
   revenue: z.enum(['free', 'freemium', 'paid', 'enterprise']).optional().nullable(),
   rating: z.number().min(0).max(5).optional().nullable(),
   estimatedVisits: z.number().int().positive().optional().nullable(),
+  /** Consulting / services business (not primarily a self-serve product). */
+  isAgency: z.boolean().optional().nullable(),
+  /** Native/desktop/mobile store or explicit download links detected. */
+  hasDownloadableApp: z.boolean().optional().nullable(),
 })
 
 const preprocessTool = z.preprocess((data: any) => {
@@ -317,71 +352,70 @@ export const toolSchema = preprocessTool.transform((d) => ({
 
 export type ToolInput = z.infer<typeof toolObjectSchema> & { category: string }
 
-// Video-specific categories for the /videos page (keep in sync with analyze prompt in /api/videos/analyze)
-export const videoCategories = [
-  'AI & Tech',
-  'ASMR & Relaxation',
-  'Art & Creative',
-  'Beauty & Fashion',
-  'Business & Finance',
-  'Cars & Automotive',
-  'Comedy',
-  'DIY & Crafts',
-  'Education & Tutorials',
-  'Entertainment',
-  'Food & Cooking',
-  'Gaming',
-  'Health & Wellness',
-  'Motivational',
-  'Music',
-  'Nature & Wildlife',
-  'News & Commentary',
-  'Parenting & Family',
-  'Podcasts & Interviews',
-  'Reviews & Unboxing',
-  'Science & Documentary',
-  'Shorts & Clips',
-  'Sports & Fitness',
-  'Travel & Lifestyle',
-  'Other',
-] as const
-
-export type VideoCategory = typeof videoCategories[number]
-
-const videoCategorySet = new Set<string>(videoCategories)
+/** Videos use the same taxonomy as tools (filters + AI). Max 3 labels; primary = first. */
+export const MAX_VIDEO_CATEGORIES = MAX_TOOL_CATEGORIES
 
 /**
- * Map legacy DB values (renamed lists, typos, overly narrow labels) to current broad categories.
- * Extend `LEGACY_VIDEO_CATEGORY_ALIASES` as you discover old values in Supabase.
+ * Legacy / niche video-only labels (pre–tools alignment) → canonical tool category.
+ * New data should use `categories` from the shared list only.
  */
-export const LEGACY_VIDEO_CATEGORY_ALIASES: Record<string, VideoCategory> = {
-  // Examples — adjust to match strings actually stored in your `video` table
-  'AI & Technology': 'AI & Tech',
-  Technology: 'AI & Tech',
-  Tech: 'AI & Tech',
-  Education: 'Education & Tutorials',
-  Tutorials: 'Education & Tutorials',
-  Tutorial: 'Education & Tutorials',
-  Documentary: 'Science & Documentary',
-  Fitness: 'Sports & Fitness',
-  Travel: 'Travel & Lifestyle',
-  Lifestyle: 'Travel & Lifestyle',
+export const LEGACY_VIDEO_NICHE_TO_CANONICAL: Record<string, Category> = {
+  'AI & Tech': 'AI Automation',
+  'AI & Technology': 'AI Automation',
+  'ASMR & Relaxation': 'Music & Audio',
+  'Art & Creative': 'Design',
+  'Beauty & Fashion': 'Marketing',
+  'Business & Finance': 'SaaS',
+  'Cars & Automotive': 'Other',
+  Comedy: 'Other',
+  'DIY & Crafts': 'Other',
+  'Education & Tutorials': 'Education',
+  Entertainment: 'Other',
+  'Food & Cooking': 'Other',
+  Gaming: 'Other',
+  'Health & Wellness': 'Other',
+  Motivational: 'Marketing',
+  Music: 'Music & Audio',
+  'Nature & Wildlife': 'Other',
+  'News & Commentary': 'News',
+  'Parenting & Family': 'Other',
+  'Podcasts & Interviews': 'Music & Audio',
+  'Reviews & Unboxing': 'Other',
+  'Science & Documentary': 'Research',
+  'Shorts & Clips': 'Video Editing',
+  'Sports & Fitness': 'Other',
+  'Travel & Lifestyle': 'Other',
+  /** Old VideoCard chip keys */
+  Cars: 'Other',
+  Money: 'SaaS',
+  AI: 'AI Automation',
 }
 
-/** Collapse unknown/legacy video category strings to a valid `videoCategories` value. */
-export function normalizeVideoCategory(raw: string | null | undefined): VideoCategory {
+/** Single-string normalization for legacy `video.category` cells. */
+export function normalizeVideoCategory(raw: string | null | undefined): string {
   if (raw == null || typeof raw !== 'string') return 'Other'
   const s = raw.trim()
   if (!s) return 'Other'
-  if (videoCategorySet.has(s)) return s as VideoCategory
-  const lower = s.toLowerCase()
-  for (const c of videoCategories) {
-    if (c.toLowerCase() === lower) return c
+  const direct =
+    LEGACY_VIDEO_NICHE_TO_CANONICAL[s] ??
+    LEGACY_VIDEO_NICHE_TO_CANONICAL[s.toLowerCase()]
+  if (direct) return normalizeToolCategory(direct)
+  return normalizeToolCategory(s)
+}
+
+/**
+ * Parse stored row → 1–3 labels (JSON array or legacy single `category`).
+ */
+export function parseVideoCategoriesFromRow(row: {
+  category?: string | null
+  categories?: unknown
+}): string[] {
+  const raw = row.categories
+  if (Array.isArray(raw) && raw.length > 0) {
+    const normalized = raw.map((c) => normalizeVideoCategory(String(c)))
+    return finalizeToolCategoriesList([...new Set(normalized)])
   }
-  const mapped =
-    LEGACY_VIDEO_CATEGORY_ALIASES[s] ?? LEGACY_VIDEO_CATEGORY_ALIASES[lower]
-  if (mapped && videoCategorySet.has(mapped)) return mapped
-  return 'Other'
+  return finalizeToolCategoriesList([normalizeVideoCategory(row.category)])
 }
 
 export const videoSources = ['youtube', 'tiktok'] as const
@@ -399,9 +433,20 @@ function isValidVideoUrl(url: string): boolean {
   }
 }
 
-// Pre-process schema to handle empty strings for videos
+// Pre-process schema: categories array (like tools) + legacy single `category`
 const preprocessVideo = z.preprocess((data: any) => {
   if (typeof data === 'object' && data !== null) {
+    let cats: string[] = []
+    if (Array.isArray(data.categories) && data.categories.length > 0) {
+      cats = data.categories.map((c: unknown) =>
+        normalizeVideoCategory(String(c)),
+      )
+    } else if (data.category != null && String(data.category).trim()) {
+      cats = [normalizeVideoCategory(String(data.category))]
+    }
+    cats = finalizeToolCategoriesList([...new Set(cats)])
+    if (cats.length === 0) cats = ['Other']
+
     return {
       ...data,
       youtuberName: data.youtuberName === '' ? null : data.youtuberName,
@@ -414,15 +459,19 @@ const preprocessVideo = z.preprocess((data: any) => {
           : data.subscriberCount,
       verified: data.verified === '' || data.verified === undefined ? null : !!data.verified,
       source: data.source === '' ? 'youtube' : (data.source ?? 'youtube'),
+      categories: cats,
+      category: cats[0],
     }
   }
   return data
 }, z.object({
   title: z.string().min(1, 'Title is required'),
   url: z.string().refine((v) => isValidVideoUrl(v), 'Must be a valid YouTube or TikTok URL'),
-  category: z.enum(videoCategories, {
-    errorMap: () => ({ message: 'Category is required' }),
-  }),
+  categories: z
+    .array(z.string().min(1).max(48))
+    .min(1, 'Select at least one category')
+    .max(MAX_VIDEO_CATEGORIES),
+  category: z.string().min(1),
   source: z.enum(videoSources).optional().default('youtube'),
   youtuberName: z.string().optional().nullable(),
   subscriberCount: z.number().int().nonnegative().optional().nullable(),

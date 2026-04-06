@@ -4,9 +4,10 @@ import { useCallback, useEffect, useMemo, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { SearchBar } from "@/components/SearchBar";
 import { VideoCard } from "@/components/VideoCard";
-import { videoCategories } from "@/lib/schemas";
 import type { Video } from "@/lib/supabase";
 import { Badge } from "@/components/ui/badge";
+import { videoCategoryList } from "@/lib/tool-categories";
+import { toolCategoryBadgeClass } from "@/lib/tool-category-styles";
 import {
   Select,
   SelectContent,
@@ -16,42 +17,10 @@ import {
 } from "@/components/ui/select";
 import { Youtube, Users, Film } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { supabase } from "@/lib/supabase";
+import { useAuthSession } from "@/components/AuthSessionProvider";
 import { CreatorAvatar } from "@/components/CreatorAvatar";
 
 type ViewMode = "videos" | "creators";
-
-const CATEGORY_EMOJI: Record<string, string> = {
-  "AI & Tech": "🤖",
-  "ASMR & Relaxation": "🌙",
-  "Art & Creative": "🎨",
-  "Beauty & Fashion": "💄",
-  "Business & Finance": "📊",
-  "Cars & Automotive": "🏎️",
-  Comedy: "😂",
-  "DIY & Crafts": "🔧",
-  "Education & Tutorials": "📚",
-  Entertainment: "🎬",
-  "Food & Cooking": "🍳",
-  Gaming: "🎮",
-  "Health & Wellness": "💪",
-  Motivational: "🚀",
-  Music: "🎵",
-  "Nature & Wildlife": "🦁",
-  "News & Commentary": "📰",
-  "Parenting & Family": "👪",
-  "Podcasts & Interviews": "🎙️",
-  "Reviews & Unboxing": "📦",
-  "Science & Documentary": "🔬",
-  "Shorts & Clips": "⚡",
-  "Sports & Fitness": "⚽",
-  "Travel & Lifestyle": "✈️",
-  Other: "📌",
-  // Legacy DB values → still show a chip if data predates this list
-  Cars: "🏎️",
-  Money: "💰",
-  AI: "🤖",
-};
 
 function formatSubs(count: number | null): string | null {
   if (count == null) return null;
@@ -66,6 +35,7 @@ type SourceFilter = "all" | "youtube" | "tiktok";
 function VideosPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { accessToken: authAccessToken } = useAuthSession();
   // Derive view from URL only to avoid hydration mismatch when navigating from header
   const viewMode: ViewMode = searchParams.get("view") === "creators" ? "creators" : "videos";
 
@@ -81,8 +51,6 @@ function VideosPageContent() {
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [sort, setSort] = useState<SortOption>("newest");
   const [watchedIds, setWatchedIds] = useState<string[]>([]);
-  const [authToken, setAuthToken] = useState<string | null>(null);
-
   const fetchVideos = useCallback(async () => {
     setLoading(true);
     try {
@@ -113,15 +81,11 @@ function VideosPageContent() {
     return () => clearTimeout(t);
   }, [fetchVideos]);
 
-  // Fetch auth token and watched video IDs for the current user
+  // Watched IDs when signed in (token from shared auth session — no extra getSession)
   useEffect(() => {
     const loadWatched = async () => {
       try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        const token = session?.access_token || null;
-        setAuthToken(token);
+        const token = authAccessToken;
         if (!token) {
           setWatchedIds([]);
           return;
@@ -142,13 +106,13 @@ function VideosPageContent() {
       }
     };
     void loadWatched();
-  }, []);
+  }, [authAccessToken]);
 
   const watchedSet = useMemo(() => new Set(watchedIds), [watchedIds]);
 
   const handleToggleWatched = useCallback(
     async (videoId: string, currentlyWatched: boolean) => {
-      if (!authToken) return;
+      if (!authAccessToken) return;
       setWatchedIds((prev) =>
         currentlyWatched
           ? prev.filter((id) => id !== videoId)
@@ -159,7 +123,7 @@ function VideosPageContent() {
           method: currentlyWatched ? "DELETE" : "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${authToken}`,
+            Authorization: `Bearer ${authAccessToken}`,
           },
         });
         if (!res.ok) {
@@ -173,7 +137,7 @@ function VideosPageContent() {
         );
       }
     },
-    [authToken]
+    [authAccessToken]
   );
 
   const creators = useMemo(() => {
@@ -227,9 +191,19 @@ function VideosPageContent() {
     return Array.from(map.values()).sort((a, b) => (b.subscriberCount ?? 0) - (a.subscriberCount ?? 0));
   }, [videos]);
 
+  const videoFilterCategories = useMemo(() => {
+    const seen = new Set<string>();
+    for (const v of videos) {
+      for (const c of videoCategoryList(v)) {
+        if (c?.trim()) seen.add(c.trim());
+      }
+    }
+    return Array.from(seen).sort((a, b) => a.localeCompare(b));
+  }, [videos]);
+
   const searchSuggestions = useMemo(() => {
     const titles = videos.map((v) => v.title);
-    const cats = videos.map((v) => v.category);
+    const cats = videos.flatMap((v) => videoCategoryList(v));
     const creatorNames = creators.map((c) => c.name);
     return Array.from(new Set([...titles, ...cats, ...creatorNames]));
   }, [videos, creators]);
@@ -398,17 +372,18 @@ function VideosPageContent() {
             >
               All
             </Badge>
-            {videoCategories.map((cat) => (
+            {videoFilterCategories.map((cat) => (
               <Badge
                 key={cat}
                 variant={selectedCategory === cat ? "default" : "outline"}
                 className={cn(
-                  "cursor-pointer transition-all",
-                  selectedCategory === cat && "bg-gradient-to-r from-rose-500/80 to-orange-500/80 hover:opacity-90"
+                  "cursor-pointer transition-all text-xs font-medium capitalize",
+                  selectedCategory === cat
+                    ? "bg-gradient-to-r from-rose-500/80 to-orange-500/80 hover:opacity-90 border-transparent"
+                    : toolCategoryBadgeClass(cat),
                 )}
                 onClick={() => setSelectedCategory((prev) => (prev === cat ? null : cat))}
               >
-                <span className="mr-1.5">{CATEGORY_EMOJI[cat] ?? "📌"}</span>
                 {cat}
               </Badge>
             ))}

@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { videoCategories } from '@/lib/schemas'
+import {
+  categories as preferredVideoCategories,
+  finalizeVideoAiCategories,
+  MAX_VIDEO_CATEGORIES,
+} from '@/lib/schemas'
 
 /**
  * Analyze a YouTube or TikTok video URL and return metadata for the Add Video form.
@@ -133,7 +137,7 @@ async function fetchWithYouTubeApi(videoId: string) {
 
   return {
     title: snippet.title ?? '',
-    description: (snippet.description ?? '').slice(0, 200),
+    description: (snippet.description ?? '').slice(0, 12000),
     youtuberName: snippet.channelTitle ?? null,
     subscriberCount: Number.isInteger(subscriberCount) ? subscriberCount : null,
     channelVideoCount: Number.isInteger(channelVideoCount) ? channelVideoCount : null,
@@ -141,14 +145,15 @@ async function fetchWithYouTubeApi(videoId: string) {
   }
 }
 
-/** Use OpenAI to suggest category, short description, and tags from title + description */
+/** Use OpenAI to suggest 1–3 categories (tools taxonomy), short description, and tags */
 async function suggestCategoryDescriptionAndTags(
   title: string,
   description: string
-): Promise<{ category: string | null; shortDescription: string | null; tags: string | null }> {
+): Promise<{ categories: string[] | null; shortDescription: string | null; tags: string | null }> {
   const key = process.env.OPENAI_API_KEY
-  if (!key?.startsWith('sk-')) return { category: null, shortDescription: null, tags: null }
-  const categories = videoCategories as readonly string[]
+  if (!key?.startsWith('sk-')) return { categories: null, shortDescription: null, tags: null }
+  const preferred = preferredVideoCategories as readonly string[]
+  const descSnippet = (description || '').slice(0, 10000)
   try {
     const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -158,44 +163,63 @@ async function suggestCategoryDescriptionAndTags(
         messages: [
           {
             role: 'system',
-            content: `You analyze YouTube video metadata. Reply with a single JSON object only, no markdown, with these keys:
-- "category": exactly one of: ${categories.join(', ')}
+            content: `You analyze YouTube/TikTok video metadata. Reply with a single JSON object only (no markdown fences). Keys:
+- "categories": array of 1 to ${MAX_VIDEO_CATEGORIES} strings. You MUST output between 1 and ${MAX_VIDEO_CATEGORIES} labels.
+
+Accuracy rules:
+- Prefer the *most specific* labels for what the video is actually about: named products (Cursor, Claude, ChatGPT, Midjourney), topics (Web Design, Hacking, Cybersecurity, Prompt Engineering), or skills (Education, Tutorials). Use custom Title Case labels (2–4 words, max 40 chars) when they describe the video better than a broad bucket.
+- Also use the canonical list when it fits exactly (match spelling): ${preferred.join(', ')}. Mix list + custom as needed (e.g. ["Education", "Claude"] or ["Code Assistants", "Cursor"]).
+- Use 1 category when the video is single-topic; use 2 or 3 when the content clearly covers multiple topics (e.g. tool + learning style). Do NOT default everything to "SaaS", "AI Automation", or "Other" unless nothing else fits.
+- Order by relevance (first = primary). No duplicate labels. No emojis in category strings.
 - "shortDescription": one concise line summarizing the video (max 200 characters)
-- "tags": comma-separated relevant tags (e.g. motivation, cars, money, AI), no quotes needed`,
+- "tags": comma-separated relevant tags (lowercase, no #), no quotes`,
           },
           {
             role: 'user',
-            content: `Title: ${title}\nDescription: ${(description || '').slice(0, 800)}`,
+            content: `Title: ${title}
+
+Video description (may be truncated; use title + description together):
+${descSnippet || '(no description — infer from title only)'}`,
           },
         ],
-        max_tokens: 300,
-        temperature: 0.3,
+        response_format: { type: 'json_object' },
+        max_tokens: 650,
+        temperature: 0.25,
       }),
-      signal: AbortSignal.timeout(12000),
+      signal: AbortSignal.timeout(25000),
     })
-    if (!res.ok) return { category: null, shortDescription: null, tags: null }
+    if (!res.ok) return { categories: null, shortDescription: null, tags: null }
     const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> }
     const raw = data.choices?.[0]?.message?.content?.trim()
-    if (!raw) return { category: null, shortDescription: null, tags: null }
+    if (!raw) return { categories: null, shortDescription: null, tags: null }
     const cleaned = raw.replace(/^```json?\s*|\s*```$/g, '').trim()
-    let parsed: { category?: string; shortDescription?: string; tags?: string }
-    try {
-      parsed = JSON.parse(cleaned) as { category?: string; shortDescription?: string; tags?: string }
-    } catch {
-      return { category: null, shortDescription: null, tags: null }
+    let parsed: {
+      categories?: unknown
+      category?: string
+      shortDescription?: string
+      tags?: string
     }
-    const category = parsed.category && categories.includes(parsed.category as any)
-      ? (parsed.category as (typeof videoCategories)[number])
-      : categories.find((c) => c.toLowerCase() === (parsed.category || '').toLowerCase()) ?? null
+    try {
+      parsed = JSON.parse(cleaned) as typeof parsed
+    } catch {
+      return { categories: null, shortDescription: null, tags: null }
+    }
+    let list: string[] = []
+    if (Array.isArray(parsed.categories) && parsed.categories.length > 0) {
+      list = parsed.categories.map((c) => String(c).trim()).filter(Boolean)
+    } else if (parsed.category != null && String(parsed.category).trim()) {
+      list = [String(parsed.category).trim()]
+    }
+    list = finalizeVideoAiCategories(list)
     const shortDescription =
       typeof parsed.shortDescription === 'string'
         ? parsed.shortDescription.slice(0, 200).trim() || null
         : null
     const tags =
       typeof parsed.tags === 'string' ? parsed.tags.slice(0, 500).trim() || null : null
-    return { category, shortDescription, tags }
+    return { categories: list.length > 0 ? list : null, shortDescription, tags }
   } catch {
-    return { category: null, shortDescription: null, tags: null }
+    return { categories: null, shortDescription: null, tags: null }
   }
 }
 
@@ -249,7 +273,7 @@ export async function POST(request: NextRequest) {
           { status: 422 }
         )
       }
-      const { category: suggestedCategory, shortDescription: aiDescription, tags: suggestedTags } =
+      const { categories: suggestedCategories, shortDescription: aiDescription, tags: suggestedTags } =
         await suggestCategoryDescriptionAndTags(oembed.title, oembed.description ?? '')
       return NextResponse.json({
         url: tiktokUrl,
@@ -260,7 +284,8 @@ export async function POST(request: NextRequest) {
         subscriberCount: null,
         channelVideoCount: null,
         channelThumbnailUrl: oembed.channelThumbnailUrl,
-        suggestedCategory: suggestedCategory ?? undefined,
+        suggestedCategories: suggestedCategories ?? undefined,
+        suggestedCategory: suggestedCategories?.[0] ?? undefined,
         suggestedTags: suggestedTags ?? undefined,
         verified: null,
       })
@@ -315,7 +340,7 @@ export async function POST(request: NextRequest) {
       channelVideoCount = null
     }
 
-    const { category: suggestedCategory, shortDescription: aiDescription, tags: suggestedTags } =
+    const { categories: suggestedCategories, shortDescription: aiDescription, tags: suggestedTags } =
       await suggestCategoryDescriptionAndTags(title, description ?? '')
 
     const finalDescription =
@@ -332,7 +357,8 @@ export async function POST(request: NextRequest) {
       subscriberCount,
       channelVideoCount,
       channelThumbnailUrl,
-      suggestedCategory: suggestedCategory ?? undefined,
+      suggestedCategories: suggestedCategories ?? undefined,
+      suggestedCategory: suggestedCategories?.[0] ?? undefined,
       suggestedTags: suggestedTags ?? undefined,
       verified: null as boolean | null,
     })

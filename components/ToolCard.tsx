@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import Image from "next/image";
 import Link from "next/link";
@@ -15,12 +15,13 @@ import {
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { supabase } from "@/lib/supabase";
 import type { Tool } from "@/lib/supabase";
-import type { User as SupabaseUser } from "@supabase/supabase-js";
+import { useAuthSession } from "@/components/AuthSessionProvider";
 import { cn } from "@/lib/utils";
 import { toolCategoryList } from "@/lib/tool-categories";
 import { toolCategoryBadgeClass } from "@/lib/tool-category-styles";
+import { isToolCreatedToday } from "@/lib/tool-recent";
+import { toolHasDownloadableApp, toolIsAgency } from "@/lib/tool-flags";
 
 export type ToolCardLayout = "grid" | "list";
 
@@ -110,7 +111,9 @@ export function ToolCard({
   index = 0,
   layout = "grid",
 }: ToolCardProps) {
-  const [user, setUser] = useState<SupabaseUser | null>(null);
+  const { user, accessToken } = useAuthSession();
+  const accessTokenRef = useRef(accessToken);
+  accessTokenRef.current = accessToken;
   const [upvoteCount, setUpvoteCount] = useState(tool.upvoteCount ?? 0);
   const [downvoteCount, setDownvoteCount] = useState(tool.downvoteCount ?? 0);
   const [userUpvoted, setUserUpvoted] = useState(!!tool.userUpvoted);
@@ -121,41 +124,24 @@ export function ToolCard({
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-    });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    if (user && tool.id) {
-      const loadFavoriteStatus = async () => {
-        try {
-          const session = await supabase.auth.getSession();
-          const token = (await session).data.session?.access_token;
-          const response = await fetch(`/api/tools/${tool.id}/favorite`, {
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          });
-          if (response.ok) {
-            const data = await response.json();
-            setUserFavorited(data.favorited);
-          }
-        } catch (error) {
-          console.error("Error loading favorite status:", error);
+    if (!accessToken || !tool.id) return;
+    const loadFavoriteStatus = async () => {
+      try {
+        const response = await fetch(`/api/tools/${tool.id}/favorite`, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        });
+        if (response.ok) {
+          const data = await response.json();
+          setUserFavorited(data.favorited);
         }
-      };
-      loadFavoriteStatus();
-    }
-  }, [user, tool.id]);
+      } catch (error) {
+        console.error("Error loading favorite status:", error);
+      }
+    };
+    void loadFavoriteStatus();
+  }, [accessToken, tool.id]);
 
   useEffect(() => {
     setUpvoteCount(tool.upvoteCount ?? 0);
@@ -201,8 +187,7 @@ export function ToolCard({
     }
     setVoteBusy(true);
     try {
-      const session = await supabase.auth.getSession();
-      const token = (await session).data.session?.access_token;
+      const token = accessTokenRef.current;
       const res = await fetch(`/api/tools/${tool.id}/upvote`, {
         method: prev.userUpvoted ? "DELETE" : "POST",
         headers: {
@@ -259,8 +244,7 @@ export function ToolCard({
     }
     setVoteBusy(true);
     try {
-      const session = await supabase.auth.getSession();
-      const token = (await session).data.session?.access_token;
+      const token = accessTokenRef.current;
       const res = await fetch(`/api/tools/${tool.id}/downvote`, {
         method: prev.userDownvoted ? "DELETE" : "POST",
         headers: {
@@ -303,8 +287,7 @@ export function ToolCard({
 
     setFavoriting(true);
     try {
-      const session = await supabase.auth.getSession();
-      const token = (await session).data.session?.access_token;
+      const token = accessTokenRef.current;
 
       const response = await fetch(`/api/tools/${tool.id}/favorite`, {
         method: userFavorited ? "DELETE" : "POST",
@@ -435,6 +418,44 @@ export function ToolCard({
   ) : null;
 
   const toolCategories = toolCategoryList(tool);
+  const isNewToday = isToolCreatedToday(tool.createdAt);
+  const isAgencyTool = toolIsAgency(tool);
+  const hasDownloadableApp = toolHasDownloadableApp(tool);
+
+  /** Compact chips (agency uses full-card tint instead of a large ribbon). */
+  const ribbonClass =
+    "pointer-events-none rounded-md px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white shadow-sm sm:text-[10px]";
+
+  const cardRibbons =
+    isNewToday || hasDownloadableApp ? (
+      <div className="absolute left-0 top-0 z-20 flex max-w-[min(100%,16rem)] flex-row flex-wrap gap-1">
+        {isNewToday ? (
+          <div
+            className={cn(
+              ribbonClass,
+              "bg-gradient-to-r from-violet-600 to-indigo-600",
+            )}
+            aria-hidden
+          >
+            New
+          </div>
+        ) : null}
+        {hasDownloadableApp ? (
+          <div
+            className={cn(
+              ribbonClass,
+              "bg-gradient-to-r from-teal-600 to-emerald-600",
+            )}
+            aria-hidden
+          >
+            App
+          </div>
+        ) : null}
+      </div>
+    ) : null;
+
+  const agencyCardTint =
+    "border-amber-500/40 bg-gradient-to-br from-amber-500/[0.11] to-orange-500/[0.07] shadow-sm shadow-amber-500/10 dark:border-amber-500/35 dark:from-amber-500/14 dark:to-orange-500/10 dark:shadow-amber-500/5";
 
   if (layout === "list") {
     return (
@@ -443,7 +464,13 @@ export function ToolCard({
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.2, delay: index * 0.02 }}
       >
-        <Card className="overflow-hidden border-border/50 transition-colors hover:border-primary/40">
+        <Card
+          className={cn(
+            "relative overflow-hidden border-border/50 transition-colors hover:border-primary/40",
+            isAgencyTool && agencyCardTint,
+          )}
+        >
+          {cardRibbons}
           <CardContent className="flex min-w-0 flex-col gap-3 p-3 sm:flex-row sm:items-center sm:gap-4">
             <div className="flex min-w-0 flex-1 flex-col items-center gap-3 sm:flex-row sm:items-start">
               {logoBlock}
@@ -456,6 +483,14 @@ export function ToolCard({
                     {titleDisplayBreaks(tool.name)}
                   </h3>
                   <div className="flex flex-wrap items-center justify-center gap-1 sm:justify-start">
+                    {isAgencyTool ? (
+                      <Badge
+                        variant="outline"
+                        className="border-amber-500/45 bg-amber-500/15 text-[10px] font-semibold uppercase tracking-wide text-amber-950 dark:text-amber-100"
+                      >
+                        Agency
+                      </Badge>
+                    ) : null}
                     {toolCategories.map((cat) => (
                       <Badge
                         key={cat}
@@ -590,9 +625,11 @@ export function ToolCard({
       <Card
         className={cn(
           "group relative flex h-full min-h-0 min-w-0 flex-col border-border/50 bg-card transition-all duration-300 hover:border-primary/50 hover:shadow-lg hover:shadow-primary/10 dark:hover:shadow-primary/20",
+          isAgencyTool && agencyCardTint,
           descriptionExpanded ? "overflow-visible" : "overflow-hidden",
         )}
       >
+        {cardRibbons}
         <CardContent
           className={cn(
             "flex min-h-0 min-w-0 flex-1 flex-col gap-0 px-3.5 pb-4 pt-3.5 sm:px-5 sm:pb-5 sm:pt-5",
@@ -642,6 +679,14 @@ export function ToolCard({
                 {titleDisplayBreaks(tool.name)}
               </h3>
               <div className="flex flex-wrap justify-center gap-1">
+                {isAgencyTool ? (
+                  <Badge
+                    variant="outline"
+                    className="border-amber-500/45 bg-amber-500/15 text-[10px] font-semibold uppercase tracking-wide text-amber-950 dark:text-amber-100"
+                  >
+                    Agency
+                  </Badge>
+                ) : null}
                 {toolCategories.map((cat) => (
                   <Badge
                     key={cat}

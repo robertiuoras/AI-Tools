@@ -3,14 +3,11 @@
 import type { ReactNode } from 'react'
 import Link from 'next/link'
 import { usePathname, useSearchParams } from 'next/navigation'
-import { useEffect, useState } from 'react'
-import { supabase } from '@/lib/supabase'
+import { useAuthSession } from '@/components/AuthSessionProvider'
 import { cn } from '@/lib/utils'
 
 const HOVER_MS = 'duration-500'
 const HOVER_EASE = 'ease-out'
-const ADMIN_CACHE_KEY = 'auth:isAdmin'
-
 type GradientSpec = {
   from: string
   to: string
@@ -64,14 +61,7 @@ function NavLabel({
 export function NavLinks() {
   const pathname = usePathname()
   const searchParams = useSearchParams()
-  const [isAdmin, setIsAdmin] = useState(() => {
-    if (typeof window === 'undefined') return false
-    try {
-      return localStorage.getItem(ADMIN_CACHE_KEY) === '1'
-    } catch {
-      return false
-    }
-  })
+  const { isAdmin } = useAuthSession()
   const isToolsPage = pathname === '/'
   const isVideosPage = pathname === '/videos'
   const isPromptsPage =
@@ -79,54 +69,6 @@ export function NavLinks() {
   const isNotesPage = pathname === '/notes'
   const isProjectsPage = pathname === '/projects'
   const isCreatorsView = isVideosPage && searchParams.get('view') === 'creators'
-
-  useEffect(() => {
-    let cancelled = false
-
-    const check = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession()
-      const token = session?.access_token
-      if (!token) {
-        if (!cancelled) setIsAdmin(false)
-        try {
-          localStorage.removeItem(ADMIN_CACHE_KEY)
-        } catch {
-          // ignore
-        }
-        return
-      }
-      try {
-        const res = await fetch('/api/auth/check', {
-          headers: { Authorization: `Bearer ${token}` },
-        })
-        const data = (await res.json()) as { role?: string }
-        const admin = data?.role === 'admin'
-        if (!cancelled) setIsAdmin(admin)
-        try {
-          if (admin) localStorage.setItem(ADMIN_CACHE_KEY, '1')
-          else localStorage.removeItem(ADMIN_CACHE_KEY)
-        } catch {
-          // ignore
-        }
-      } catch {
-        if (!cancelled) setIsAdmin(false)
-      }
-    }
-
-    void check()
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(() => {
-      void check()
-    })
-
-    return () => {
-      cancelled = true
-      subscription.unsubscribe()
-    }
-  }, [])
 
   const linkBase =
     'group rounded-md px-4 py-2 text-sm font-semibold transition-colors ' +

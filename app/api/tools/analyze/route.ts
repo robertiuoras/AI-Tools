@@ -5,6 +5,12 @@ import {
   MAX_TOOL_CATEGORIES,
   normalizeToolCategory,
 } from '@/lib/schemas'
+import {
+  detectAgencyFromText,
+  detectAgencyFromUrlAndText,
+  detectDownloadableAppFromHtml,
+  refineRevenueModel,
+} from '@/lib/tool-analyze-heuristics'
 
 /** Normalize + dedupe AI category output; drop redundant "Other"; cap length; primary = first. */
 function categoriesFromAiContent(content: {
@@ -43,6 +49,8 @@ interface AnalysisResult {
   rating: number | null
   estimatedVisits: number | null
   logoUrl: string | null
+  isAgency?: boolean
+  hasDownloadableApp?: boolean
   _debug?: {
     usedOpenAI: boolean
     apiKeyFound: boolean
@@ -107,6 +115,8 @@ async function scrapeWebsiteInfo(url: string): Promise<{
   logoUrl: string | null
   pricingContent: string
   pageContent: string
+  hasDownloadableAppHeuristic: boolean
+  agencyHint: boolean
 }> {
   try {
     // Validate and normalize URL
@@ -120,7 +130,15 @@ async function scrapeWebsiteInfo(url: string): Promise<{
       console.log('🌐 [Scrape] Fetching URL:', validUrl.toString())
     } catch (error) {
       console.error('❌ [Scrape] Invalid URL format:', url, error)
-      return { title: '', description: '', logoUrl: null, pricingContent: '', pageContent: '' }
+      return {
+        title: '',
+        description: '',
+        logoUrl: null,
+        pricingContent: '',
+        pageContent: '',
+        hasDownloadableAppHeuristic: false,
+        agencyHint: false,
+      }
     }
 
     const response = await fetch(validUrl.toString(), {
@@ -269,7 +287,22 @@ async function scrapeWebsiteInfo(url: string): Promise<{
     const pricingContent = await fetchPricingInfo(validUrl.toString())
     console.log('✅ [Scrape] Pricing content length:', pricingContent.length)
 
-    return { title, description, logoUrl, pricingContent, pageContent }
+    const hasDownloadableAppHeuristic = detectDownloadableAppFromHtml(html)
+    const textForAgency = `${title} ${description} ${pageContent}`
+    const hostForAgency = validUrl.hostname
+    const agencyHint =
+      detectAgencyFromText(textForAgency) ||
+      detectAgencyFromUrlAndText(hostForAgency, textForAgency)
+
+    return {
+      title,
+      description,
+      logoUrl,
+      pricingContent,
+      pageContent,
+      hasDownloadableAppHeuristic,
+      agencyHint,
+    }
   } catch (error) {
     console.error('❌ [Scrape] Error scraping website:', error)
     console.error('❌ [Scrape] Error type:', error instanceof Error ? error.constructor.name : typeof error)
@@ -356,10 +389,12 @@ Desc: ${description || 'N/A'}${pricingContext}${pageContext}
 
 Revenue (MUST be accurate):
 - "free": No paid options (open source, free forever)
-- "freemium": Free tier + paid plans
-- "paid": Only paid, no free
-- "enterprise": Custom pricing, contact sales
+- "freemium": A real ongoing free tier/plan exists (not just a short trial) AND paid upgrades exist
+- "paid": Paid subscription or purchase required for normal use; no permanent free tier (trial-only with no free tier = paid, NOT freemium)
+- "enterprise": Custom pricing, contact sales, primarily contract deals
 - null: Cannot determine
+
+Do NOT label as "freemium" when the product is effectively paid-only (e.g. pricing starts at $X/mo with no free plan, or "contact sales" for all plans without a free tier).
 
 Visits (search for numbers):
 - Look for: "X million visits/users", "X million monthly", "XM visits"
@@ -385,11 +420,15 @@ Return JSON:
   "revenue": "free|freemium|paid|enterprise|null",
   "traffic": "low|medium|high|unknown",
   "rating": 0-5 or null,
-  "estimatedVisits": number or null
+  "estimatedVisits": number or null,
+  "isAgency": true or false,
+  "hasDownloadableApp": true or false
 }
 
 Rules:
-- Revenue: Analyze pricing carefully
+- Revenue: Analyze pricing carefully; prefer "paid" over "freemium" when there is no real free tier
+- isAgency: true if the company mainly sells services to clients (consulting, campaigns, "book a demo" as primary CTA, agency positioning). false for self-serve software products.
+- hasDownloadableApp: true if they offer a native/desktop/mobile app (App Store, Play Store, Mac/Windows download, .dmg, etc.). false if web-only.
 - Visits: Provide number if any indicators exist
 - Tags: Always provide (even if generic)
 - categories: Return 1 to ${MAX_TOOL_CATEGORIES} labels only (most tools: 2–3). Order by relevance (first = primary). Mix preferred-list labels and custom strings as needed — e.g. a daily AI newsletter with explainers can be ["News", "Education"] or ["News", "Education", "Research"]. No duplicates. Never use pipes inside strings.
@@ -419,7 +458,7 @@ Rules:
         ],
         temperature: 0.3, // Lower temperature for more consistent, focused responses (saves tokens)
         response_format: { type: 'json_object' },
-        max_tokens: 650, // Room for multi-category arrays
+        max_tokens: 720, // Room for multi-category arrays + flags
     }
 
     console.log('📤 [OpenAI] Request body (without prompt):', JSON.stringify({
@@ -632,16 +671,23 @@ Rules:
     console.log('✅ [OpenAI] ==========================================')
 
     const cats = categoriesFromAiContent(content)
+    const refinedRevenue = refineRevenueModel(
+      content.revenue ?? null,
+      pricingContent,
+      pageContent,
+    )
     const result = {
       name: content.name || title,
       description: content.description || description,
       categories: cats,
       category: cats[0],
       tags: content.tags || '',
-      revenue: content.revenue || null,
+      revenue: refinedRevenue,
       traffic: content.traffic || 'unknown',
       rating: content.rating || null,
       estimatedVisits: content.estimatedVisits || null,
+      isAgency: Boolean(content.isAgency),
+      hasDownloadableApp: Boolean(content.hasDownloadableApp),
       _debug: {
         usedOpenAI: true,
         apiKeyFound: true,
@@ -762,6 +808,8 @@ export async function POST(request: NextRequest) {
         logoUrl: null,
         pricingContent: '',
         pageContent: '',
+        hasDownloadableAppHeuristic: false,
+        agencyHint: false,
       }
     }
 
@@ -877,6 +925,9 @@ export async function POST(request: NextRequest) {
       rating: analysis.rating ?? null,
       estimatedVisits: analysis.estimatedVisits ?? null,
       logoUrl: analysis.logoUrl || scraped.logoUrl || null,
+      isAgency: Boolean(analysis.isAgency || scraped.agencyHint),
+      // Native/desktop app flag: strict HTML signals only (ignore model guesses to avoid false positives).
+      hasDownloadableApp: Boolean(scraped.hasDownloadableAppHeuristic),
       _debug: {
         usedOpenAI: analysis._debug?.usedOpenAI ?? true,
         apiKeyFound: analysis._debug?.apiKeyFound ?? true,

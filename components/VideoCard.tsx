@@ -7,6 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import type { Video } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 import { Eye, CheckCircle2, ExternalLink } from "lucide-react";
+import { videoCategoryList } from "@/lib/tool-categories";
+import { toolCategoryBadgeClass } from "@/lib/tool-category-styles";
 
 interface VideoCardProps {
   video: Video;
@@ -14,14 +16,6 @@ interface VideoCardProps {
   watched?: boolean;
   onToggleWatched?: (videoId: string, watched: boolean) => void;
 }
-
-const CATEGORY_EMOJI: Record<string, string> = {
-  Motivational: "🚀",
-  Cars: "🏎️",
-  Money: "💰",
-  AI: "🤖",
-  Other: "📌",
-};
 
 function getYoutubeEmbedUrl(url: string): string | null {
   try {
@@ -78,7 +72,7 @@ export function VideoCard({
           .map((t) => t.trim())
           .filter(Boolean)
       : [];
-  const categoryEmoji = CATEGORY_EMOJI[video.category] ?? "";
+  const categoryLabels = videoCategoryList(video);
 
   return (
     <motion.div
@@ -150,10 +144,15 @@ export function VideoCard({
                   )}
                 </button>
               )}
-              <Badge variant="outline" className="text-xs">
-                {categoryEmoji && <span className="mr-1">{categoryEmoji}</span>}
-                {video.category}
-              </Badge>
+              {categoryLabels.map((cat) => (
+                <Badge
+                  key={cat}
+                  variant="outline"
+                  className={cn("text-xs font-medium capitalize", toolCategoryBadgeClass(cat))}
+                >
+                  {cat}
+                </Badge>
+              ))}
               {tagsArray.length > 0 && (
                 <div className="flex flex-wrap gap-1 max-w-xs justify-end">
                   {tagsArray.map((tag) => (

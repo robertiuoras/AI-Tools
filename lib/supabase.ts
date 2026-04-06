@@ -62,6 +62,9 @@ export interface Tool {
   revenue: "free" | "freemium" | "paid" | "enterprise" | null;
   rating: number | null;
   estimatedVisits: number | null;
+  /** Set by AI analysis + heuristics; requires DB columns. */
+  isAgency?: boolean | null;
+  hasDownloadableApp?: boolean | null;
   createdAt: string;
   updatedAt: string;
   upvoteCount?: number;
@@ -78,6 +81,8 @@ export interface Video {
   title: string;
   url: string;
   category: string;
+  /** 1–3 labels when column exists; primary is `category`. */
+  categories?: string[] | null;
   source?: VideoSource | null;
   youtuberName: string | null;
   subscriberCount: number | null;

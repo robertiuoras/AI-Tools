@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { X, Heart } from 'lucide-react'
+import { X, Heart, Building2, Download } from 'lucide-react'
 import {
   Accordion,
   AccordionContent,
@@ -24,6 +24,10 @@ interface FilterSidebarProps {
   onRevenueChange: (revenue: string[]) => void
   favoritesOnly: boolean
   onFavoritesToggle: () => void
+  agenciesOnly: boolean
+  onAgenciesOnlyChange: (value: boolean) => void
+  downloadableOnly: boolean
+  onDownloadableOnlyChange: (value: boolean) => void
   user: any
   availableCategories?: string[]
   className?: string
@@ -41,6 +45,10 @@ export function FilterSidebar({
   onRevenueChange,
   favoritesOnly,
   onFavoritesToggle,
+  agenciesOnly,
+  onAgenciesOnlyChange,
+  downloadableOnly,
+  onDownloadableOnlyChange,
   user,
   availableCategories,
   className,
@@ -67,10 +75,16 @@ export function FilterSidebar({
     onCategoriesChange([])
     onTrafficChange([])
     onRevenueChange([])
+    onAgenciesOnlyChange(false)
+    onDownloadableOnlyChange(false)
   }
 
   const hasActiveFilters =
-    selectedCategories.length > 0 || selectedTraffic.length > 0 || selectedRevenue.length > 0
+    selectedCategories.length > 0 ||
+    selectedTraffic.length > 0 ||
+    selectedRevenue.length > 0 ||
+    agenciesOnly ||
+    downloadableOnly
   const categoryOptions =
     availableCategories && availableCategories.length > 0
       ? availableCategories
@@ -87,7 +101,11 @@ export function FilterSidebar({
         Filters
         {hasActiveFilters && (
           <Badge variant="secondary" className="ml-2">
-            [...selectedCategories, ...selectedTraffic, ...selectedRevenue].filter(Boolean).length
+            {selectedCategories.length +
+              selectedTraffic.length +
+              selectedRevenue.length +
+              (agenciesOnly ? 1 : 0) +
+              (downloadableOnly ? 1 : 0)}
           </Badge>
         )}
       </Button>
@@ -129,8 +147,28 @@ export function FilterSidebar({
             </div>
           </div>
 
-          {user && (
-            <div className="mb-6">
+          <div className="mb-4 space-y-2">
+            <Button
+              type="button"
+              variant={agenciesOnly ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => onAgenciesOnlyChange(!agenciesOnly)}
+              className="w-full gap-2 border-amber-500/40 bg-gradient-to-r from-amber-500/10 to-orange-500/10 font-semibold hover:from-amber-500/15 hover:to-orange-500/15 dark:from-amber-500/15 dark:to-orange-500/15"
+            >
+              <Building2 className="h-4 w-4 shrink-0" />
+              {agenciesOnly ? 'Showing agencies only' : 'Agencies only'}
+            </Button>
+            <Button
+              type="button"
+              variant={downloadableOnly ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => onDownloadableOnlyChange(!downloadableOnly)}
+              className="w-full gap-2 border-teal-500/40 bg-gradient-to-r from-teal-500/10 to-emerald-500/10 font-semibold hover:from-teal-500/15 hover:to-emerald-500/15 dark:from-teal-500/15 dark:to-emerald-500/15"
+            >
+              <Download className="h-4 w-4 shrink-0" />
+              {downloadableOnly ? 'Showing apps only' : 'Downloadable app'}
+            </Button>
+            {user && (
               <Button
                 variant={favoritesOnly ? "default" : "outline"}
                 size="sm"
@@ -140,8 +178,8 @@ export function FilterSidebar({
                 <Heart className={`h-4 w-4 ${favoritesOnly ? "fill-current" : ""}`} />
                 {favoritesOnly ? "Showing Favorites" : "Show Favorites"}
               </Button>
-            </div>
-          )}
+            )}
+          </div>
 
           <Accordion type="multiple" defaultValue={['category', 'revenue', 'traffic']}>
             <AccordionItem value="category">
@@ -272,6 +310,18 @@ export function FilterSidebar({
                     </button>
                   </Badge>
                 ))}
+                {agenciesOnly && (
+                  <Badge variant="secondary" className="gap-1">
+                    Agencies
+                    <button
+                      type="button"
+                      onClick={() => onAgenciesOnlyChange(false)}
+                      className="ml-1 rounded-full hover:bg-background"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                )}
               </div>
             </div>
           )}

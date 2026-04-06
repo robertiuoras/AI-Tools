@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
-import { normalizeVideoCategory, videoSchema } from "@/lib/schemas";
+import { parseVideoCategoriesFromRow, videoSchema } from "@/lib/schemas";
 
 export async function GET(
   _request: NextRequest,
@@ -19,9 +19,12 @@ export async function GET(
       return NextResponse.json({ error: "Video not found" }, { status: 404 });
     }
 
+    const row = video as { category?: string; categories?: unknown };
+    const cats = parseVideoCategoriesFromRow(row);
     return NextResponse.json({
       ...video,
-      category: normalizeVideoCategory((video as { category?: string }).category),
+      category: cats[0] ?? "Other",
+      categories: cats,
     });
   } catch (error) {
     console.error("❌ Error fetching video:", error);
@@ -45,6 +48,7 @@ export async function PUT(
       title: validated.title,
       url: validated.url,
       category: validated.category,
+      categories: validated.categories,
       source: validated.source ?? "youtube",
       youtuberName: validated.youtuberName ?? null,
       subscriberCount: validated.subscriberCount ?? null,
@@ -72,7 +76,13 @@ export async function PUT(
       );
     }
 
-    return NextResponse.json(video);
+    const v = video as { category?: string; categories?: unknown };
+    const cats = parseVideoCategoriesFromRow(v);
+    return NextResponse.json({
+      ...video,
+      category: cats[0] ?? "Other",
+      categories: cats,
+    });
   } catch (error: any) {
     console.error("❌ Error updating video:", error);
     if (error && typeof error === "object" && "issues" in error) {

@@ -3,10 +3,10 @@
 import {
   useState,
   useEffect,
+  useLayoutEffect,
   useCallback,
   useMemo,
   useRef,
-  Suspense,
 } from "react";
 import { useRouter } from "next/navigation";
 import { Hero } from "@/components/Hero";
@@ -34,9 +34,23 @@ import { SiteTour } from "@/components/SiteTour";
 import { MOST_POPULAR_HELP } from "@/lib/tool-popularity";
 import type { ToolCardLayout } from "@/components/ToolCard";
 import { supabase } from "@/lib/supabase";
+import { useAuthSession } from "@/components/AuthSessionProvider";
 import type { Tool } from "@/lib/supabase";
 import { toolCategoryList } from "@/lib/tool-categories";
 import { categories as defaultCategories } from "@/lib/schemas";
+import { NewToolsBanner } from "@/components/NewToolsBanner";
+import { HomeSplashLoader } from "@/components/HomeSplashLoader";
+import { useToolsCatalog } from "@/components/ToolsCatalogProvider";
+import {
+  clearHomeSplashSession,
+  hasHomeSplashBeenSeen,
+  markHomeSplashSeen,
+} from "@/lib/home-splash";
+import { countToolsAddedToday } from "@/lib/tool-recent";
+import { setClientToolsCache } from "@/lib/tools-client-cache";
+
+const MIN_INITIAL_SPLASH_MS = 1400;
+const SPLASH_EXIT_MS = 520;
 
 type SortOption = "alphabetical" | "newest" | "popular" | "traffic" | "traffic-low" | "upvotes";
 type SortOrder = "asc" | "desc";
@@ -63,8 +77,15 @@ function useToolGridColumnCount() {
 
 function HomePageContent() {
   const router = useRouter();
-  const [tools, setTools] = useState<Tool[]>([]);
-  const [loading, setLoading] = useState(true);
+  const {
+    tools,
+    setTools,
+    loading,
+    setLoading,
+    refreshing,
+    setRefreshing,
+    toolsRef,
+  } = useToolsCatalog();
   const [search, setSearch] = useState("");
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [selectedTraffic, setSelectedTraffic] = useState<string[]>([]);
@@ -72,14 +93,38 @@ function HomePageContent() {
   const [sort, setSort] = useState<SortOption>("popular");
   const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
   const [favoritesOnly, setFavoritesOnly] = useState(false);
-  const [user, setUser] = useState<any>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [agenciesOnly, setAgenciesOnly] = useState(false);
+  const [downloadableOnly, setDownloadableOnly] = useState(false);
+  const { user, isAdmin, accessToken } = useAuthSession();
+  const accessTokenRef = useRef(accessToken);
+  accessTokenRef.current = accessToken;
   const [tourReplayNonce, setTourReplayNonce] = useState(0);
   const [viewMode, setViewMode] = useState<ToolCardLayout>("grid");
-  const [refreshing, setRefreshing] = useState(false);
   const toolGridCols = useToolGridColumnCount();
-  const toolsRef = useRef<Tool[]>([]);
-  toolsRef.current = tools;
+
+  const [splashDone, setSplashDone] = useState(false);
+
+  /** Splash session + entrance overlay (catalog state lives in ToolsCatalogProvider). */
+  useLayoutEffect(() => {
+    const nav = performance.getEntriesByType("navigation")[0] as
+      | PerformanceNavigationTiming
+      | undefined;
+    if (nav?.type === "reload") {
+      setSplashDone(false);
+      return;
+    }
+    if (hasHomeSplashBeenSeen()) setSplashDone(true);
+  }, []);
+
+  useEffect(() => {
+    if (!loading && !splashDone) {
+      const t = setTimeout(() => {
+        markHomeSplashSeen();
+        setSplashDone(true);
+      }, SPLASH_EXIT_MS);
+      return () => clearTimeout(t);
+    }
+  }, [loading, splashDone]);
 
   useEffect(() => {
     try {
@@ -121,6 +166,11 @@ function HomePageContent() {
   }, [tools, selectedCategories]);
 
   /** Search filters in the browser — no network per keystroke (fast vs full refetch + loading). */
+  const toolsAddedTodayCount = useMemo(
+    () => countToolsAddedToday(tools),
+    [tools],
+  );
+
   const displayedTools = useMemo(() => {
     const raw = search.trim();
     const q = raw.toLowerCase();
@@ -139,58 +189,6 @@ function HomePageContent() {
     if (exactName.length === 1) return exactName;
     return matches;
   }, [tools, search]);
-
-  // Get user session
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-    });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
-
-  // Admin role (for dev-only site tour replay button)
-  useEffect(() => {
-    let cancelled = false;
-
-    const checkAdmin = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const token = session?.access_token;
-      if (!token) {
-        if (!cancelled) setIsAdmin(false);
-        return;
-      }
-      try {
-        const res = await fetch("/api/auth/check", {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const data = (await res.json()) as { role?: string };
-        if (!cancelled) setIsAdmin(data?.role === "admin");
-      } catch {
-        if (!cancelled) setIsAdmin(false);
-      }
-    };
-
-    void checkAdmin();
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(() => {
-      void checkAdmin();
-    });
-
-    return () => {
-      cancelled = true;
-      subscription.unsubscribe();
-    };
-  }, []);
 
   // Handle OAuth callback if tokens are in the hash
   useEffect(() => {
@@ -256,6 +254,7 @@ function HomePageContent() {
 
   const fetchTools = useCallback(async () => {
     const hadCachedTools = toolsRef.current.length > 0;
+    const splashStartedAt = performance.now();
     if (hadCachedTools) setRefreshing(true);
     else setLoading(true);
     try {
@@ -266,15 +265,15 @@ function HomePageContent() {
       params.append("sort", sort);
       params.append("order", sortOrder);
       if (favoritesOnly) params.append("favoritesOnly", "true");
-
-      const session = await supabase.auth.getSession();
-      const token = (await session).data.session?.access_token;
+      if (agenciesOnly) params.append("agenciesOnly", "true");
+      if (downloadableOnly) params.append("downloadableOnly", "true");
 
       const headers: HeadersInit = {
         "Content-Type": "application/json",
       };
-      if (token) {
-        headers.Authorization = `Bearer ${token}`;
+      const tok = accessTokenRef.current;
+      if (tok) {
+        headers.Authorization = `Bearer ${tok}`;
       }
 
       const response = await fetch(`/api/tools?${params.toString()}`, {
@@ -284,6 +283,7 @@ function HomePageContent() {
       if (!response.ok) {
         console.error("Failed to fetch tools:", response.statusText);
         setTools([]);
+        setClientToolsCache([]);
         return;
       }
 
@@ -291,27 +291,35 @@ function HomePageContent() {
 
       // Ensure data is an array; normalize description from API/DB (full text)
       if (Array.isArray(data)) {
-        setTools(
-          data.map((raw: Record<string, unknown>) => {
-            const d =
-              typeof raw.description === "string"
-                ? raw.description
-                : raw.description != null
-                  ? String(raw.description)
-                  : typeof raw.Description === "string"
-                    ? raw.Description
-                    : "";
-            return { ...raw, description: d } as Tool;
-          }),
-        );
+        const mapped = data.map((raw: Record<string, unknown>) => {
+          const d =
+            typeof raw.description === "string"
+              ? raw.description
+              : raw.description != null
+                ? String(raw.description)
+                : typeof raw.Description === "string"
+                  ? raw.Description
+                  : "";
+          return { ...raw, description: d } as Tool;
+        });
+        setTools(mapped);
+        setClientToolsCache(mapped);
       } else {
         console.error("Invalid response format:", data);
         setTools([]);
+        setClientToolsCache([]);
       }
     } catch (error) {
       console.error("Error fetching tools:", error);
       setTools([]);
+      setClientToolsCache([]);
     } finally {
+      const elapsed = performance.now() - splashStartedAt;
+      const skipMinSplash =
+        hadCachedTools || hasHomeSplashBeenSeen();
+      if (!skipMinSplash && elapsed < MIN_INITIAL_SPLASH_MS) {
+        await new Promise((r) => setTimeout(r, MIN_INITIAL_SPLASH_MS - elapsed));
+      }
       setLoading(false);
       setRefreshing(false);
     }
@@ -322,7 +330,8 @@ function HomePageContent() {
     sort,
     sortOrder,
     favoritesOnly,
-    // Removed user from dependencies - it causes unnecessary refetches
+    agenciesOnly,
+    downloadableOnly,
     // Search is client-side only (see displayedTools)
   ]);
 
@@ -332,8 +341,10 @@ function HomePageContent() {
 
   return (
     <div className="flex min-h-screen flex-col">
+      {!splashDone && <HomeSplashLoader loading={loading} />}
       <Hero />
       <div className="container mx-auto px-4 py-8">
+        <NewToolsBanner count={toolsAddedTodayCount} />
         <div className="flex flex-col gap-6 lg:flex-row">
           <div className="lg:w-80">
             <FilterSidebar
@@ -345,6 +356,10 @@ function HomePageContent() {
               onRevenueChange={setSelectedRevenue}
               favoritesOnly={favoritesOnly}
               onFavoritesToggle={() => setFavoritesOnly(!favoritesOnly)}
+              agenciesOnly={agenciesOnly}
+              onAgenciesOnlyChange={setAgenciesOnly}
+              downloadableOnly={downloadableOnly}
+              onDownloadableOnlyChange={setDownloadableOnly}
               user={user}
               availableCategories={availableCategories}
             />
@@ -595,21 +610,4 @@ function HomePageContent() {
   );
 }
 
-export default function HomePage() {
-  return (
-    <Suspense
-      fallback={
-        <div className="flex min-h-screen flex-col">
-          <Hero />
-          <div className="container mx-auto px-4 py-8">
-            <div className="flex items-center justify-center py-16">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-            </div>
-          </div>
-        </div>
-      }
-    >
-      <HomePageContent />
-    </Suspense>
-  );
-}
+export default HomePageContent;
