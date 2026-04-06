@@ -444,10 +444,10 @@ export function ToolCard({
 
   const newTodayRibbon = isNewToday ? (
     <div
-      className="pointer-events-none absolute right-0 top-0 z-[15] h-20 w-20 overflow-hidden sm:h-[5.25rem] sm:w-[5.25rem]"
+      className="pointer-events-none absolute left-0 top-0 z-[15] h-20 w-20 overflow-hidden sm:h-[5.25rem] sm:w-[5.25rem]"
       aria-hidden
     >
-      <div className="absolute right-[-40%] top-[22%] w-[160%] rotate-45 bg-gradient-to-r from-emerald-500 to-teal-500 py-1 text-center text-[10px] font-bold uppercase tracking-widest text-white shadow-md">
+      <div className="absolute left-[-40%] top-[22%] w-[160%] -rotate-45 bg-gradient-to-r from-emerald-500 to-teal-500 py-1 text-center text-[10px] font-bold uppercase tracking-widest text-white shadow-md">
         New
       </div>
     </div>

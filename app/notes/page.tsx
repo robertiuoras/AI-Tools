@@ -79,6 +79,7 @@ import {
   htmlToPlainText,
 } from "@/lib/note-html";
 import { NoteColorPicker } from "@/components/NoteColorPicker";
+import { TopLoadingBar } from "@/components/TopLoadingBar";
 import { useToast } from "@/components/ui/toaster";
 import {
   Dialog,
@@ -361,6 +362,8 @@ function getMentionContext(
   const caretRect = caretRange.getBoundingClientRect();
   return { query, replaceRange, caretRect };
 }
+
+const NOTES_PAGES_SESSION_KEY = "notes:pagesSnapshot:v1";
 
 const LS_LAST_PAGE_KEY = "notes:lastPageId";
 const LS_LAST_NOTE_KEY = "notes:lastNoteId";
@@ -716,6 +719,8 @@ export default function NotesPage() {
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [notesLoading, setNotesLoading] = useState(false);
+  const pagesRef = useRef(pages);
+  pagesRef.current = pages;
   const [autoSaveState, setAutoSaveState] = useState<
     "idle" | "saving" | "saved"
   >("idle");
@@ -1046,6 +1051,50 @@ export default function NotesPage() {
     };
   }, [contextMenu.open]);
 
+  const prevTokenForNotesHydrateRef = useRef<string | null>(null);
+  const notesPagesHydrateAttemptedRef = useRef(false);
+
+  useLayoutEffect(() => {
+    if (!token) {
+      prevTokenForNotesHydrateRef.current = null;
+      notesPagesHydrateAttemptedRef.current = false;
+      return;
+    }
+    if (prevTokenForNotesHydrateRef.current !== token) {
+      prevTokenForNotesHydrateRef.current = token;
+      notesPagesHydrateAttemptedRef.current = false;
+    }
+    if (notesPagesHydrateAttemptedRef.current) return;
+    if (pages.length > 0) {
+      notesPagesHydrateAttemptedRef.current = true;
+      return;
+    }
+    try {
+      const raw = sessionStorage.getItem(NOTES_PAGES_SESSION_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as unknown;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const ordered = applySavedOrder(
+            parsed as NotePage[],
+            LS_PAGE_ORDER_KEY,
+          );
+          setPages(ordered);
+          const pageIds = new Set(ordered.map((p) => p.id));
+          const savedPageId = readLs(LS_LAST_PAGE_KEY);
+          const initialPageId =
+            savedPageId && pageIds.has(savedPageId)
+              ? savedPageId
+              : (ordered[0]?.id ?? null);
+          setSelectedPageId(initialPageId);
+          setLoading(false);
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    notesPagesHydrateAttemptedRef.current = true;
+  }, [token, pages.length]);
+
   /** Initial load: pages first (fast shell), then notes; avoids duplicate notes fetch on mount. */
   useEffect(() => {
     if (!token) return;
@@ -1053,7 +1102,7 @@ export default function NotesPage() {
     let alive = true;
 
     (async () => {
-      setLoading(true);
+      if (pagesRef.current.length === 0) setLoading(true);
       try {
         const res = await fetch("/api/notes/pages", {
           headers: authHeaders,
@@ -1062,6 +1111,15 @@ export default function NotesPage() {
         if (!res.ok) throw new Error("pages");
         const pageData = ((await res.json()) as NotePage[]) ?? [];
         if (!alive) return;
+
+        try {
+          sessionStorage.setItem(
+            NOTES_PAGES_SESSION_KEY,
+            JSON.stringify(Array.isArray(pageData) ? pageData : []),
+          );
+        } catch {
+          /* ignore */
+        }
 
         setPages(
           applySavedOrder(
@@ -3210,6 +3268,7 @@ export default function NotesPage() {
 
   return (
     <div className="container mx-auto px-4 py-6">
+      <TopLoadingBar visible={loading && pages.length === 0} />
       <div className="mb-6">
         <h1 className="text-3xl font-bold">Notes</h1>
         <p className="text-muted-foreground">
@@ -3222,10 +3281,42 @@ export default function NotesPage() {
         </p>
       </div>
 
-      {loading ? (
-        <div className="flex items-center gap-2 text-muted-foreground">
-          <Loader2 className="h-5 w-5 shrink-0 animate-spin" aria-hidden />
-          <span>Loading…</span>
+      {loading && pages.length === 0 ? (
+        <div
+          className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,280px)_minmax(0,320px)_minmax(0,1fr)] lg:items-start"
+          aria-busy="true"
+          aria-label="Loading notes"
+        >
+          <div className="min-w-0 space-y-3 rounded-xl border bg-card p-3">
+            <div className="h-3 w-16 animate-pulse rounded bg-muted" />
+            <div className="h-9 w-full animate-pulse rounded-md bg-muted" />
+            <div className="space-y-2 pt-1">
+              {[0, 1, 2, 3, 4].map((i) => (
+                <div
+                  key={i}
+                  className="h-10 animate-pulse rounded-md bg-muted/80"
+                />
+              ))}
+            </div>
+          </div>
+          <div className="min-w-0 space-y-3 rounded-xl border bg-card p-3">
+            <div className="h-3 w-14 animate-pulse rounded bg-muted" />
+            <div className="h-9 w-full animate-pulse rounded-md bg-muted" />
+            <div className="space-y-2 pt-1">
+              {[0, 1, 2, 3].map((i) => (
+                <div
+                  key={i}
+                  className="h-11 animate-pulse rounded-md bg-muted/80"
+                />
+              ))}
+            </div>
+          </div>
+          <div className="min-h-[320px] min-w-0 space-y-3 rounded-xl border bg-card p-4">
+            <div className="h-6 w-3/5 max-w-sm animate-pulse rounded bg-muted" />
+            <div className="h-4 w-full animate-pulse rounded bg-muted/70" />
+            <div className="h-4 w-full animate-pulse rounded bg-muted/70" />
+            <div className="h-4 w-4/5 animate-pulse rounded bg-muted/70" />
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,280px)_minmax(0,320px)_minmax(0,1fr)] lg:items-start">

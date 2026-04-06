@@ -3,6 +3,7 @@
 import {
   useState,
   useEffect,
+  useLayoutEffect,
   useCallback,
   useMemo,
   useRef,
@@ -10,6 +11,7 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import { Hero } from "@/components/Hero";
+import { TopLoadingBar } from "@/components/TopLoadingBar";
 import { ToolCard } from "@/components/ToolCard";
 import { SearchBar } from "@/components/SearchBar";
 import { FilterSidebar } from "@/components/FilterSidebar";
@@ -53,7 +55,24 @@ type SortOption = "alphabetical" | "newest" | "popular" | "traffic" | "traffic-l
 type SortOrder = "asc" | "desc";
 
 const TOOLS_VIEW_STORAGE_KEY = "ai-tools-view";
+const TOOLS_LIST_CACHE_PREFIX = "ai-tools-list:v1";
 const REFRESH_ALL_STEPS = 50;
+
+function toolsListCacheKey(sort: SortOption, order: SortOrder) {
+  return `${TOOLS_LIST_CACHE_PREFIX}:${sort}:${order}`;
+}
+
+function normalizeToolFromApi(raw: Record<string, unknown>): Tool {
+  const d =
+    typeof raw.description === "string"
+      ? raw.description
+      : raw.description != null
+        ? String(raw.description)
+        : typeof raw.Description === "string"
+          ? raw.Description
+          : "";
+  return { ...raw, description: d } as Tool;
+}
 
 /** Match Tailwind breakpoints for tool grid columns (sm/lg/xl). */
 function useToolGridColumnCount() {
@@ -99,6 +118,35 @@ function HomePageContent() {
   const toolsRef = useRef<Tool[]>([]);
   toolsRef.current = tools;
   const refreshModalBlockingRef = useRef(false);
+  const prevToolsCacheKeyRef = useRef<string | null>(null);
+
+  useLayoutEffect(() => {
+    const key = toolsListCacheKey(sort, sortOrder);
+    try {
+      const stored = localStorage.getItem(key);
+      if (stored) {
+        const data = JSON.parse(stored) as unknown;
+        if (Array.isArray(data) && data.length > 0) {
+          setTools(
+            data.map((row) => normalizeToolFromApi(row as Record<string, unknown>)),
+          );
+          setLoading(false);
+          prevToolsCacheKeyRef.current = key;
+          return;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    if (
+      prevToolsCacheKeyRef.current !== null &&
+      prevToolsCacheKeyRef.current !== key
+    ) {
+      setTools([]);
+      setLoading(true);
+    }
+    prevToolsCacheKeyRef.current = key;
+  }, [sort, sortOrder]);
 
   useEffect(() => {
     try {
@@ -370,19 +418,15 @@ function HomePageContent() {
 
       // Ensure data is an array; normalize description from API/DB (full text)
       if (Array.isArray(data)) {
-        setTools(
-          data.map((raw: Record<string, unknown>) => {
-            const d =
-              typeof raw.description === "string"
-                ? raw.description
-                : raw.description != null
-                  ? String(raw.description)
-                  : typeof raw.Description === "string"
-                    ? raw.Description
-                    : "";
-            return { ...raw, description: d } as Tool;
-          }),
-        );
+        setTools(data.map((raw) => normalizeToolFromApi(raw)));
+        try {
+          localStorage.setItem(
+            toolsListCacheKey(sort, sortOrder),
+            JSON.stringify(data),
+          );
+        } catch {
+          /* ignore */
+        }
       } else {
         console.error("Invalid response format:", data);
         setTools([]);
@@ -425,6 +469,7 @@ function HomePageContent() {
 
   return (
     <div className="flex min-h-screen flex-col">
+      <TopLoadingBar visible={loading && tools.length === 0} />
       <Hero toolsAddedTodayCount={toolsAddedTodayCount} />
       <div className="container mx-auto px-4 py-8">
         <div className="flex flex-col gap-6 lg:flex-row">
