@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { createClient } from "@supabase/supabase-js";
+import { logOpenAIUsage } from "@/lib/openai-usage";
 
 export const dynamic = "force-dynamic";
 
@@ -151,6 +152,7 @@ Return JSON only:
         }
 
         const data = await response.json();
+        if (data.usage) logOpenAIUsage(data.model ?? 'gpt-4o-mini', 'add_missing_ratings', data.usage);
         const content = JSON.parse(data.choices[0].message.content);
         const rating = content.rating;
 

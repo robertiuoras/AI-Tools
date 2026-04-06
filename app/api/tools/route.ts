@@ -2,22 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase";
 import { toolSchema } from "@/lib/schemas";
-import { toolCategoryList } from "@/lib/tool-categories";
+import { toolCategoryList, toolIsAgency } from "@/lib/tool-categories";
 import { createClient } from "@supabase/supabase-js";
 import {
   getLocalMonthStartIso,
   popularityScore,
 } from "@/lib/tool-popularity";
-import { toolHasDownloadableApp, toolIsAgency } from "@/lib/tool-flags";
-
-/** Logged-in users see favorited tools first; order within each group is unchanged. */
-function sortWithFavoritesFirst<T extends { userFavorited?: boolean }>(
-  items: T[],
-): T[] {
-  const fav = items.filter((x) => x.userFavorited);
-  const rest = items.filter((x) => !x.userFavorited);
-  return [...fav, ...rest];
-}
+import { toolHasDownloadableApp } from "@/lib/tool-flags";
 
 function jsonbCountsToMap(obj: unknown): Map<string, number> {
   const m = new Map<string, number>();
@@ -30,7 +21,7 @@ function jsonbCountsToMap(obj: unknown): Map<string, number> {
   return m;
 }
 
-/** One DB round-trip for all tools’ monthly vote totals (see supabase-batch-vote-counts.sql). */
+/** One DB round-trip for all tools’ monthly vote totals (see supabase/sql/supabase-batch-vote-counts.sql). */
 async function fetchMonthlyVoteCountMaps(
   admin: any,
   toolIds: string[],
@@ -228,6 +219,10 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    if (agenciesOnly) {
+      filteredTools = filteredTools.filter((tool: any) => toolIsAgency(tool));
+    }
+
     if (filteredTools.length === 0) {
       return NextResponse.json([]);
     }
@@ -316,7 +311,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    return NextResponse.json(sortWithFavoritesFirst(processedTools));
+    return NextResponse.json(processedTools);
   } catch (error) {
     console.error("❌ Error fetching tools:", error);
     console.error(
@@ -354,6 +349,7 @@ export async function POST(request: NextRequest) {
       url: validatedData.url,
       category: validatedData.category,
       categories: validatedData.categories,
+      isAgency: validatedData.isAgency,
     };
 
     // Handle optional fields - convert empty strings to null
@@ -465,7 +461,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         ...tr,
-        isAgency: toolIsAgency(tr as { isAgency?: unknown; is_agency?: unknown }),
+        isAgency: toolIsAgency(tr as { isAgency?: boolean | null; is_agency?: boolean | null }),
         hasDownloadableApp: toolHasDownloadableApp(
           tr as { hasDownloadableApp?: unknown; has_downloadable_app?: unknown },
         ),

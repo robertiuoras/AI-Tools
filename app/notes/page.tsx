@@ -86,6 +86,7 @@ import {
   htmlToPlainText,
 } from "@/lib/note-html";
 import { NoteColorPicker } from "@/components/NoteColorPicker";
+import { TopLoadingBar } from "@/components/TopLoadingBar";
 import { useToast } from "@/components/ui/toaster";
 import {
   Dialog,
@@ -564,6 +565,8 @@ function getMentionContext(
   return { query, replaceRange, caretRect };
 }
 
+const NOTES_PAGES_SESSION_KEY = "notes:pagesSnapshot:v1";
+
 const LS_LAST_PAGE_KEY = "notes:lastPageId";
 const LS_LAST_NOTE_KEY = "notes:lastNoteId";
 const LS_PAGE_ORDER_KEY = "notes:pageOrder";
@@ -931,7 +934,10 @@ export default function NotesPage() {
   const [notes, setNotes] = useState<Note[]>([]);
   const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
   const [notesLoading, setNotesLoading] = useState(true);
+  const pagesRef = useRef(pages);
+  pagesRef.current = pages;
   const [autoSaveState, setAutoSaveState] = useState<
     "idle" | "saving" | "saved"
   >("idle");
@@ -3736,6 +3742,7 @@ export default function NotesPage() {
 
   return (
     <div className="container mx-auto px-4 py-6">
+      <TopLoadingBar visible={loading && pages.length === 0} />
       <div className="mb-6">
         <h1 className="text-3xl font-bold">Notes</h1>
         <p className="text-muted-foreground">

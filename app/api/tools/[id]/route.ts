@@ -62,6 +62,7 @@ export async function PUT(
       url: validatedData.url,
       category: validatedData.category,
       categories: validatedData.categories,
+      isAgency: validatedData.isAgency,
       logoUrl: validatedData.logoUrl || null,
       tags: validatedData.tags || null,
       traffic: validatedData.traffic || null,

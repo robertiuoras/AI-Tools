@@ -10,6 +10,7 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import { Hero } from "@/components/Hero";
+import { TopLoadingBar } from "@/components/TopLoadingBar";
 import { ToolCard } from "@/components/ToolCard";
 import { SearchBar } from "@/components/SearchBar";
 import { FilterSidebar } from "@/components/FilterSidebar";
@@ -22,10 +23,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { GraduationCap, Heart, Info, LayoutGrid, List } from "lucide-react";
+import {
+  GraduationCap,
+  Info,
+  LayoutGrid,
+  List,
+  RefreshCw,
+} from "lucide-react";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -36,8 +44,8 @@ import type { ToolCardLayout } from "@/components/ToolCard";
 import { supabase } from "@/lib/supabase";
 import { useAuthSession } from "@/components/AuthSessionProvider";
 import type { Tool } from "@/lib/supabase";
-import { toolCategoryList } from "@/lib/tool-categories";
-import { categories as defaultCategories } from "@/lib/schemas";
+import { toolCategoryList, toolIsAgency } from "@/lib/tool-categories";
+import { AGENCY_CATEGORY_LABEL, categories as defaultCategories, sortToolCategoryLabelsForDisplay } from "@/lib/schemas";
 import { NewToolsBanner } from "@/components/NewToolsBanner";
 import { HomeSplashLoader } from "@/components/HomeSplashLoader";
 import { useToolsCatalog } from "@/components/ToolsCatalogProvider";
@@ -56,6 +64,24 @@ type SortOption = "alphabetical" | "newest" | "popular" | "traffic" | "traffic-l
 type SortOrder = "asc" | "desc";
 
 const TOOLS_VIEW_STORAGE_KEY = "ai-tools-view";
+const TOOLS_LIST_CACHE_PREFIX = "ai-tools-list:v1";
+const REFRESH_ALL_STEPS = 50;
+
+function toolsListCacheKey(sort: SortOption, order: SortOrder) {
+  return `${TOOLS_LIST_CACHE_PREFIX}:${sort}:${order}`;
+}
+
+function normalizeToolFromApi(raw: Record<string, unknown>): Tool {
+  const d =
+    typeof raw.description === "string"
+      ? raw.description
+      : raw.description != null
+        ? String(raw.description)
+        : typeof raw.Description === "string"
+          ? raw.Description
+          : "";
+  return { ...raw, description: d } as Tool;
+}
 
 /** Match Tailwind breakpoints for tool grid columns (sm/lg/xl). */
 function useToolGridColumnCount() {
@@ -95,6 +121,9 @@ function HomePageContent() {
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [agenciesOnly, setAgenciesOnly] = useState(false);
   const [downloadableOnly, setDownloadableOnly] = useState(false);
+  const [refreshAllOpen, setRefreshAllOpen] = useState(false);
+  const [refreshAllStep, setRefreshAllStep] = useState({ step: 0, total: 50 });
+  const refreshModalBlockingRef = useRef(false);
   const { user, isAdmin, accessToken } = useAuthSession();
   const accessTokenRef = useRef(accessToken);
   accessTokenRef.current = accessToken;
@@ -147,23 +176,75 @@ function HomePageContent() {
   const searchSuggestions = useMemo(() => {
     if (!tools || tools.length === 0) return [];
     const names = tools.map((t) => t.name);
-    const cats = tools.flatMap((t) => toolCategoryList(t));
+    const cats = tools
+      .flatMap((t) => toolCategoryList(t))
+      .filter((c) => c !== AGENCY_CATEGORY_LABEL);
     return Array.from(new Set([...names, ...cats]));
   }, [tools]);
 
+  /** Union of default + every category on any loaded tool (full list; filters applied client-side). */
   const availableCategories = useMemo(() => {
     const seen = new Set<string>();
-    for (const c of defaultCategories) seen.add(c);
+    for (const c of defaultCategories) {
+      if (c !== AGENCY_CATEGORY_LABEL) seen.add(c);
+    }
     for (const t of tools) {
       for (const c of toolCategoryList(t)) {
-        if (c?.trim()) seen.add(c.trim());
+        const x = c?.trim();
+        if (x && x !== AGENCY_CATEGORY_LABEL) seen.add(x);
       }
     }
     for (const c of selectedCategories) {
-      if (c?.trim()) seen.add(c.trim());
+      const x = c?.trim();
+      if (x && x !== AGENCY_CATEGORY_LABEL) seen.add(x);
     }
-    return Array.from(seen).sort((a, b) => a.localeCompare(b));
+    return sortToolCategoryLabelsForDisplay(Array.from(seen));
   }, [tools, selectedCategories]);
+
+  useEffect(() => {
+    setSelectedCategories((prev) =>
+      prev.filter((c) => c !== AGENCY_CATEGORY_LABEL),
+    );
+  }, []);
+
+  /** Sidebar filters (client-side so category checklist stays complete while filtering). */
+  const sidebarFilteredTools = useMemo(() => {
+    let list = tools;
+    if (selectedCategories.length > 0) {
+      const needles = new Set(
+        selectedCategories.map((c) => c.toLowerCase()),
+      );
+      list = list.filter((t) =>
+        toolCategoryList(t).some((c) => needles.has(c.toLowerCase())),
+      );
+    }
+    if (selectedTraffic.length > 0) {
+      list = list.filter(
+        (t) =>
+          t.traffic != null && selectedTraffic.includes(t.traffic),
+      );
+    }
+    if (selectedRevenue.length > 0) {
+      list = list.filter(
+        (t) =>
+          t.revenue != null && selectedRevenue.includes(t.revenue),
+      );
+    }
+    if (favoritesOnly) {
+      list = list.filter((t) => t.userFavorited === true);
+    }
+    if (agenciesOnly) {
+      list = list.filter((t) => toolIsAgency(t));
+    }
+    return list;
+  }, [
+    tools,
+    selectedCategories,
+    selectedTraffic,
+    selectedRevenue,
+    favoritesOnly,
+    agenciesOnly,
+  ]);
 
   /** Search filters in the browser — no network per keystroke (fast vs full refetch + loading). */
   const toolsAddedTodayCount = useMemo(
@@ -174,8 +255,8 @@ function HomePageContent() {
   const displayedTools = useMemo(() => {
     const raw = search.trim();
     const q = raw.toLowerCase();
-    if (!q) return tools;
-    const matches = tools.filter(
+    if (!q) return sidebarFilteredTools;
+    const matches = sidebarFilteredTools.filter(
       (t) =>
         t.name?.toLowerCase().includes(q) ||
         t.description?.toLowerCase().includes(q) ||
@@ -188,7 +269,7 @@ function HomePageContent() {
     );
     if (exactName.length === 1) return exactName;
     return matches;
-  }, [tools, search]);
+  }, [sidebarFilteredTools, search]);
 
   // Handle OAuth callback if tokens are in the hash
   useEffect(() => {
@@ -259,9 +340,8 @@ function HomePageContent() {
     else setLoading(true);
     try {
       const params = new URLSearchParams();
-      selectedCategories.forEach((c) => params.append("category", c));
-      selectedTraffic.forEach((t) => params.append("traffic", t));
-      selectedRevenue.forEach((r) => params.append("revenue", r));
+      // Category / traffic / revenue / agencies / favorites: applied client-side so the
+      // filter list always reflects every label present in the loaded directory.
       params.append("sort", sort);
       params.append("order", sortOrder);
       if (favoritesOnly) params.append("favoritesOnly", "true");
@@ -339,6 +419,26 @@ function HomePageContent() {
     void fetchTools();
   }, [fetchTools]);
 
+  const handleRefreshAll = useCallback(async () => {
+    refreshModalBlockingRef.current = true;
+    setRefreshAllOpen(true);
+    setRefreshAllStep({ step: 0, total: 50 });
+    let step = 0;
+    const intervalId = window.setInterval(() => {
+      step = Math.min(step + 1, 49);
+      setRefreshAllStep({ step, total: 50 });
+    }, 40);
+    try {
+      await fetchTools();
+    } finally {
+      window.clearInterval(intervalId);
+      setRefreshAllStep({ step: 50, total: 50 });
+      await new Promise((r) => window.setTimeout(r, 320));
+      refreshModalBlockingRef.current = false;
+      setRefreshAllOpen(false);
+    }
+  }, [fetchTools]);
+
   return (
     <div className="flex min-h-screen flex-col">
       {!splashDone && <HomeSplashLoader loading={loading} />}
@@ -357,7 +457,7 @@ function HomePageContent() {
               favoritesOnly={favoritesOnly}
               onFavoritesToggle={() => setFavoritesOnly(!favoritesOnly)}
               agenciesOnly={agenciesOnly}
-              onAgenciesOnlyChange={setAgenciesOnly}
+              onAgenciesToggle={() => setAgenciesOnly(!agenciesOnly)}
               downloadableOnly={downloadableOnly}
               onDownloadableOnlyChange={setDownloadableOnly}
               user={user}
@@ -383,6 +483,20 @@ function HomePageContent() {
                 ) : null}
               </div>
               <UpvoteTimer />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 shrink-0 gap-1.5"
+                disabled={refreshing || refreshAllOpen}
+                onClick={() => void handleRefreshAll()}
+                title="Reload tools from the server"
+              >
+                <RefreshCw
+                  className={`h-3.5 w-3.5 ${refreshing || refreshAllOpen ? "animate-spin" : ""}`}
+                />
+                Refresh all
+              </Button>
               <div className="flex flex-wrap items-center gap-2">
                 <div
                   className="flex rounded-md border border-border bg-muted/30 p-0.5"
@@ -526,7 +640,14 @@ function HomePageContent() {
               ) : tools.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-16 text-center">
                   <p className="text-lg text-muted-foreground">
-                    No tools found. Try adjusting your filters or search.
+                    No tools found. Try again later or refresh the list.
+                  </p>
+                </div>
+              ) : sidebarFilteredTools.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 text-center">
+                  <p className="text-lg text-muted-foreground">
+                    No tools match your current filters. Adjust or clear filters
+                    in the sidebar.
                   </p>
                 </div>
               ) : displayedTools.length === 0 ? (
@@ -541,8 +662,9 @@ function HomePageContent() {
                   <p className="text-sm text-muted-foreground">
                     Showing {displayedTools.length} tool
                     {displayedTools.length !== 1 ? "s" : ""}
-                    {search.trim() && tools.length !== displayedTools.length
-                      ? ` (${tools.length} total with current filters)`
+                    {search.trim() &&
+                    sidebarFilteredTools.length !== displayedTools.length
+                      ? ` (${sidebarFilteredTools.length} match current filters)`
                       : ""}
                   </p>
                   {(() => {
@@ -605,6 +727,47 @@ function HomePageContent() {
           </Button>
         </div>
       )}
+
+      <Dialog
+        open={refreshAllOpen}
+        onOpenChange={(open) => {
+          if (!open && refreshModalBlockingRef.current) return;
+          setRefreshAllOpen(open);
+        }}
+      >
+        <DialogContent className="sm:max-w-md [&>button]:hidden">
+          <DialogHeader>
+            <DialogTitle>Refreshing tools</DialogTitle>
+            <DialogDescription>
+              Reloading the full list from the server. This may take a few
+              seconds on slow connections.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 pt-2">
+            <p
+              className="text-center text-2xl font-semibold tabular-nums tracking-tight"
+              aria-live="polite"
+            >
+              {refreshAllStep.step}/{refreshAllStep.total}
+            </p>
+            <div
+              className="h-2.5 w-full overflow-hidden rounded-full bg-muted"
+              role="progressbar"
+              aria-valuenow={refreshAllStep.step}
+              aria-valuemin={0}
+              aria-valuemax={refreshAllStep.total}
+            >
+              <div
+                className="h-full rounded-full bg-primary transition-[width] duration-150 ease-out"
+                style={{
+                  width: `${(refreshAllStep.step / refreshAllStep.total) * 100}%`,
+                }}
+              />
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <SiteTour adminReplayNonce={tourReplayNonce} />
     </div>
   );

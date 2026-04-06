@@ -8,6 +8,8 @@ export const toolCategoryBadgeClassName = (category: string): string => {
     'AI Agents': 'bg-violet-500/10 text-violet-700 dark:text-violet-400 border-violet-500/25',
     'AI Automation':
       'bg-purple-500/10 text-purple-700 dark:text-purple-400 border-purple-500/25',
+    Agencies:
+      'bg-violet-600/10 text-violet-800 dark:text-violet-300 border-violet-500/30',
     Analytics:
       'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/25',
     'Code Assistants':
@@ -16,8 +18,12 @@ export const toolCategoryBadgeClassName = (category: string): string => {
       'bg-sky-500/10 text-sky-700 dark:text-sky-400 border-sky-500/25',
     Design: 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/25',
     Education: 'bg-teal-500/10 text-teal-700 dark:text-teal-400 border-teal-500/25',
+    Healthcare:
+      'bg-red-500/8 text-red-900 dark:text-red-300 border-red-500/25',
     'Image Generation':
       'bg-pink-500/10 text-pink-700 dark:text-pink-400 border-pink-500/25',
+    Insurance:
+      'bg-cyan-950/20 text-cyan-900 dark:text-cyan-300 border-cyan-600/35',
     Job: 'bg-stone-500/10 text-stone-800 dark:text-stone-300 border-stone-500/25',
     Language:
       'bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-400 border-fuchsia-500/25',

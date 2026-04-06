@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { enforceApiRateLimit } from '@/lib/api-rate-limit'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET(request: NextRequest) {
   try {
+    const limited = enforceApiRateLimit(request, 'openai_test')
+    if (limited) return limited
+
     const openaiApiKey = process.env.OPENAI_API_KEY || process.env.NEXT_PUBLIC_OPENAI_API_KEY
 
     if (!openaiApiKey) {

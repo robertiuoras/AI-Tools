@@ -4,12 +4,15 @@ import { z } from 'zod'
 export const categories = [
   'AI Agents',
   'AI Automation',
+  'Agencies',
   'Analytics',
   'Code Assistants',
   'Customer Support',
   'Design',
   'Education',
+  'Healthcare',
   'Image Generation',
+  'Insurance',
   'Job',
   'Language',
   'Legal',
@@ -25,12 +28,27 @@ export const categories = [
   'Writing',
 ] as const
 
+/** Canonical label for service agencies (DB + AI). On the home page this is a card ribbon, not a category filter. */
+export const AGENCY_CATEGORY_LABEL = 'Agencies' as const
+
 export type Category = typeof categories[number]
 
 const categorySet = new Set<string>(categories)
 
 /** Max categories per tool (1–3; primary = first). */
 export const MAX_TOOL_CATEGORIES = 3
+
+/** Sort labels for filter UIs: known categories follow `categories` order; unknown/custom tail, A–Z. */
+export function sortToolCategoryLabelsForDisplay(labels: string[]): string[] {
+  const known = labels.filter((c) => categorySet.has(c))
+  const unknown = labels.filter((c) => !categorySet.has(c))
+  const sortedKnown = [...known].sort(
+    (a, b) =>
+      categories.indexOf(a as Category) - categories.indexOf(b as Category),
+  )
+  const sortedUnknown = [...unknown].sort((a, b) => a.localeCompare(b))
+  return [...sortedKnown, ...sortedUnknown]
+}
 
 /**
  * Map legacy tool category strings (before list renames) to current `categories` values.
@@ -69,6 +87,18 @@ export const LEGACY_TOOL_CATEGORY_ALIASES: Record<string, Category> = {
   Graphics: 'Design',
   Elearning: 'Education',
   'E-learning': 'Education',
+  Health: 'Healthcare',
+  health: 'Healthcare',
+  Healthcare: 'Healthcare',
+  healthcare: 'Healthcare',
+  Medical: 'Healthcare',
+  medical: 'Healthcare',
+  Healthtech: 'Healthcare',
+  healthtech: 'Healthcare',
+  Telehealth: 'Healthcare',
+  telehealth: 'Healthcare',
+  Clinical: 'Healthcare',
+  HIPAA: 'Healthcare',
   Photo: 'Image Generation',
   Art: 'Image Generation',
   Career: 'Job',
@@ -77,9 +107,39 @@ export const LEGACY_TOOL_CATEGORY_ALIASES: Record<string, Category> = {
   Translation: 'Language',
   NLP: 'Language',
   Legaltech: 'Legal',
+  Insurance: 'Insurance',
+  insurance: 'Insurance',
+  Insurtech: 'Insurance',
+  insurtech: 'Insurance',
+  Brokerage: 'Insurance',
+  brokerage: 'Insurance',
+  Underwriting: 'Insurance',
   Ads: 'Marketing',
   SEO: 'Marketing',
   Social: 'Marketing',
+  /** Service businesses / shops — not the same as productized “Marketing” SaaS */
+  Agency: 'Agencies',
+  agency: 'Agencies',
+  Agencies: 'Agencies',
+  'Marketing Agency': 'Agencies',
+  'Digital Agency': 'Agencies',
+  'Creative Agency': 'Agencies',
+  'Advertising Agency': 'Agencies',
+  'Ad Agency': 'Agencies',
+  'digital agency': 'Agencies',
+  'marketing agency': 'Agencies',
+  'creative agency': 'Agencies',
+  'advertising agency': 'Agencies',
+  'design agency': 'Agencies',
+  'growth agency': 'Agencies',
+  'media agency': 'Agencies',
+  'brand agency': 'Agencies',
+  'PR Agency': 'Agencies',
+  'pr agency': 'Agencies',
+  'Web Agency': 'Agencies',
+  'web agency': 'Agencies',
+  'Dev Agency': 'Agencies',
+  'dev agency': 'Agencies',
   Music: 'Music & Audio',
   Sound: 'Music & Audio',
   Podcast: 'Music & Audio',
@@ -210,6 +270,204 @@ function canonicalCaseIfMatches(s: string): string {
 }
 
 /**
+ * Vertical B2B / insurtech product language. Alone it blocks adding "Agencies" via corpus
+ * augmentation — unless implementation- or marketing-agency signals also match.
+ */
+export const CORPUS_VERTICAL_B2B_BLOCKS_AGENCIES =
+  /\b(insurtech|insurance tech|for insurers?|for brokers?|for brokerages?|insurance brokers?|insurance brokerages?|brokerage software|claims software|underwriting software|policy admin|sold to (insurers?|brokers?))\b/i
+
+/**
+ * First-party copy that the **vendor is** a marketing/creative services agency.
+ * Intentionally narrow — phrases like “marketing agency” in testimonials or “for agencies” ICP copy must not match.
+ */
+export const CORPUS_VENDOR_IS_SERVICES_AGENCY = new RegExp(
+  [
+    String.raw`\bwe\s+'?re\s+(a\s+)?(digital|creative|marketing|advertising|design|brand|full[- ]service)\s+agenc(y|ies)\b`,
+    String.raw`\bwe\s+are\s+(a\s+)?(digital|creative|marketing|advertising|design|brand|full[- ]service)\s+agenc(y|ies)\b`,
+    String.raw`\bour\s+(digital|creative|marketing|advertising|design)\s+agenc(y|ies)\b`,
+    String.raw`\b(full[- ]service|boutique)\s+agenc(y|ies)\b`,
+    String.raw`\bagency\s+(specializing|focused|based)\s+in\b`,
+  ].join('|'),
+  'i',
+)
+
+/**
+ * Self-serve software / SaaS product signals. Sites like page builders match here; do not infer Agencies from weak CTAs alone.
+ */
+export const CORPUS_SELF_SERVE_SOFTWARE_PRODUCT = new RegExp(
+  [
+    String.raw`\b(create\s+your\s+)?free\s+account\b`,
+    String.raw`\bno\s+credit\s+card\b`,
+    String.raw`\bfree\s+to\s+use\b`,
+    String.raw`\bit'?s\s+not\s+a\s+trial\b`,
+    String.raw`\bwebsite[- ]building\s+(tool|software)\b`,
+    String.raw`\bpage\s+building\s+software\b`,
+    String.raw`\bpage[- ]building\s+software\b`,
+    String.raw`\blanding\s+page\s+(builder|software|tool)\b`,
+    String.raw`\bdrag[- ]and[- ]drop\b`,
+    String.raw`\bwordpress\s+alternative\b`,
+    String.raw`\ball[- ]in[- ]one\s+(builder|platform|software|tool)\b`,
+    String.raw`\b(builder|editor)\s+instantly\s+responds\b`,
+    String.raw`\bsoftware\s+that\s+helps\s+you\s+build\b`,
+    String.raw`\bsaas\b`,
+    String.raw`\bcloud[- ]based\s+software\b`,
+  ].join('|'),
+  'i',
+)
+
+/**
+ * Typical app chrome: log in + sign up. Alone it matches many brochure sites, so pair with {@link CORPUS_SAAS_PRODUCT_CORROBORATION}.
+ */
+export const CORPUS_SAAS_AUTH_NAV = new RegExp(
+  [
+    String.raw`\blog\s+in\b`,
+    String.raw`\blogin\b`,
+    String.raw`\bsign\s+in\b`,
+    String.raw`\bsign\s+up\b`,
+    String.raw`\bregister\b`,
+    String.raw`\bcreate\s+an?\s+account\b`,
+  ].join('|'),
+  'i',
+)
+
+/**
+ * Second signal that the product is software (not just a marketing page with a lone “Sign up” for email).
+ */
+export const CORPUS_SAAS_PRODUCT_CORROBORATION = new RegExp(
+  [
+    String.raw`\b(api\s+keys?|rest\s+api|graphql|webhooks?|openapi|sdk)\b`,
+    String.raw`\bfree\s+tier\b`,
+    String.raw`\b(pro|business|enterprise|starter)\s+plan\b`,
+    String.raw`\bper\s+(seat|user|member|month)\b`,
+    String.raw`\bmonthly\s+billing\b`,
+    String.raw`\bsubscription\b`,
+    String.raw`\bzapier\b`,
+    String.raw`\bintegrations?\s+(page|gallery|directory)\b`,
+    String.raw`\bchangelog\b`,
+    String.raw`\broadmap\b`,
+    String.raw`\bworkspace\b`,
+    String.raw`\bteam\s+members?\b`,
+    String.raw`\bmulti[- ]tenant\b`,
+    String.raw`\bssl\s+certificate\b`,
+    String.raw`\bconnect\s+your\s+domain\b`,
+  ].join('|'),
+  'i',
+)
+
+/** Newsletter / lead magnet — if this dominates, do not treat “sign up” as SaaS auth. */
+export const CORPUS_NEWSLETTER_SIGNUP_ONLY = new RegExp(
+  String.raw`\bsign\s+up\s+for\s+(our\s+|the\s+)?(newsletter|email\s+updates?|weekly\s+digest)\b`,
+  'i',
+)
+
+/**
+ * Strong self-serve product copy **or** log in / sign up **plus** verification (technical/product surface **or** dual auth + pricing).
+ * Auth nav alone is ignored (brochure + newsletter CTAs); “sign up for newsletter” without **Log in** does not count.
+ */
+export function corpusMatchesSelfServeSoftwareSignals(corpus: string): boolean {
+  if (!corpus?.trim()) return false
+  if (CORPUS_SELF_SERVE_SOFTWARE_PRODUCT.test(corpus)) return true
+  if (!CORPUS_SAAS_AUTH_NAV.test(corpus)) return false
+
+  const hasLoginSurface = /\b(log\s+in|login|sign\s+in)\b/i.test(corpus)
+  const hasSignUpSurface = /\bsign\s+up\b/i.test(corpus)
+  const dualAuthChrome = hasLoginSurface && hasSignUpSurface
+  const pricingSurface = /\b(pricing|\/pricing|choose\s+(a\s+)?plan)\b/i.test(
+    corpus,
+  )
+
+  const corroborated =
+    CORPUS_SAAS_PRODUCT_CORROBORATION.test(corpus) ||
+    (dualAuthChrome && pricingSurface)
+
+  if (!corroborated) return false
+
+  if (CORPUS_NEWSLETTER_SIGNUP_ONLY.test(corpus) && !hasLoginSurface) {
+    return false
+  }
+  return true
+}
+
+/**
+ * Copy positions **agencies** as customers / ICP (“built for agencies”), not “we are an agency”.
+ */
+export const CORPUS_AGENCIES_AS_TARGET_CUSTOMER = new RegExp(
+  [
+    String.raw`\b(built|made|designed)\s+for\s+[^.]{0,160}?\bagencies\b`,
+    String.raw`\bfor\s+agencies\s+(&|and)\s+businesses\b`,
+    String.raw`\bagencies\s+(&|and)\s+businesses\b`,
+    String.raw`\b(secret\s+weapon|perfect\s+for)\s+[^.]{0,80}?\bagencies\b`,
+  ].join('|'),
+  'i',
+)
+
+/**
+ * Bespoke implementation / integration delivery (shops that ship custom work into client systems).
+ * Excludes generic SaaS CTAs (“book a demo”, “schedule a call”) that match almost every product site.
+ */
+export const CORPUS_IMPLEMENTATION_BESPOKE_HINT = new RegExp(
+  [
+    String.raw`\bintegrat(e|ion)\s+with\s+your\s+(existing\s+)?`,
+    String.raw`\b(live|go\s+live)\s+in\s+\d+\s*(days?|weeks?|months?)\b`,
+    String.raw`\b\d+\s+days?\s+or\s+less\b`,
+    String.raw`\b(system|solution)\s+is\s+live\s+in\b`,
+    String.raw`\bconfigure(d)?\s+to\s+your\s+(standards?|workflows?|needs?)\b`,
+    String.raw`\btemplates?\s+to\s+your\s+standards?\b`,
+    String.raw`\bphased\s+(rollout|deployment|launch)\b`,
+    String.raw`\b(custom|bespoke)\s+(implementation|build|deployment|integration|solution)\b`,
+    String.raw`\bimplementation\s+(partner|services?|team)\b`,
+    String.raw`\b(done[- ]for[- ]you|white[- ]glove)\s+(setup|onboarding|implementation)\b`,
+    String.raw`\b(free\s+)?diagnostic\b`,
+  ].join('|'),
+  'i',
+)
+
+/** @deprecated Use {@link CORPUS_VENDOR_IS_SERVICES_AGENCY} — old regex matched testimonial “marketing agency” noise. */
+export const CORPUS_SERVICES_AGENCY_HINT = CORPUS_VENDOR_IS_SERVICES_AGENCY
+
+/** @deprecated Use {@link CORPUS_IMPLEMENTATION_BESPOKE_HINT} — old regex matched “demo” / “we build” product marketing. */
+export const CORPUS_IMPLEMENTATION_SERVICES_HINT = CORPUS_IMPLEMENTATION_BESPOKE_HINT
+
+/** Map free-text / AI labels that clearly mean a services agency → canonical Agencies. */
+function inferAgenciesCategory(segment: string): Category | null {
+  const n = segment.trim().toLowerCase()
+  if (!n) return null
+  // Vertical B2B / insurtech — not “Agencies” (marketing shops)
+  if (CORPUS_VERTICAL_B2B_BLOCKS_AGENCIES.test(n)) {
+    return null
+  }
+  if (n === 'agency' || n === 'agencies') return 'Agencies'
+  if (
+    /\b(marketing|digital|creative|advertising|design|brand|growth|media|seo|web|development|dev|content|social|influencer|performance|ppc|paid media|ux|ui)\s+agenc(y|ies)\b/.test(
+      n,
+    )
+  ) {
+    return 'Agencies'
+  }
+  if (
+    /\bagenc(y|ies)\b/.test(n) &&
+    /\b(studio|consultancy|consulting|consultants?|clients?|retainers?)\b/.test(n)
+  ) {
+    return 'Agencies'
+  }
+  // Other “X agency” strings (e.g. PR agency, dev agency) — exclude non–marketing-agency meanings
+  if (/\bagenc(y|ies)\b/.test(n)) {
+    if (
+      /\b(insurance|insurtech|travel|recruitment|talent|employment|staffing|real estate|executive search|news|government|regulatory)\s+agenc/i.test(
+        n,
+      )
+    ) {
+      return null
+    }
+    if (/\b(software|saas|platform|tool|app)\s+for\s+agencies\b/i.test(n)) {
+      return null
+    }
+    return 'Agencies'
+  }
+  return null
+}
+
+/**
  * Collapse bad data (e.g. "Video Editing|AI Automation|SaaS") to one known category.
  * Picks the first segment that matches our category list; otherwise legacy alias or Other.
  */
@@ -218,10 +476,11 @@ export function normalizeToolCategory(raw: string | null | undefined): string {
   const s = raw.trim()
   if (!s) return 'Other'
   if (categorySet.has(s)) return s
-  const lower = s.toLowerCase()
   const parts = s.split('|').map((p) => p.trim()).filter(Boolean)
   for (const p of parts) {
     if (categorySet.has(p)) return p
+    const agency = inferAgenciesCategory(p)
+    if (agency) return agency
     const pl = p.toLowerCase()
     const legacy = LEGACY_TOOL_CATEGORY_ALIASES[p] ?? LEGACY_TOOL_CATEGORY_ALIASES[pl]
     if (legacy && categorySet.has(legacy)) return legacy
@@ -289,6 +548,126 @@ export function finalizeVideoAiCategories(raw: string[]): string[] {
   return finalizeToolCategoriesList(mapped)
 }
 
+/**
+ * Agencies use a dedicated `isAgency` flag in the DB — they must not consume a category slot.
+ * Call this before persisting: returns up to {@link MAX_TOOL_CATEGORIES} non-agency labels.
+ */
+export function stripAgencyFromCategoriesForStorage(
+  categoriesIn: string[],
+): { categories: string[]; isAgency: boolean } {
+  const normalized = categoriesIn
+    .map((c) => normalizeToolCategory(String(c)))
+    .filter(Boolean)
+  const finalized = finalizeToolCategoriesList(normalized)
+  const isAgency = finalized.includes(AGENCY_CATEGORY_LABEL)
+  const rest = finalized.filter((c) => c !== AGENCY_CATEGORY_LABEL)
+  const categories = finalizeToolCategoriesList(
+    rest.length > 0 ? rest : ['Other'],
+  )
+  return { categories, isAgency }
+}
+
+export function parseOptionalBool(v: unknown): boolean | undefined {
+  if (v === true) return true
+  if (v === false) return false
+  if (typeof v === 'string') {
+    const s = v.trim().toLowerCase()
+    if (s === 'true' || s === '1' || s === 'yes') return true
+    if (s === 'false' || s === '0' || s === 'no') return false
+  }
+  return undefined
+}
+
+/**
+ * If the page clearly describes a services or implementation firm but the model omitted "Agencies", add it.
+ * Does **not** treat “for agencies” ICP copy or “book a demo” SaaS pages as proof the vendor is an agency.
+ */
+export function augmentCategoriesWithAgencySignals(
+  categories: string[],
+  corpus: string,
+): string[] {
+  if (!corpus?.trim() || categories.length === 0) return categories
+  if (categories.includes('Agencies')) return categories
+
+  const verticalProduct = CORPUS_VERTICAL_B2B_BLOCKS_AGENCIES.test(corpus)
+  const vendorAgency = CORPUS_VENDOR_IS_SERVICES_AGENCY.test(corpus)
+  const bespokeImpl = CORPUS_IMPLEMENTATION_BESPOKE_HINT.test(corpus)
+  const selfServeProduct = corpusMatchesSelfServeSoftwareSignals(corpus)
+  const agenciesAreICP = CORPUS_AGENCIES_AS_TARGET_CUSTOMER.test(corpus)
+
+  if (selfServeProduct && !vendorAgency) {
+    return categories
+  }
+
+  if (agenciesAreICP && !vendorAgency && !bespokeImpl) {
+    return categories
+  }
+
+  if (verticalProduct && !bespokeImpl && !vendorAgency) {
+    return categories
+  }
+
+  if (!vendorAgency && !bespokeImpl) {
+    return categories
+  }
+
+  return finalizeToolCategoriesList(['Agencies', ...categories])
+}
+
+/**
+ * When true, force {@code isAgency} false even if the model returned true — e.g. SaaS “for agencies” ICP copy.
+ */
+export function corpusIndicatesProductVendorNotServicesAgency(
+  corpus: string,
+): boolean {
+  if (!corpus?.trim()) return false
+  if (CORPUS_VENDOR_IS_SERVICES_AGENCY.test(corpus)) return false
+  if (corpusMatchesSelfServeSoftwareSignals(corpus)) return true
+  if (
+    CORPUS_AGENCIES_AS_TARGET_CUSTOMER.test(corpus) &&
+    !CORPUS_IMPLEMENTATION_BESPOKE_HINT.test(corpus)
+  ) {
+    return true
+  }
+  return false
+}
+
+/**
+ * When scraped/title/body clearly names an industry vertical but the model omitted that list label, add it.
+ * Uses tight regexes so generic words alone (e.g. “insurance” on a healthcare page) do not mis-tag.
+ */
+export function augmentCategoriesWithIndustryVerticals(
+  categories: string[],
+  corpus: string,
+): string[] {
+  if (!corpus?.trim() || categories.length === 0) return categories
+
+  const verticals: { label: Category; re: RegExp }[] = [
+    {
+      label: 'Healthcare',
+      re: /\b(healthcare|health\s+care|health[- ]?tech|specifically\s+designed\s+for\s+healthcare|designed\s+for\s+healthcare|for\s+healthcare|healthcare\s+practices?|medical\s+practices?|hospitals?|physicians?|patient\s+intake|\bpatients?\b.*\b(practices?|appointments?|scheduling|calls)\b|dental\s+practices?|\bdentists?\b|telehealth|\behr\b|\bemr\b|\bhipaa\b|clinical\s+workflows?\b)/i,
+    },
+    {
+      label: 'Legal',
+      re: /\b(law\s+firms?|legal\s+practices?|litigation\s+support|for\s+attorneys?|paralegal)\b/i,
+    },
+    {
+      label: 'Insurance',
+      re: /\b(insurtech|for\s+insurance\s+brokers?|insurance\s+brokerages?|underwriting\s+(platform|software)|claims\s+(automation|software))\b/i,
+    },
+  ]
+
+  let out = categories
+  for (const { label, re } of verticals) {
+    if (!categorySet.has(label)) continue
+    if (out.includes(label)) continue
+    if (re.test(corpus)) {
+      out = finalizeToolCategoriesList([label, ...out])
+    }
+  }
+  return out
+}
+
 // Pre-process schema to handle empty strings for tools + legacy single `category`
 const toolObjectSchema = z.object({
   name: z.string().min(1, 'Name is required'),
@@ -304,7 +683,7 @@ const toolObjectSchema = z.object({
   revenue: z.enum(['free', 'freemium', 'paid', 'enterprise']).optional().nullable(),
   rating: z.number().min(0).max(5).optional().nullable(),
   estimatedVisits: z.number().int().positive().optional().nullable(),
-  /** Consulting / services business (not primarily a self-serve product). */
+  /** Service / implementation firm — stored separately; not in categories[]. */
   isAgency: z.boolean().optional().nullable(),
   /** Native/desktop/mobile store or explicit download links detected. */
   hasDownloadableApp: z.boolean().optional().nullable(),
@@ -312,27 +691,36 @@ const toolObjectSchema = z.object({
 
 const preprocessTool = z.preprocess((data: any) => {
   if (typeof data === 'object' && data !== null) {
-    let categories: string[] = []
+    let fromList: string[] = []
     if (Array.isArray(data.categories) && data.categories.length > 0) {
-      const fromArr: string[] = data.categories.map((c: unknown) =>
+      fromList = data.categories.map((c: unknown) =>
         normalizeToolCategory(String(c)),
-      )
-      categories = finalizeToolCategoriesList(
-        [...new Set(fromArr)].filter((c) => c.length > 0),
       )
     }
     if (
-      categories.length === 0 &&
+      fromList.length === 0 &&
       data.category != null &&
       String(data.category).trim()
     ) {
-      categories = finalizeToolCategoriesList([
-        normalizeToolCategory(String(data.category)),
-      ])
+      fromList = [normalizeToolCategory(String(data.category))]
     }
+    const hadAgencyInInput = fromList.includes(AGENCY_CATEGORY_LABEL)
+    const withoutAgency = [...new Set(fromList)].filter(
+      (c) => c !== AGENCY_CATEGORY_LABEL,
+    )
+    let categories = finalizeToolCategoriesList(
+      withoutAgency.length > 0 ? withoutAgency : ['Other'],
+    )
     if (categories.length === 0) {
       categories = ['Other']
     }
+
+    const explicit = parseOptionalBool(data.isAgency)
+    let isAgency: boolean
+    if (explicit === false) isAgency = false
+    else if (explicit === true) isAgency = true
+    else isAgency = hadAgencyInInput
+
     return {
       ...data,
       logoUrl: data.logoUrl === '' ? null : data.logoUrl,
@@ -340,6 +728,7 @@ const preprocessTool = z.preprocess((data: any) => {
       traffic: data.traffic === '' ? null : data.traffic,
       revenue: data.revenue === '' ? null : data.revenue,
       categories,
+      isAgency,
     }
   }
   return data
@@ -348,6 +737,7 @@ const preprocessTool = z.preprocess((data: any) => {
 export const toolSchema = preprocessTool.transform((d) => ({
   ...d,
   category: d.categories[0],
+  isAgency: d.isAgency,
 }))
 
 export type ToolInput = z.infer<typeof toolObjectSchema> & { category: string }

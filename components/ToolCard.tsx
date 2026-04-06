@@ -18,10 +18,10 @@ import { Button } from "@/components/ui/button";
 import type { Tool } from "@/lib/supabase";
 import { useAuthSession } from "@/components/AuthSessionProvider";
 import { cn } from "@/lib/utils";
-import { toolCategoryList } from "@/lib/tool-categories";
+import { toolCategoryListForBadges, toolIsAgency } from "@/lib/tool-categories";
+import { isToolCreatedToday } from "@/lib/tool-dates";
 import { toolCategoryBadgeClass } from "@/lib/tool-category-styles";
-import { isToolCreatedToday } from "@/lib/tool-recent";
-import { toolHasDownloadableApp, toolIsAgency } from "@/lib/tool-flags";
+import { toolHasDownloadableApp } from "@/lib/tool-flags";
 
 export type ToolCardLayout = "grid" | "list";
 
@@ -417,45 +417,38 @@ export function ToolCard({
     </Badge>
   ) : null;
 
-  const toolCategories = toolCategoryList(tool);
-  const isNewToday = isToolCreatedToday(tool.createdAt);
   const isAgencyTool = toolIsAgency(tool);
+  const toolCategories = toolCategoryListForBadges(tool);
+  const isNewToday = isToolCreatedToday(tool.createdAt);
   const hasDownloadableApp = toolHasDownloadableApp(tool);
 
-  /** Compact chips (agency uses full-card tint instead of a large ribbon). */
   const ribbonClass =
     "pointer-events-none rounded-md px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white shadow-sm sm:text-[10px]";
 
   const cardRibbons =
     isNewToday || hasDownloadableApp ? (
-      <div className="absolute left-0 top-0 z-20 flex max-w-[min(100%,16rem)] flex-row flex-wrap gap-1">
+      <div className="absolute left-0 top-0 z-20 flex max-w-[min(100%,16rem)] flex-row flex-wrap gap-1 p-1.5">
         {isNewToday ? (
-          <div
-            className={cn(
-              ribbonClass,
-              "bg-gradient-to-r from-violet-600 to-indigo-600",
-            )}
-            aria-hidden
-          >
+          <div className={cn(ribbonClass, "bg-gradient-to-r from-emerald-500 to-teal-500")} aria-hidden>
             New
           </div>
         ) : null}
         {hasDownloadableApp ? (
-          <div
-            className={cn(
-              ribbonClass,
-              "bg-gradient-to-r from-teal-600 to-emerald-600",
-            )}
-            aria-hidden
-          >
+          <div className={cn(ribbonClass, "bg-gradient-to-r from-teal-600 to-emerald-600")} aria-hidden>
             App
           </div>
         ) : null}
       </div>
     ) : null;
 
-  const agencyCardTint =
-    "border-amber-500/40 bg-gradient-to-br from-amber-500/[0.11] to-orange-500/[0.07] shadow-sm shadow-amber-500/10 dark:border-amber-500/35 dark:from-amber-500/14 dark:to-orange-500/10 dark:shadow-amber-500/5";
+  const agencyBanner = isAgencyTool ? (
+    <div
+      className="w-full rounded-t-lg bg-gradient-to-r from-orange-600 via-amber-500 to-orange-500 px-3 py-1.5 text-center text-[11px] font-semibold uppercase tracking-[0.12em] text-white shadow-sm"
+      role="note"
+    >
+      Agency
+    </div>
+  ) : null;
 
   if (layout === "list") {
     return (
@@ -464,12 +457,8 @@ export function ToolCard({
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.2, delay: index * 0.02 }}
       >
-        <Card
-          className={cn(
-            "relative overflow-hidden border-border/50 transition-colors hover:border-primary/40",
-            isAgencyTool && agencyCardTint,
-          )}
-        >
+        <Card className="relative overflow-hidden border-border/50 transition-colors hover:border-primary/40">
+          {agencyBanner}
           {cardRibbons}
           <CardContent className="flex min-w-0 flex-col gap-3 p-3 sm:flex-row sm:items-center sm:gap-4">
             <div className="flex min-w-0 flex-1 flex-col items-center gap-3 sm:flex-row sm:items-start">
@@ -625,10 +614,10 @@ export function ToolCard({
       <Card
         className={cn(
           "group relative flex h-full min-h-0 min-w-0 flex-col border-border/50 bg-card transition-all duration-300 hover:border-primary/50 hover:shadow-lg hover:shadow-primary/10 dark:hover:shadow-primary/20",
-          isAgencyTool && agencyCardTint,
           descriptionExpanded ? "overflow-visible" : "overflow-hidden",
         )}
       >
+        {agencyBanner}
         {cardRibbons}
         <CardContent
           className={cn(

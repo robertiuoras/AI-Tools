@@ -12,7 +12,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { categories as defaultCategories } from '@/lib/schemas'
+import { AGENCY_CATEGORY_LABEL, categories as defaultCategories } from '@/lib/schemas'
 import { cn } from '@/lib/utils'
 
 interface FilterSidebarProps {
@@ -25,7 +25,7 @@ interface FilterSidebarProps {
   favoritesOnly: boolean
   onFavoritesToggle: () => void
   agenciesOnly: boolean
-  onAgenciesOnlyChange: (value: boolean) => void
+  onAgenciesToggle: () => void
   downloadableOnly: boolean
   onDownloadableOnlyChange: (value: boolean) => void
   user: any
@@ -46,7 +46,7 @@ export function FilterSidebar({
   favoritesOnly,
   onFavoritesToggle,
   agenciesOnly,
-  onAgenciesOnlyChange,
+  onAgenciesToggle,
   downloadableOnly,
   onDownloadableOnlyChange,
   user,
@@ -75,7 +75,8 @@ export function FilterSidebar({
     onCategoriesChange([])
     onTrafficChange([])
     onRevenueChange([])
-    onAgenciesOnlyChange(false)
+    if (favoritesOnly) onFavoritesToggle()
+    if (agenciesOnly) onAgenciesToggle()
     onDownloadableOnlyChange(false)
   }
 
@@ -83,12 +84,14 @@ export function FilterSidebar({
     selectedCategories.length > 0 ||
     selectedTraffic.length > 0 ||
     selectedRevenue.length > 0 ||
+    favoritesOnly ||
     agenciesOnly ||
     downloadableOnly
-  const categoryOptions =
+  const categoryOptions = (
     availableCategories && availableCategories.length > 0
       ? availableCategories
-      : defaultCategories
+      : (defaultCategories as readonly string[]).filter((c) => c !== AGENCY_CATEGORY_LABEL)
+  ).filter((c) => c !== AGENCY_CATEGORY_LABEL)
 
   return (
     <>
@@ -104,6 +107,7 @@ export function FilterSidebar({
             {selectedCategories.length +
               selectedTraffic.length +
               selectedRevenue.length +
+              (favoritesOnly ? 1 : 0) +
               (agenciesOnly ? 1 : 0) +
               (downloadableOnly ? 1 : 0)}
           </Badge>
@@ -147,16 +151,20 @@ export function FilterSidebar({
             </div>
           </div>
 
-          <div className="mb-4 space-y-2">
+          <div className="mb-6 space-y-2">
             <Button
-              type="button"
               variant={agenciesOnly ? 'default' : 'outline'}
               size="sm"
-              onClick={() => onAgenciesOnlyChange(!agenciesOnly)}
-              className="w-full gap-2 border-amber-500/40 bg-gradient-to-r from-amber-500/10 to-orange-500/10 font-semibold hover:from-amber-500/15 hover:to-orange-500/15 dark:from-amber-500/15 dark:to-orange-500/15"
+              onClick={onAgenciesToggle}
+              className={cn(
+                'w-full gap-2',
+                agenciesOnly
+                  ? 'border-orange-500/80 bg-gradient-to-r from-orange-600 to-amber-600 text-white hover:from-orange-600/90 hover:to-amber-600/90 hover:text-white'
+                  : 'border-orange-300/80 text-orange-900 hover:bg-orange-50 dark:border-orange-700/60 dark:text-orange-100 dark:hover:bg-orange-950/40',
+              )}
             >
-              <Building2 className="h-4 w-4 shrink-0" />
-              {agenciesOnly ? 'Showing agencies only' : 'Agencies only'}
+              <Building2 className="h-4 w-4" />
+              {agenciesOnly ? 'Showing Agencies' : 'Show Agencies'}
             </Button>
             <Button
               type="button"
@@ -168,17 +176,17 @@ export function FilterSidebar({
               <Download className="h-4 w-4 shrink-0" />
               {downloadableOnly ? 'Showing apps only' : 'Downloadable app'}
             </Button>
-            {user && (
+            {user ? (
               <Button
-                variant={favoritesOnly ? "default" : "outline"}
+                variant={favoritesOnly ? 'default' : 'outline'}
                 size="sm"
                 onClick={onFavoritesToggle}
                 className="w-full gap-2"
               >
-                <Heart className={`h-4 w-4 ${favoritesOnly ? "fill-current" : ""}`} />
-                {favoritesOnly ? "Showing Favorites" : "Show Favorites"}
+                <Heart className={`h-4 w-4 ${favoritesOnly ? 'fill-current' : ''}`} />
+                {favoritesOnly ? 'Showing Favorites' : 'Show Favorites'}
               </Button>
-            )}
+            ) : null}
           </div>
 
           <Accordion type="multiple" defaultValue={['category', 'revenue', 'traffic']}>
@@ -186,10 +194,8 @@ export function FilterSidebar({
               <AccordionTrigger>Category</AccordionTrigger>
               <AccordionContent>
                 <p className="mb-3 text-xs text-muted-foreground leading-snug">
-                  Default labels plus any category used by a tool (including
-                  AI-suggested). Each tool has at most three categories; new
-                  labels appear here automatically. Near-duplicates map to the
-                  closest default when possible.
+                  Defaults + any label on a tool (including AI customs) — all
+                  show here. Agencies: Show Agencies + ribbon. Max 3 per tool.
                 </p>
                 <div className="space-y-3">
                   <Label
@@ -275,6 +281,32 @@ export function FilterSidebar({
             <div className="mt-6 space-y-2">
               <h3 className="text-sm font-medium">Active Filters</h3>
               <div className="flex flex-wrap gap-2">
+                {agenciesOnly && (
+                  <Badge variant="secondary" className="gap-1">
+                    Agencies
+                    <button
+                      type="button"
+                      onClick={onAgenciesToggle}
+                      className="ml-1 rounded-full hover:bg-background"
+                      aria-label="Remove agencies filter"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                )}
+                {favoritesOnly && (
+                  <Badge variant="secondary" className="gap-1">
+                    Favorites
+                    <button
+                      type="button"
+                      onClick={onFavoritesToggle}
+                      className="ml-1 rounded-full hover:bg-background"
+                      aria-label="Remove favorites filter"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                )}
                 {selectedCategories.map((category) => (
                   <Badge key={category} variant="secondary" className="gap-1">
                     {category}
@@ -310,18 +342,6 @@ export function FilterSidebar({
                     </button>
                   </Badge>
                 ))}
-                {agenciesOnly && (
-                  <Badge variant="secondary" className="gap-1">
-                    Agencies
-                    <button
-                      type="button"
-                      onClick={() => onAgenciesOnlyChange(false)}
-                      className="ml-1 rounded-full hover:bg-background"
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </Badge>
-                )}
               </div>
             </div>
           )}
