@@ -95,7 +95,10 @@ export function Hero({ toolsAddedTodayCount = 0 }: HeroProps) {
                         <span className="font-normal text-white/90"> today</span>
                       </p>
                       <p className="mt-1 text-xs leading-relaxed text-white/75 sm:text-sm">
-                        Added in the last 24 hours — worth a look.
+                        Added in the last 24 hours — worth a look.{" "}
+                        <span className="font-medium text-white/90">
+                          Filter by Newest.
+                        </span>
                       </p>
                     </div>
                   </div>

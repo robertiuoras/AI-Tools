@@ -1,0 +1,24 @@
+---
+description: Deploy by pushing to Git after any code change (Vercel)
+alwaysApply: true
+---
+
+# Deploy after code changes
+
+Whenever you **finish a task that edits project source** (app, components, lib, config, etc.), **deploy** by shipping the change to GitHub unless the user explicitly asked not to.
+
+## Do this before ending the turn
+
+1. `git status` — if there are no changes, skip.
+2. **`git add` + `git commit`** with a short, accurate message (present tense or imperative).
+3. **`git push origin main`** (this repo uses Vercel + `origin` on GitHub; push triggers production deploy).
+
+## Build
+
+- If `.env` has the vars needed for `next build` (e.g. `SUPABASE_SERVICE_ROLE_KEY`), run **`npm run build`** before commit when the change could break the build.
+- If local build fails only for missing secrets, **still push** after commit — Vercel has env vars.
+
+## Do not
+
+- Push secrets, `.env`, or other files that belong in `.gitignore`.
+- Skip push when the user said to hold deploys or to leave the working tree dirty.
