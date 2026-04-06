@@ -334,6 +334,18 @@ export default function AdminPage() {
   toolsRef.current = tools
   editingIdRef.current = editingId
 
+  const quickAddUrlRef = useRef(quickAddUrl)
+  quickAddUrlRef.current = quickAddUrl
+  const analyzingRef = useRef(false)
+  analyzingRef.current = analyzing
+  const isProcessingRef = useRef(false)
+  isProcessingRef.current = isProcessing
+  const bulkProcessingRef = useRef(false)
+  bulkProcessingRef.current = bulkProcessing
+  const cooldownRemainingRef = useRef(0)
+  cooldownRemainingRef.current = cooldownRemaining
+  const handleQuickAddRef = useRef<() => Promise<void>>(async () => {})
+
   // Tab state
   const [adminTab, setAdminTab] = useState<'tools' | 'videos' | 'usage'>('tools')
   const [videos, setVideos] = useState<Video[]>([])
@@ -406,7 +418,7 @@ export default function AdminPage() {
   )
   const startToolAutoAddCountdownRef = useRef<() => void>(() => {})
 
-  // Usage tab state
+  // Usage tab state (aligned with /api/usage/openai)
   type OpenAIUsage = {
     totalCostDollars: number
     startDate: string
@@ -414,7 +426,17 @@ export default function AdminPage() {
     plan: string | null
     hardLimitUsd: number | null
     softLimitUsd: number | null
-    breakdown: { model: string; requests: number; inputTokens: number; outputTokens: number; cachedTokens: number }[]
+    breakdown: {
+      model: string
+      requests: number
+      inputTokens: number
+      outputTokens: number
+      cachedTokens: number
+    }[]
+    setupRequired?: boolean
+    setupMessage?: string | null
+    totalRequests?: number
+    byOperation?: { operation: string; requests: number; cost: number }[]
   }
   type ClaudeUsage = {
     connected: boolean
@@ -1719,28 +1741,6 @@ export default function AdminPage() {
       setCooldownRemaining(Math.ceil(MIN_REQUEST_DELAY / 1000))
       
       console.log('Analysis result:', data)
-      
-      // Log OpenAI usage status
-      if (data._debug) {
-        if (data._debug.usedOpenAI) {
-          console.log('✅ OpenAI was used for analysis!')
-          if (data._debug.scrapingFailed) {
-            console.warn('⚠️ Website scraping failed, but OpenAI analysis succeeded with URL only')
-            addToast({
-              variant: 'info',
-              title: 'Analysis Complete (Limited Data)',
-              description:
-                'The website blocked our scraping; we still analyzed using the URL. If the tool does not auto-add, use the draft below or Edit after adding.',
-              duration: 8000,
-            })
-          }
-        } else {
-          console.warn('⚠️ OpenAI was NOT used. Reason:', data._debug.error || 'Unknown')
-          console.warn('⚠️ Using basic analysis instead.')
-        }
-      } else {
-        console.warn('⚠️ No debug info available - cannot determine if OpenAI was used')
-      }
 
       // Auto-fill the form with analyzed data
       setFormData({
@@ -1794,11 +1794,14 @@ export default function AdminPage() {
         analyzedCategories.length > 0 &&
         !editingIdRef.current
       ) {
+        const limited = data._debug?.scrapingFailed === true
         addToast({
           variant: 'success',
-          title: 'Tool scanned',
-          description: 'Auto-adding in 5s — Cancel or use Save to directory now.',
-          duration: 5000,
+          title: 'Scan complete',
+          description: limited
+            ? 'Auto-adding in 5 seconds (Cancel below). Site blocked scraping — double-check the draft.'
+            : 'Auto-adding in 5 seconds. Use Cancel below to stop.',
+          duration: 6500,
         })
         setIsProcessing(false)
         startToolAutoAddCountdownRef.current()
@@ -1902,6 +1905,48 @@ export default function AdminPage() {
       setAnalyzing(false)
     }
   }
+
+  handleQuickAddRef.current = handleQuickAdd
+
+  useEffect(() => {
+    let tid: ReturnType<typeof setTimeout> | null = null
+    const raw = quickAddUrl.trim()
+    if (!raw || editingId) return
+
+    let looksComplete = false
+    try {
+      const u = new URL(
+        raw.startsWith('http://') || raw.startsWith('https://')
+          ? raw
+          : `https://${raw}`,
+      )
+      const host = u.hostname
+      if (host.includes('.')) {
+        const tld = host.split('.').pop() ?? ''
+        looksComplete = tld.length >= 2 && raw.length >= 10
+      }
+    } catch {
+      looksComplete = false
+    }
+    if (!looksComplete) return
+
+    tid = setTimeout(() => {
+      if (editingIdRef.current) return
+      if (
+        analyzingRef.current ||
+        isProcessingRef.current ||
+        bulkProcessingRef.current
+      )
+        return
+      if (cooldownRemainingRef.current > 0) return
+      if (quickAddUrlRef.current.trim() !== raw) return
+      void handleQuickAddRef.current()
+    }, 850)
+
+    return () => {
+      if (tid) clearTimeout(tid)
+    }
+  }, [quickAddUrl, editingId])
 
   const handleBulkAdd = async () => {
     // Parse URLs - normalize them (add https:// if missing)
@@ -2489,7 +2534,7 @@ export default function AdminPage() {
                   )}
                   <div className="flex gap-2">
                     <Input
-                      placeholder="https://example.com"
+                      placeholder="Paste tool URL — scan starts automatically"
                       value={quickAddUrl}
                       onChange={(e) => setQuickAddUrl(e.target.value)}
                       onKeyDown={(e) => {
@@ -3774,12 +3819,27 @@ export default function AdminPage() {
                 </div>
               ) : openaiUsage ? (
                 <div className="flex flex-col gap-4">
+                  {openaiUsage.setupRequired ? (
+                    <div className="flex flex-col gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-950 dark:text-amber-100">
+                      <p className="font-medium">Usage log table not active yet</p>
+                      <p className="text-xs leading-relaxed opacity-90">
+                        {openaiUsage.setupMessage ??
+                          'Run supabase/sql/openai-usage-migration.sql, then in Supabase: Settings → API → Reload schema cache.'}
+                      </p>
+                    </div>
+                  ) : null}
                   <div className="flex items-end gap-2">
                     <span className="text-4xl font-bold tracking-tight">
                       ${openaiUsage.totalCostDollars.toFixed(4)}
                     </span>
                     <span className="text-sm text-muted-foreground mb-1">this month</span>
                   </div>
+                  {typeof openaiUsage.totalRequests === 'number' ? (
+                    <p className="text-xs text-muted-foreground">
+                      {openaiUsage.totalRequests.toLocaleString()} logged request
+                      {openaiUsage.totalRequests !== 1 ? 's' : ''} (in-app analyze only)
+                    </p>
+                  ) : null}
                   <div className="grid grid-cols-2 gap-3 text-sm">
                     <div className="rounded-lg bg-muted/50 p-3">
                       <p className="text-xs text-muted-foreground mb-0.5">Period</p>
@@ -3804,7 +3864,7 @@ export default function AdminPage() {
                       </div>
                     )}
                   </div>
-                  {openaiUsage.breakdown.length > 0 && (
+                  {openaiUsage.breakdown.length > 0 ? (
                     <div className="flex flex-col gap-2">
                       <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Breakdown by Model</p>
                       <div className="flex flex-col gap-1.5 max-h-56 overflow-y-auto pr-1">
@@ -3819,9 +3879,41 @@ export default function AdminPage() {
                         ))}
                       </div>
                     </div>
-                  )}
+                  ) : !openaiUsage.setupRequired ? (
+                    <p className="text-xs text-muted-foreground">
+                      No API calls logged yet this month. Run a tool analyze from Quick Add to populate.
+                    </p>
+                  ) : null}
+                  {openaiUsage.byOperation && openaiUsage.byOperation.length > 0 ? (
+                    <div className="flex flex-col gap-2">
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">By operation</p>
+                      <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto pr-1">
+                        {openaiUsage.byOperation.map((row) => (
+                          <div key={row.operation} className="flex items-center justify-between rounded-lg bg-muted/30 px-3 py-2 text-xs">
+                            <span className="font-medium truncate max-w-[50%]">{row.operation}</span>
+                            <span className="text-muted-foreground tabular-nums">
+                              {row.requests} req · ${row.cost.toFixed(4)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
+              {!usageLoading && (
+                <div className="mt-4 flex justify-end">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={fetchUsage}
+                    className="gap-1.5 text-xs"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Refresh
+                  </Button>
+                </div>
+              )}
             </CardContent>
           </Card>
 

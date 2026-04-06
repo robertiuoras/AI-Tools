@@ -1,11 +1,16 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { Sparkles } from 'lucide-react'
+import { Sparkles, Zap } from 'lucide-react'
 
 import Image from "next/image";
 
-export function Hero() {
+type HeroProps = {
+  /** Shown as a prominent pill under the headline when &gt; 0 */
+  toolsAddedTodayCount?: number
+}
+
+export function Hero({ toolsAddedTodayCount = 0 }: HeroProps) {
   return (
     <div className="relative overflow-hidden bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 dark:from-indigo-900 dark:via-purple-900 dark:to-pink-900">
       <div className="absolute inset-0 bg-grid-white/[0.05] bg-[size:20px_20px]" />
@@ -35,6 +40,32 @@ export function Hero() {
               AI Tools
             </span>
           </h1>
+          {toolsAddedTodayCount > 0 ? (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.35, delay: 0.15 }}
+              className="mt-5 flex justify-center"
+            >
+              <div
+                className="inline-flex items-center gap-2.5 rounded-full border border-white/40 bg-white/15 px-5 py-2.5 text-white shadow-lg shadow-black/10 backdrop-blur-md dark:border-white/20 dark:bg-white/10"
+                role="status"
+              >
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-amber-400/90 text-amber-950 shadow-inner">
+                  <Zap className="h-4 w-4" aria-hidden />
+                </span>
+                <span className="text-left text-sm font-medium leading-tight sm:text-base">
+                  <span className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-white/80">
+                    Fresh picks
+                  </span>
+                  <span className="font-bold tabular-nums text-white">
+                    {toolsAddedTodayCount} new tool{toolsAddedTodayCount !== 1 ? 's' : ''}
+                  </span>
+                  <span className="text-white/85"> added today</span>
+                </span>
+              </div>
+            </motion.div>
+          ) : null}
           <p className="mt-6 text-lg leading-8 text-white/90 sm:text-xl">
             Curated collection of cutting-edge AI tools. Find the perfect solution
             for your workflow, from video editing to code assistance.

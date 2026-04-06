@@ -23,6 +23,7 @@ import {
   toolCategoryListForBadges,
   toolIsAgency,
 } from "@/lib/tool-categories";
+import { isToolCreatedToday } from "@/lib/tool-dates";
 import { toolCategoryBadgeClass } from "@/lib/tool-category-styles";
 
 export type ToolCardLayout = "grid" | "list";
@@ -439,6 +440,18 @@ export function ToolCard({
 
   const isAgency = toolIsAgency(tool);
   const toolCategories = toolCategoryListForBadges(tool);
+  const isNewToday = isToolCreatedToday(tool.createdAt);
+
+  const newTodayRibbon = isNewToday ? (
+    <div
+      className="pointer-events-none absolute right-0 top-0 z-[15] h-20 w-20 overflow-hidden sm:h-[5.25rem] sm:w-[5.25rem]"
+      aria-hidden
+    >
+      <div className="absolute right-[-40%] top-[22%] w-[160%] rotate-45 bg-gradient-to-r from-emerald-500 to-teal-500 py-1 text-center text-[10px] font-bold uppercase tracking-widest text-white shadow-md">
+        New
+      </div>
+    </div>
+  ) : null;
 
   const agencyBanner = isAgency ? (
     <div
@@ -456,7 +469,8 @@ export function ToolCard({
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.2, delay: index * 0.02 }}
       >
-        <Card className="overflow-hidden border-border/50 transition-colors hover:border-primary/40">
+        <Card className="relative overflow-hidden border-border/50 transition-colors hover:border-primary/40">
+          {newTodayRibbon}
           {agencyBanner}
           <CardContent className="flex min-w-0 flex-col gap-3 p-3 sm:flex-row sm:items-center sm:gap-4">
             <div className="flex min-w-0 flex-1 flex-col items-center gap-3 sm:flex-row sm:items-start">
@@ -607,6 +621,7 @@ export function ToolCard({
           descriptionExpanded ? "overflow-visible" : "overflow-hidden",
         )}
       >
+        {newTodayRibbon}
         {agencyBanner}
         <CardContent
           className={cn(

@@ -42,7 +42,7 @@ import { MOST_POPULAR_HELP } from "@/lib/tool-popularity";
 import type { ToolCardLayout } from "@/components/ToolCard";
 import { supabase } from "@/lib/supabase";
 import type { Tool } from "@/lib/supabase";
-import { toolCategoryList } from "@/lib/tool-categories";
+import { toolCategoryList, toolIsAgency } from "@/lib/tool-categories";
 import {
   AGENCY_CATEGORY_LABEL,
   categories as defaultCategories,
@@ -179,9 +179,7 @@ function HomePageContent() {
       list = list.filter((t) => t.userFavorited === true);
     }
     if (agenciesOnly) {
-      list = list.filter((t) =>
-        toolCategoryList(t).some((c) => c === AGENCY_CATEGORY_LABEL),
-      );
+      list = list.filter((t) => toolIsAgency(t));
     }
     return list;
   }, [
@@ -427,7 +425,7 @@ function HomePageContent() {
 
   return (
     <div className="flex min-h-screen flex-col">
-      <Hero />
+      <Hero toolsAddedTodayCount={toolsAddedTodayCount} />
       <div className="container mx-auto px-4 py-8">
         <div className="flex flex-col gap-6 lg:flex-row">
           <div className="lg:w-80">
@@ -448,18 +446,6 @@ function HomePageContent() {
           </div>
 
           <div className="flex-1 space-y-6">
-            {toolsAddedTodayCount > 0 ? (
-              <div
-                className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-4 py-2.5 text-center text-sm text-foreground shadow-sm dark:border-emerald-500/30 dark:bg-emerald-950/40"
-                role="status"
-              >
-                <span className="font-semibold tabular-nums text-emerald-800 dark:text-emerald-200">
-                  {toolsAddedTodayCount}
-                </span>
-                {" "}
-                new tool{toolsAddedTodayCount !== 1 ? "s" : ""} added today
-              </div>
-            ) : null}
             <div className="scroll-mt-24 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex-1 max-w-2xl space-y-1" data-tutorial="search-bar">
                 <SearchBar
