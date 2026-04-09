@@ -3869,7 +3869,7 @@ export default function NotesPage() {
                       }, 0);
                     }}
                     className={cn(
-                      "relative flex min-h-10 cursor-grab items-center gap-1 rounded-lg border px-1.5 py-1 transition-[box-shadow,transform,opacity,border-color] duration-150 [&_input]:cursor-text [&_button]:cursor-grab active:cursor-grabbing",
+                      "notes-dnd-row relative flex min-h-10 items-center gap-1 rounded-lg border px-1.5 py-1 transition-[box-shadow,transform,opacity,border-color] duration-150",
                       "hover:border-primary/35 hover:bg-muted/30",
                       selectedPageId === p.id &&
                         "border-indigo-500 bg-indigo-500/10",
@@ -3908,7 +3908,7 @@ export default function NotesPage() {
                       <>
                         <button
                           type="button"
-                          className="min-w-0 flex-1 cursor-grab truncate text-left text-sm"
+                          className="min-w-0 flex-1 truncate text-left text-sm"
                           onClick={() => {
                             setSelectedPageId(p.id);
                             setSelectedNoteId(null);
@@ -3934,7 +3934,7 @@ export default function NotesPage() {
                     )}
                     <button
                       type="button"
-                      className="shrink-0 cursor-grab rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                      className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
                       title="Copy page title"
                       onClick={() => void copyText(p.title, `page-${p.id}`)}
                     >
@@ -3946,7 +3946,6 @@ export default function NotesPage() {
                     </button>
                     <button
                       type="button"
-                      className="cursor-grab"
                       onClick={() =>
                         updatePage(p.id, { favorite: !p.favorite })
                       }
@@ -3962,7 +3961,6 @@ export default function NotesPage() {
                     </button>
                     <button
                       type="button"
-                      className="cursor-grab"
                       onClick={() => deletePage(p.id)}
                     >
                       <Trash2 className="h-4 w-4 text-destructive" />
@@ -4148,7 +4146,7 @@ export default function NotesPage() {
                       }, 0);
                     }}
                     className={cn(
-                      "relative flex min-h-10 cursor-grab items-center gap-1 rounded-lg border px-1.5 py-1 transition-[box-shadow,transform,opacity,border-color] duration-150 [&_input]:cursor-text [&_button]:cursor-grab active:cursor-grabbing",
+                      "notes-dnd-row relative flex min-h-10 items-center gap-1 rounded-lg border px-1.5 py-1 transition-[box-shadow,transform,opacity,border-color] duration-150",
                       "hover:border-primary/35 hover:bg-muted/30",
                       selectedNoteId === n.id &&
                         "border-violet-500 bg-violet-500/10",
@@ -4189,7 +4187,7 @@ export default function NotesPage() {
                       <>
                         <button
                           type="button"
-                          className="min-w-0 flex-1 cursor-grab truncate text-left text-sm"
+                          className="min-w-0 flex-1 truncate text-left text-sm"
                           onClick={() => setSelectedNoteId(n.id)}
                         >
                           <span className="block truncate">{n.title}</span>
@@ -4223,7 +4221,7 @@ export default function NotesPage() {
                     )}
                     <button
                       type="button"
-                      className="shrink-0 cursor-grab rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                      className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
                       title="Copy note title"
                       onClick={() =>
                         void copyText(n.title, `note-title-${n.id}`)
@@ -4237,7 +4235,6 @@ export default function NotesPage() {
                     </button>
                     <button
                       type="button"
-                      className="cursor-grab"
                       onClick={() => {
                         const next = !n.favorite;
                         setNotes((prev) => {
@@ -4272,7 +4269,6 @@ export default function NotesPage() {
                     </button>
                     <button
                       type="button"
-                      className="cursor-grab"
                       onClick={() => deleteNote(n.id)}
                     >
                       <Trash2 className="h-4 w-4 text-destructive" />
