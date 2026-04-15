@@ -3,6 +3,7 @@
 import {
   Fragment,
   memo,
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -20,6 +21,7 @@ import {
   type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuthSession } from "@/components/AuthSessionProvider";
 import {
   clearNotesBootstrapFromSession,
@@ -925,7 +927,7 @@ const NoteBodyEditor = memo(
     prev.noteId === next.noteId && prev.editorSession === next.editorSession,
 );
 
-export default function NotesPage() {
+function NotesPageInner() {
   const {
     accessToken: token,
     userId,
@@ -1029,9 +1031,16 @@ export default function NotesPage() {
     y: number;
     imageFigure: HTMLElement | null;
   }>({ open: false, x: 0, y: 0, imageFigure: null });
-  const [notesSubView, setNotesSubView] = useState<"notes" | "reminders" | "whiteboard" | "storage">(
-    "notes",
-  );
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  /** Single source of truth with the address bar — avoids a first-paint "notes" tab while URL says ?tab=whiteboard, which triggered the full-page workspace loader and hid the whiteboard until bootstrap finished. */
+  const notesSubView = useMemo((): "notes" | "reminders" | "whiteboard" | "storage" => {
+    const tab = searchParams.get("tab");
+    if (tab === "reminders") return "reminders";
+    if (tab === "whiteboard") return "whiteboard";
+    if (tab === "storage") return "storage";
+    return "notes";
+  }, [searchParams]);
   /** After first bootstrap, switching pages only shows the grid overlay (no second full-page pass). */
   const [initialNotesBootstrapDone, setInitialNotesBootstrapDone] =
     useState(false);
@@ -1799,10 +1808,11 @@ export default function NotesPage() {
   const closeNoteBodyEditAndSave = useCallback(() => {
     const sid = selectedNoteIdRef.current;
     if (!sid) return;
+    // Read synchronously — navigation can unmount the editor before a microtask runs.
+    const edEl = editorRef.current;
+    const raw = edEl?.innerHTML ?? "";
+    const normalized = normalizeNoteHtmlForSave(stripEditorOnlyUi(raw));
     void (async () => {
-      const edEl = editorRef.current;
-      const raw = edEl?.innerHTML ?? "";
-      const normalized = normalizeNoteHtmlForSave(stripEditorOnlyUi(raw));
       setNotes((prev) =>
         sortNotesFavoritesFirst(
           prev.map((n) => (n.id === sid ? { ...n, content: normalized } : n)),
@@ -3709,14 +3719,16 @@ export default function NotesPage() {
     },
   };
 
+  /** Leaving Notes subview: drop stale editing/menus so document-level note listeners never run over the whiteboard. */
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const q = new URLSearchParams(window.location.search);
-    const tab = q.get("tab");
-    if (tab === "reminders") setNotesSubView("reminders");
-    else if (tab === "whiteboard") setNotesSubView("whiteboard");
-    else if (tab === "storage") setNotesSubView("storage");
-  }, []);
+    if (notesSubView === "notes") return;
+    setIsEditing(false);
+    setFormatMenuOpen(false);
+    setMentionPickerOpen(false);
+    setFindInNoteOpen(false);
+    setContextMenu((s) => ({ ...s, open: false }));
+    setNoteBodyFullscreen(false);
+  }, [notesSubView]);
 
   const showInitialNotesWorkspaceLoader =
     !!token &&
@@ -3775,8 +3787,7 @@ export default function NotesPage() {
                 if (notesSubView === "notes" && key !== "notes" && isEditing) {
                   closeNoteBodyEditAndSave();
                 }
-                setNotesSubView(key);
-                window.history.replaceState({}, "", url);
+                router.replace(url);
               }}
             >
               {label}
@@ -5518,5 +5529,19 @@ export default function NotesPage() {
           document.body,
         )}
     </div>
+  );
+}
+
+export default function NotesPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="container mx-auto px-4">
+          <NotesPageLoader message="Loading…" />
+        </div>
+      }
+    >
+      <NotesPageInner />
+    </Suspense>
   );
 }
