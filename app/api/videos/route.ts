@@ -43,6 +43,10 @@ export async function GET(request: NextRequest) {
     const source = searchParams.get("source"); // 'youtube' | 'tiktok'
     const sort = searchParams.get("sort") || "newest";
     const order = searchParams.get("order") || "desc";
+    const limitParam = searchParams.get("limit");
+    const offsetParam = searchParams.get("offset");
+    const limit = limitParam ? Math.min(parseInt(limitParam, 10) || 48, 200) : null;
+    const offset = offsetParam ? Math.max(parseInt(offsetParam, 10) || 0, 0) : 0;
 
     const admin = supabaseAdmin as any;
 
@@ -126,7 +130,12 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    filtered = filtered.map((video: any) => {
+    const total = filtered.length;
+
+    // Apply pagination after all filtering/sorting
+    const paginated = limit !== null ? filtered.slice(offset, offset + limit) : filtered;
+
+    const mapped = paginated.map((video: any) => {
       const cats = parseVideoCategoriesFromRow(video);
       return {
         ...video,
@@ -135,7 +144,7 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    return NextResponse.json(filtered);
+    return NextResponse.json({ videos: mapped, total, offset, limit });
   } catch (error) {
     console.error("❌ Error fetching videos:", error);
     return NextResponse.json([], { status: 200 });

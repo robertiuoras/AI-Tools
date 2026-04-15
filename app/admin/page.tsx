@@ -529,7 +529,7 @@ export default function AdminPage() {
     try {
       const response = await fetch('/api/videos')
       const data = await response.json()
-      setVideos(Array.isArray(data) ? data : [])
+      setVideos(Array.isArray(data) ? data : Array.isArray(data?.videos) ? data.videos : [])
     } catch (error) {
       console.error('Error fetching videos:', error)
       setVideos([])
@@ -2195,11 +2195,11 @@ export default function AdminPage() {
                 </span>
               )}
             </CardTitle>
-            <CardDescription>
-              {editingId
-                ? 'Changes save automatically after you stop typing or changing categories'
-                : 'Paste or type a URL — AI analyzes it and saves the tool automatically after a short countdown (like videos).'}
-            </CardDescription>
+            {!editingId && (
+              <CardDescription>
+                Changes save automatically after you stop typing or changing categories
+              </CardDescription>
+            )}
           </CardHeader>
           <CardContent>
             {!editingId && (
@@ -2209,9 +2209,6 @@ export default function AdminPage() {
                     <Sparkles className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
                     <Label className="font-semibold">Quick Add by URL</Label>
                   </div>
-                  <p className="text-sm text-muted-foreground mb-3">
-                    Paste a site URL (or type one and press Enter) — no manual form required.
-                  </p>
                   {cooldownRemaining > 0 && (
                     <div className="mb-3 p-2 rounded-md bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-200 dark:border-yellow-800">
                       <p className="text-sm text-yellow-700 dark:text-yellow-300">
@@ -2330,10 +2327,6 @@ export default function AdminPage() {
                   </Button>
                 </div>
                   <div className="text-xs text-muted-foreground space-y-1">
-                    <p>💡 AI analysis available. Add OPENAI_API_KEY to .env for enhanced results.</p>
-                    <p className="text-blue-600 dark:text-blue-400">
-                      ℹ️ Rate Limits: You have 2 types of limits - RPM (requests/min) and TPM (tokens/min). Even with balance, low-tier accounts have low RPM limits. Check your tier at platform.openai.com/account/limits
-                    </p>
                     <Button
                       type="button"
                       variant="outline"
@@ -2995,23 +2988,27 @@ export default function AdminPage() {
                 </div>
               </div>
             )}
+            {/* Auto-save countdown — shown when not editing */}
+            {videoAutoAddSeconds !== null && !editingVideoId ? (
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+                <span>
+                  Saving this video automatically in <strong>{videoAutoAddSeconds}</strong>s — cancel to stop.
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0 border-amber-300 bg-white hover:bg-amber-100 dark:border-amber-700 dark:bg-transparent dark:hover:bg-amber-900/50"
+                  onClick={clearVideoAutoAdd}
+                >
+                  Cancel auto-save
+                </Button>
+              </div>
+            ) : null}
+
+            {/* Edit form — only shown when editing an existing video */}
+            {editingVideoId && (
             <form onSubmit={handleVideoSubmit} className="space-y-4">
-              {videoAutoAddSeconds !== null && !editingVideoId ? (
-                <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
-                  <span>
-                    Saving this video automatically in <strong>{videoAutoAddSeconds}</strong>s — edit fields below or cancel.
-                  </span>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="shrink-0 border-amber-300 bg-white hover:bg-amber-100 dark:border-amber-700 dark:bg-transparent dark:hover:bg-amber-900/50"
-                    onClick={clearVideoAutoAdd}
-                  >
-                    Cancel auto-save
-                  </Button>
-                </div>
-              ) : null}
               <div className="space-y-2">
                 <Label htmlFor="video-title">Title *</Label>
                 <Input
@@ -3029,13 +3026,6 @@ export default function AdminPage() {
                   type="url"
                   value={videoFormData.url}
                   onChange={(e) => setVideoFormData({ ...videoFormData, url: e.target.value })}
-                  onPaste={(e) => {
-                    if (editingVideoId) return
-                    const text = e.clipboardData.getData('text/plain').trim()
-                    if (!isLikelyVideoUrlText(text)) return
-                    e.preventDefault()
-                    void runVideoAnalyzeFromUrl(text, { clearQuickField: false })
-                  }}
                   placeholder="https://www.youtube.com/watch?v=... or https://www.tiktok.com/..."
                   required
                 />
@@ -3058,7 +3048,7 @@ export default function AdminPage() {
               <div className="space-y-2">
                 <Label>Categories *</Label>
                 <p className="text-xs text-muted-foreground">
-                  Same labels as AI tools. Pick 1–{MAX_VIDEO_CATEGORIES} (first = primary filter). AI suggests 1–3 based on how clear the topic is.
+                  Pick 1–{MAX_VIDEO_CATEGORIES} (first = primary filter).
                 </p>
                 <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
                   <div className="grid max-h-52 grid-cols-1 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
@@ -3175,7 +3165,6 @@ export default function AdminPage() {
                     )}
                   </div>
                 </div>
-                <p className="text-xs text-muted-foreground">Missing profile pic? Paste the video URL above and click Generate to fetch channel thumbnail or use video frame.</p>
               </div>
               <div className="flex items-center gap-2">
                 <input
@@ -3213,22 +3202,16 @@ export default function AdminPage() {
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                       Saving...
                     </>
-                  ) : editingVideoId ? (
-                    'Update Video'
                   ) : (
-                    <>
-                      <Plus className="mr-2 h-4 w-4" />
-                      Add Video
-                    </>
+                    'Update Video'
                   )}
                 </Button>
-                {editingVideoId && (
-                  <Button type="button" variant="outline" onClick={resetVideoForm}>
-                    Cancel
-                  </Button>
-                )}
+                <Button type="button" variant="outline" onClick={resetVideoForm}>
+                  Cancel
+                </Button>
               </div>
             </form>
+            )}
           </CardContent>
         </Card>
 
