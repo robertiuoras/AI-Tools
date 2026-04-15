@@ -90,7 +90,10 @@ export default function WhiteboardInner({ token, boardId }: Props) {
           }
         }, 2000);
       },
-      { scope: "document" },
+      // source:'user' = only fire for actual user interactions.
+      // tldraw marks its own internal init/snapshot changes as source:'remote',
+      // which is what was causing the instant + infinite "Saving…" on every mount.
+      { scope: "document", source: "user" },
     );
 
     // Return cleanup — tldraw calls this when the editor unmounts
