@@ -261,32 +261,32 @@ function HedgeCalculator({ mode }: { mode: OddsMode }) {
     totalOrigStake: number;
     totalPayout: number;
     hedgeStake: number;
-    profitIfOrig: number;
-    profitIfHedge: number;
+    originalProfit: number;   // what you'd make if original wins with NO hedge placed
+    guaranteedProfit: number; // locked-in profit after both stakes (always equal whichever side wins)
     totalRisk: number;
     roi: number;
   } | null = null;
 
   if (valid) {
     const totalOrigStake = parsedBets.reduce((s, b) => s + b.stake, 0);
-    const totalPayout = parsedBets.reduce((s, b) => s + b.stake * b.dec!, 0);
-    const hedgeStake = totalPayout / hedgeDec!;
-    const profitIfOrig = totalPayout - totalOrigStake - hedgeStake;
-    const profitIfHedge = hedgeStake * hedgeDec! - hedgeStake - totalOrigStake;
-    const guarProfit = Math.min(profitIfOrig, profitIfHedge);
+    const totalPayout    = parsedBets.reduce((s, b) => s + b.stake * b.dec!, 0);
+    const hedgeStake     = totalPayout / hedgeDec!;
+    // With a perfect hedge hedgeStake = totalPayout/hedgeDec, so both
+    // "if original wins" and "if hedge wins" are identical:
+    //   totalPayout − totalOrigStake − hedgeStake
+    const guaranteedProfit = totalPayout - totalOrigStake - hedgeStake;
     res = {
       totalOrigStake,
       totalPayout,
       hedgeStake,
-      profitIfOrig,
-      profitIfHedge,
+      originalProfit:   totalPayout - totalOrigStake, // no hedge cost
+      guaranteedProfit,
       totalRisk: totalOrigStake + hedgeStake,
-      roi: (guarProfit / (totalOrigStake + hedgeStake)) * 100,
+      roi: (guaranteedProfit / (totalOrigStake + hedgeStake)) * 100,
     };
   }
 
-  const guaranteed = res ? Math.min(res.profitIfOrig, res.profitIfHedge) : null;
-  const isProfit = guaranteed !== null && guaranteed > 0;
+  const isProfit = res !== null && res.guaranteedProfit > 0;
 
   return (
     <div className="space-y-6">
@@ -377,23 +377,36 @@ function HedgeCalculator({ mode }: { mode: OddsMode }) {
 
       {res ? (
         <div className="space-y-4">
-          {/* Outcome cards */}
+          {/* Two-card comparison: original upside vs locked-in guaranteed */}
           <div className="flex gap-3">
-            <OutcomeCard label="If original wins" profit={res.profitIfOrig} sub="Net after all stakes" />
-            <OutcomeCard label="If hedge wins"    profit={res.profitIfHedge} sub="Net after all stakes" />
+            {/* What you'd make if you didn't hedge at all */}
+            <div className="flex-1 rounded-xl border border-violet-500/20 bg-violet-500/8 p-4 text-center space-y-1">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Original profit</p>
+              <p className="text-2xl font-black tabular-nums text-violet-600 dark:text-violet-400">
+                +{fmt$(res.originalProfit)}
+              </p>
+              <p className="text-[10px] text-muted-foreground leading-tight">If original wins, unhedged</p>
+            </div>
+
+            {/* What the hedge locks in — same whichever side wins */}
+            <OutcomeCard
+              label="Guaranteed (hedged)"
+              profit={res.guaranteedProfit}
+              sub="Locked in regardless of outcome"
+            />
           </div>
 
-          {/* Guaranteed summary */}
+          {/* Big guaranteed-profit hero */}
           <div className={cn(
             "rounded-2xl border p-5 text-center",
             isProfit ? "bg-emerald-500/10 border-emerald-500/25" : "bg-red-500/10 border-red-500/25"
           )}>
             <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-1">Guaranteed profit</p>
             <p className={cn("text-4xl font-black tabular-nums", isProfit ? "text-emerald-500 dark:text-emerald-400" : "text-red-500 dark:text-red-400")}>
-              {isProfit ? "+" : ""}{fmt$(guaranteed!)}
+              {res.guaranteedProfit >= 0 ? "+" : ""}{fmt$(res.guaranteedProfit)}
             </p>
             <p className={cn("text-sm mt-1 font-semibold", isProfit ? "text-emerald-600 dark:text-emerald-400" : "text-red-500")}>
-              {fmtPct(res.roi)} ROI · no matter the result
+              {fmtPct(res.roi)} ROI · you give up {fmt$(res.originalProfit - res.guaranteedProfit)} for certainty
             </p>
           </div>
 
@@ -873,7 +886,7 @@ function BreakevenCalculator({ mode }: { mode: OddsMode }) {
 
 export default function HedgeCalculatorPage() {
   const [active, setActive]     = useState<ToolId>("hedge");
-  const [oddsMode, setOddsMode] = useState<OddsMode>("american");
+  const [oddsMode, setOddsMode] = useState<OddsMode>("decimal");
 
   return (
     <div className="relative min-h-screen overflow-hidden">
@@ -909,7 +922,7 @@ export default function HedgeCalculatorPage() {
           {/* Odds mode toggle */}
           <div className="mt-5 inline-flex items-center rounded-xl border border-border/50 bg-muted/30 p-1 gap-0.5">
             <span className="px-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Odds</span>
-            {(["american", "decimal"] as const).map((m) => (
+            {(["decimal", "american"] as const).map((m) => (
               <button key={m} type="button" onClick={() => setOddsMode(m)}
                 className={cn(
                   "rounded-lg px-3 py-1.5 text-xs font-semibold transition-all",
