@@ -35,8 +35,12 @@ export function WhiteboardPanel({ token }: Props) {
   const [renameVal, setRenameVal] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
 
-  // Fetch boards ONCE on mount — no activeBoardId in deps to avoid re-fetch loop
+  // Fetch boards once on mount.
+  // token is guaranteed non-null here — the notes page only renders WhiteboardPanel
+  // when token is truthy. We use [] deps so a token refresh (TOKEN_REFRESHED from
+  // Supabase) doesn't re-run this effect and cause unnecessary re-renders.
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       try {
         const res = await fetch("/api/whiteboard", {
@@ -45,13 +49,17 @@ export function WhiteboardPanel({ token }: Props) {
         if (res.ok) {
           const data = (await res.json()) as { boards: BoardMeta[] };
           const list = data.boards ?? [];
-          setBoards(list);
-          if (list.length > 0) setActiveBoardId(list[0].id);
+          if (!cancelled) {
+            setBoards(list);
+            if (list.length > 0) setActiveBoardId(list[0].id);
+          }
         }
       } catch {/* */}
-      finally { setLoading(false); }
+      finally { if (!cancelled) setLoading(false); }
     })();
-  }, [token]);
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // intentionally empty — token is stable at mount time
 
   useEffect(() => {
     if (renamingId && renameInputRef.current) {
