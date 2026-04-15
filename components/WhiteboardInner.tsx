@@ -1,84 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Tldraw, useEditor, getSnapshot, loadSnapshot } from "tldraw";
+import { useCallback, useRef, useState } from "react";
+import { Tldraw, getSnapshot, loadSnapshot } from "tldraw";
+import type { Editor } from "tldraw";
 import "tldraw/tldraw.css";
 import { Check, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
-
-/**
- * Placed inside <Tldraw> to access the editor via useEditor().
- * Loads the board snapshot once, then auto-saves on changes (2 s debounce).
- */
-function BoardSync({
-  token,
-  boardId,
-  onStatusChange,
-}: {
-  token: string;
-  boardId: string;
-  onStatusChange: (s: SaveStatus) => void;
-}) {
-  const editor = useEditor();
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
-  const loadedRef = useRef(false);
-
-  useEffect(() => {
-    // Load saved snapshot for this board
-    (async () => {
-      try {
-        const res = await fetch(`/api/whiteboard?boardId=${encodeURIComponent(boardId)}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (res.ok) {
-          const data = (await res.json()) as { snapshot: unknown };
-          if (data.snapshot) {
-            loadSnapshot(editor.store, data.snapshot as Parameters<typeof loadSnapshot>[1]);
-          }
-        }
-      } catch {/* */}
-      finally {
-        loadedRef.current = true;
-      }
-    })();
-
-    // Auto-save on changes with 2 s debounce
-    const unsub = editor.store.listen(
-      () => {
-        if (!loadedRef.current) return;
-        clearTimeout(timerRef.current);
-        onStatusChange("saving");
-        timerRef.current = setTimeout(async () => {
-          try {
-            const snapshot = getSnapshot(editor.store);
-            const res = await fetch("/api/whiteboard", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${token}`,
-              },
-              body: JSON.stringify({ action: "save", boardId, snapshot }),
-            });
-            onStatusChange(res.ok ? "saved" : "error");
-          } catch {
-            onStatusChange("error");
-          }
-        }, 2000);
-      },
-      { scope: "document" },
-    );
-
-    return () => {
-      unsub();
-      clearTimeout(timerRef.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // intentionally empty — editor/token/boardId don't change after mount
-
-  return null;
-}
 
 interface Props {
   token: string;
@@ -87,15 +16,78 @@ interface Props {
 
 export default function WhiteboardInner({ token, boardId }: Props) {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const unsubRef = useRef<(() => void) | null>(null);
+
+  /**
+   * Called once by tldraw when the editor is ready.
+   * 1. Load saved snapshot for this board
+   * 2. Only AFTER loading completes, attach the store listener for auto-save
+   * This prevents loadSnapshot from triggering the "saving" state.
+   */
+  const handleMount = useCallback(
+    (editor: Editor) => {
+      // Clean up any previous listener (shouldn't happen, but just in case)
+      unsubRef.current?.();
+
+      const attachListener = () => {
+        const unsub = editor.store.listen(
+          () => {
+            clearTimeout(timerRef.current);
+            setSaveStatus("saving");
+            timerRef.current = setTimeout(async () => {
+              try {
+                const snapshot = getSnapshot(editor.store);
+                const res = await fetch("/api/whiteboard", {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${token}`,
+                  },
+                  body: JSON.stringify({ action: "save", boardId, snapshot }),
+                });
+                setSaveStatus(res.ok ? "saved" : "error");
+              } catch {
+                setSaveStatus("error");
+              }
+            }, 2000);
+          },
+          { scope: "document" },
+        );
+        unsubRef.current = unsub;
+      };
+
+      // Load the board snapshot, then attach the listener
+      fetch(`/api/whiteboard?boardId=${encodeURIComponent(boardId)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: { snapshot: unknown } | null) => {
+          if (data?.snapshot) {
+            try {
+              loadSnapshot(editor.store, data.snapshot as Parameters<typeof loadSnapshot>[1]);
+            } catch {
+              // Ignore snapshot migration errors — start with empty board
+            }
+          }
+        })
+        .catch(() => {/* Network error — start with empty board */})
+        .finally(() => {
+          // Listener attaches here, AFTER loadSnapshot has fully run.
+          // Any store events from loadSnapshot have already fired and are gone.
+          attachListener();
+        });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [], // Intentionally empty — token/boardId don't change while mounted (key forces remount)
+  );
 
   return (
-    // tldraw needs position:relative + explicit dimensions on its direct parent
+    // position:absolute + inset:0 fills the relative parent in WhiteboardPanel exactly
     <div style={{ position: "absolute", inset: 0 }}>
-      <Tldraw inferDarkMode>
-        <BoardSync token={token} boardId={boardId} onStatusChange={setSaveStatus} />
-      </Tldraw>
+      <Tldraw inferDarkMode onMount={handleMount} />
 
-      {/* Save indicator — matches the Notes-style "Saving… / Saved" badge */}
+      {/* Save indicator */}
       {saveStatus !== "idle" && (
         <div
           className={cn(

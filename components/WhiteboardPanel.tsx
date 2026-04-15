@@ -35,24 +35,23 @@ export function WhiteboardPanel({ token }: Props) {
   const [renameVal, setRenameVal] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
 
-  const fetchBoards = useCallback(async () => {
-    try {
-      const res = await fetch("/api/whiteboard", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = (await res.json()) as { boards: BoardMeta[] };
-        const list = data.boards ?? [];
-        setBoards(list);
-        if (list.length > 0 && !activeBoardId) {
-          setActiveBoardId(list[0].id);
+  // Fetch boards ONCE on mount — no activeBoardId in deps to avoid re-fetch loop
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/whiteboard", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = (await res.json()) as { boards: BoardMeta[] };
+          const list = data.boards ?? [];
+          setBoards(list);
+          if (list.length > 0) setActiveBoardId(list[0].id);
         }
-      }
-    } catch {/* */}
-    finally { setLoading(false); }
-  }, [token, activeBoardId]);
-
-  useEffect(() => { void fetchBoards(); }, [fetchBoards]);
+      } catch {/* */}
+      finally { setLoading(false); }
+    })();
+  }, [token]);
 
   useEffect(() => {
     if (renamingId && renameInputRef.current) {
@@ -92,7 +91,7 @@ export function WhiteboardPanel({ token }: Props) {
   }, [renamingId, renameVal, token]);
 
   const deleteBoard = useCallback(async (boardId: string) => {
-    if (boards.length <= 1) return; // keep at least one
+    if (boards.length <= 1) return;
     const next = boards.filter((b) => b.id !== boardId);
     setBoards(next);
     if (activeBoardId === boardId) setActiveBoardId(next[0]?.id ?? null);
@@ -106,7 +105,7 @@ export function WhiteboardPanel({ token }: Props) {
   return (
     <div className="flex flex-col" style={{ height: "calc(100vh - 220px)", minHeight: 520 }}>
       {/* Board tabs */}
-      <div className="flex items-center gap-1 overflow-x-auto border-b border-border bg-muted/30 px-2 py-1.5 shrink-0">
+      <div className="flex items-center gap-1 overflow-x-auto border border-border rounded-t-xl bg-muted/30 px-2 py-1.5 shrink-0">
         {loading ? (
           <div className="flex h-8 items-center gap-2 px-2 text-xs text-muted-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading boards…
@@ -183,8 +182,13 @@ export function WhiteboardPanel({ token }: Props) {
         </button>
       </div>
 
-      {/* Canvas — use key to force remount when switching boards */}
-      <div className="relative flex-1 overflow-hidden rounded-b-xl border-x border-b border-border">
+      {/*
+        Canvas wrapper — NO overflow-hidden here.
+        overflow-hidden clips tldraw's floating menus/toolbar popups
+        which makes the UI appear blank when interacting.
+        Use relative+flex-1 so the absolutely-positioned canvas fills the space.
+      */}
+      <div className="relative flex-1 border-x border-b border-border rounded-b-xl" style={{ minHeight: 0 }}>
         {activeBoardId ? (
           <WhiteboardCanvas key={activeBoardId} token={token} boardId={activeBoardId} />
         ) : (
