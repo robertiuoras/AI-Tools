@@ -43,6 +43,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RemindersPanel } from "@/components/RemindersPanel";
+import { WhiteboardPanel } from "@/components/WhiteboardPanel";
+import { StoragePanel } from "@/components/StoragePanel";
 import {
   Star,
   Plus,
@@ -1027,7 +1029,7 @@ export default function NotesPage() {
     y: number;
     imageFigure: HTMLElement | null;
   }>({ open: false, x: 0, y: 0, imageFigure: null });
-  const [notesSubView, setNotesSubView] = useState<"notes" | "reminders">(
+  const [notesSubView, setNotesSubView] = useState<"notes" | "reminders" | "whiteboard" | "storage">(
     "notes",
   );
   /** After first bootstrap, switching pages only shows the grid overlay (no second full-page pass). */
@@ -3707,7 +3709,10 @@ export default function NotesPage() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const q = new URLSearchParams(window.location.search);
-    if (q.get("tab") === "reminders") setNotesSubView("reminders");
+    const tab = q.get("tab");
+    if (tab === "reminders") setNotesSubView("reminders");
+    else if (tab === "whiteboard") setNotesSubView("whiteboard");
+    else if (tab === "storage") setNotesSubView("storage");
   }, []);
 
   const showInitialNotesWorkspaceLoader =
@@ -3746,41 +3751,40 @@ export default function NotesPage() {
           (e.g. Google via Supabase)—other users never see them.
         </p>
         <div className="mt-4 flex flex-wrap gap-2 border-b border-border pb-2">
-          <button
-            type="button"
-            className={cn(
-              "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-              notesSubView === "notes"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:bg-muted",
-            )}
-            onClick={() => {
-              setNotesSubView("notes");
-              window.history.replaceState({}, "", "/notes");
-            }}
-          >
-            Notes
-          </button>
-          <button
-            type="button"
-            className={cn(
-              "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-              notesSubView === "reminders"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:bg-muted",
-            )}
-            onClick={() => {
-              setNotesSubView("reminders");
-              window.history.replaceState({}, "", "/notes?tab=reminders");
-            }}
-          >
-            Reminders
-          </button>
+          {(
+            [
+              { key: "notes", label: "Notes", url: "/notes" },
+              { key: "reminders", label: "Reminders", url: "/notes?tab=reminders" },
+              { key: "whiteboard", label: "Whiteboard", url: "/notes?tab=whiteboard" },
+              { key: "storage", label: "Storage", url: "/notes?tab=storage" },
+            ] as const
+          ).map(({ key, label, url }) => (
+            <button
+              key={key}
+              type="button"
+              className={cn(
+                "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                notesSubView === key
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted",
+              )}
+              onClick={() => {
+                setNotesSubView(key);
+                window.history.replaceState({}, "", url);
+              }}
+            >
+              {label}
+            </button>
+          ))}
         </div>
       </div>
 
       {notesSubView === "reminders" ? (
         <RemindersPanel />
+      ) : notesSubView === "whiteboard" ? (
+        <WhiteboardPanel token={token} />
+      ) : notesSubView === "storage" ? (
+        <StoragePanel token={token} />
       ) : (
         <div className="relative grid min-h-[min(70vh,560px)] grid-cols-1 gap-4 lg:grid-cols-[minmax(0,280px)_minmax(0,320px)_minmax(0,1fr)] lg:items-start">
           {notesLoading && initialNotesBootstrapDone ? (
