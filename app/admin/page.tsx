@@ -2287,7 +2287,7 @@ export default function AdminPage() {
                     Add multiple tools at once. Enter one URL per line.
                   </p>
                   <textarea
-                    placeholder="https://example1.com&#10;example2.com&#10;https://example3.com"
+                    placeholder=""
                     value={bulkUrls}
                     onChange={(e) => setBulkUrls(e.target.value)}
                     disabled={analyzing || isProcessing || bulkProcessing}

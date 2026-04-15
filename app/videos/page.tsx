@@ -36,6 +36,14 @@ function formatSubs(count: number | null): string | null {
   return count.toString();
 }
 
+/** True if the video was added within the last 7 days */
+function isVideoRecent(createdAt: string | null | undefined): boolean {
+  if (!createdAt) return false;
+  const d = new Date(createdAt);
+  if (isNaN(d.getTime())) return false;
+  return Date.now() - d.getTime() < 7 * 24 * 60 * 60 * 1000;
+}
+
 function getYouTubeThumbnail(url: string): string | null {
   try {
     const u = new URL(url);
@@ -69,6 +77,7 @@ function VideoGridCard({
   const source = (video as { source?: string }).source ?? "youtube";
   const thumb = source === "youtube" ? getYouTubeThumbnail(video.url) : null;
   const cats = videoCategoryList(video).slice(0, 2);
+  const isNew = isVideoRecent(video.createdAt);
 
   return (
     <motion.div
@@ -114,8 +123,14 @@ function VideoGridCard({
         )}>
           {source === "tiktok" ? "TikTok" : "YT"}
         </span>
+        {/* New badge */}
+        {isNew && (
+          <span className="absolute right-2 top-2 rounded-md bg-gradient-to-r from-emerald-500 to-teal-500 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white shadow-sm">
+            New
+          </span>
+        )}
         {/* Watched badge */}
-        {watched && (
+        {watched && !isNew && (
           <span className="absolute right-2 top-2 flex items-center gap-0.5 rounded-full bg-emerald-500/90 px-2 py-0.5 text-[10px] font-semibold text-white">
             <CheckCircle2 className="h-3 w-3" /> Watched
           </span>

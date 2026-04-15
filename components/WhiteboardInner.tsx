@@ -1,27 +1,35 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Tldraw, useEditor, getSnapshot, loadSnapshot } from "tldraw";
 import "tldraw/tldraw.css";
-import { Check, Cloud, CloudOff, Loader2 } from "lucide-react";
+import { Check, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-type SaveStatus = "saved" | "saving" | "unsaved" | "error";
+type SaveStatus = "idle" | "saving" | "saved" | "error";
 
-function AutoSaver({ token, saveStatus, setSaveStatus }: {
+/**
+ * Placed inside <Tldraw> to access the editor via useEditor().
+ * Loads the board snapshot once, then auto-saves on changes (2 s debounce).
+ */
+function BoardSync({
+  token,
+  boardId,
+  onStatusChange,
+}: {
   token: string;
-  saveStatus: SaveStatus;
-  setSaveStatus: (s: SaveStatus) => void;
+  boardId: string;
+  onStatusChange: (s: SaveStatus) => void;
 }) {
   const editor = useEditor();
   const timerRef = useRef<ReturnType<typeof setTimeout>>();
-  const mountedRef = useRef(false);
+  const loadedRef = useRef(false);
 
   useEffect(() => {
-    // On mount, load the saved snapshot
+    // Load saved snapshot for this board
     (async () => {
       try {
-        const res = await fetch("/api/whiteboard", {
+        const res = await fetch(`/api/whiteboard?boardId=${encodeURIComponent(boardId)}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (res.ok) {
@@ -30,21 +38,19 @@ function AutoSaver({ token, saveStatus, setSaveStatus }: {
             loadSnapshot(editor.store, data.snapshot as Parameters<typeof loadSnapshot>[1]);
           }
         }
-      } catch {
-        /* ignore */
-      } finally {
-        mountedRef.current = true;
+      } catch {/* */}
+      finally {
+        loadedRef.current = true;
       }
     })();
 
-    // Listen for any changes and auto-save with debounce
+    // Auto-save on changes with 2 s debounce
     const unsub = editor.store.listen(
       () => {
-        if (!mountedRef.current) return;
-        setSaveStatus("unsaved");
+        if (!loadedRef.current) return;
         clearTimeout(timerRef.current);
+        onStatusChange("saving");
         timerRef.current = setTimeout(async () => {
-          setSaveStatus("saving");
           try {
             const snapshot = getSnapshot(editor.store);
             const res = await fetch("/api/whiteboard", {
@@ -53,11 +59,11 @@ function AutoSaver({ token, saveStatus, setSaveStatus }: {
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${token}`,
               },
-              body: JSON.stringify({ snapshot }),
+              body: JSON.stringify({ action: "save", boardId, snapshot }),
             });
-            setSaveStatus(res.ok ? "saved" : "error");
+            onStatusChange(res.ok ? "saved" : "error");
           } catch {
-            setSaveStatus("error");
+            onStatusChange("error");
           }
         }, 2000);
       },
@@ -68,47 +74,42 @@ function AutoSaver({ token, saveStatus, setSaveStatus }: {
       unsub();
       clearTimeout(timerRef.current);
     };
-  }, [editor, token, setSaveStatus]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // intentionally empty — editor/token/boardId don't change after mount
 
   return null;
 }
 
 interface Props {
   token: string;
+  boardId: string;
 }
 
-export default function WhiteboardInner({ token }: Props) {
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
-
-  const handleMount = useCallback(() => {
-    // Editor is available through useEditor inside children
-  }, []);
+export default function WhiteboardInner({ token, boardId }: Props) {
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
 
   return (
-    <div className="relative h-full w-full">
-      <Tldraw
-        onMount={handleMount}
-        inferDarkMode
-        className="tldraw-workspace"
-      >
-        <AutoSaver token={token} saveStatus={saveStatus} setSaveStatus={setSaveStatus} />
+    // tldraw needs position:relative + explicit dimensions on its direct parent
+    <div style={{ position: "absolute", inset: 0 }}>
+      <Tldraw inferDarkMode>
+        <BoardSync token={token} boardId={boardId} onStatusChange={setSaveStatus} />
       </Tldraw>
 
-      {/* Save status badge */}
-      <div
-        className={cn(
-          "pointer-events-none absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium shadow transition-all",
-          saveStatus === "saved" && "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-          saveStatus === "saving" && "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400",
-          saveStatus === "unsaved" && "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-          saveStatus === "error" && "bg-destructive/10 text-destructive",
-        )}
-      >
-        {saveStatus === "saved" && <><Check className="h-3 w-3" /> Saved</>}
-        {saveStatus === "saving" && <><Loader2 className="h-3 w-3 animate-spin" /> Saving…</>}
-        {saveStatus === "unsaved" && <><Cloud className="h-3 w-3" /> Unsaved</>}
-        {saveStatus === "error" && <><CloudOff className="h-3 w-3" /> Save failed</>}
-      </div>
+      {/* Save indicator — matches the Notes-style "Saving… / Saved" badge */}
+      {saveStatus !== "idle" && (
+        <div
+          className={cn(
+            "pointer-events-none absolute bottom-3 right-14 z-[400] flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium shadow-sm transition-all",
+            saveStatus === "saving" && "bg-card/90 text-muted-foreground ring-1 ring-border/40 backdrop-blur-sm",
+            saveStatus === "saved"  && "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+            saveStatus === "error"  && "bg-destructive/10 text-destructive",
+          )}
+        >
+          {saveStatus === "saving" && <Loader2 className="h-3 w-3 animate-spin" />}
+          {saveStatus === "saved"  && <Check  className="h-3 w-3" />}
+          {saveStatus === "saving" ? "Saving…" : saveStatus === "saved" ? "Saved" : "Save failed"}
+        </div>
+      )}
     </div>
   );
 }

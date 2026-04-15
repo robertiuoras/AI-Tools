@@ -10,6 +10,13 @@ import { Eye, CheckCircle2, ExternalLink } from "lucide-react";
 import { videoCategoryList } from "@/lib/tool-categories";
 import { toolCategoryBadgeClass } from "@/lib/tool-category-styles";
 
+function isVideoRecent(createdAt: string | null | undefined): boolean {
+  if (!createdAt) return false;
+  const d = new Date(createdAt);
+  if (isNaN(d.getTime())) return false;
+  return Date.now() - d.getTime() < 7 * 24 * 60 * 60 * 1000;
+}
+
 interface VideoCardProps {
   video: Video;
   index?: number;
@@ -73,6 +80,7 @@ export function VideoCard({
           .filter(Boolean)
       : [];
   const categoryLabels = videoCategoryList(video);
+  const isNew = isVideoRecent(video.createdAt);
 
   return (
     <motion.div
@@ -80,7 +88,14 @@ export function VideoCard({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2, delay: Math.min(index * 0.03, 0.15) }}
     >
-      <Card className="overflow-hidden border-border/50 bg-card max-w-2xl mx-auto">
+      <Card className="relative overflow-hidden border-border/50 bg-card max-w-2xl mx-auto">
+        {isNew && (
+          <div className="absolute left-0 top-0 z-10 p-1.5">
+            <span className="rounded-md bg-gradient-to-r from-emerald-500 to-teal-500 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white shadow-sm">
+              New
+            </span>
+          </div>
+        )}
         <CardContent className="p-4 sm:p-6 space-y-4">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex gap-3 items-start min-w-0">

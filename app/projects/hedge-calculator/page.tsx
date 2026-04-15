@@ -232,25 +232,59 @@ type ToolId = (typeof TOOLS)[number]["id"];
 
 // ─── Hedge Calculator ─────────────────────────────────────────────────────────
 
+type HedgeBet = { id: number; stake: string; odds: string };
+let _hedgeId = 2;
+
 function HedgeCalculator({ mode }: { mode: OddsMode }) {
-  const [origStake, setOrigStake] = useState("");
-  const [origOdds, setOrigOdds]   = useState("");
+  const [bets, setBets] = useState<HedgeBet[]>([
+    { id: 1, stake: "", odds: "" },
+  ]);
   const [hedgeOdds, setHedgeOdds] = useState("");
 
-  const origDec  = parseOdds(origOdds, mode);
-  const hedgeDec = parseOdds(hedgeOdds, mode);
-  const stake    = parseFloat(origStake);
-  const valid    = origDec !== null && hedgeDec !== null && stake > 0;
+  const addBet = () => setBets((p) => [...p, { id: ++_hedgeId, stake: "", odds: "" }]);
+  const removeBet = (id: number) => setBets((p) => p.filter((b) => b.id !== id));
+  const updateBet = (id: number, field: "stake" | "odds", val: string) =>
+    setBets((p) => p.map((b) => (b.id === id ? { ...b, [field]: val } : b)));
 
-  let res: { hedgeStake: number; profitIfOrig: number; profitIfHedge: number; totalRisk: number; roi: number } | null = null;
+  const hedgeDec = parseOdds(hedgeOdds, mode);
+
+  // Compute per-bet decimal odds and stakes
+  const parsedBets = bets.map((b) => ({
+    stake: parseFloat(b.stake),
+    dec: parseOdds(b.odds, mode),
+  }));
+
+  const allBetsValid = parsedBets.every((b) => b.stake > 0 && b.dec !== null);
+  const valid = allBetsValid && hedgeDec !== null && parsedBets.length > 0;
+
+  let res: {
+    totalOrigStake: number;
+    totalPayout: number;
+    hedgeStake: number;
+    profitIfOrig: number;
+    profitIfHedge: number;
+    totalRisk: number;
+    roi: number;
+  } | null = null;
+
   if (valid) {
-    const origPayout  = stake * origDec!;
-    const hedgeStake  = origPayout / hedgeDec!;
-    const profitIfOrig  = origPayout - stake - hedgeStake;
-    const profitIfHedge = hedgeStake * hedgeDec! - hedgeStake - stake;
-    const guarProfit  = Math.min(profitIfOrig, profitIfHedge);
-    res = { hedgeStake, profitIfOrig, profitIfHedge, totalRisk: stake + hedgeStake, roi: (guarProfit / (stake + hedgeStake)) * 100 };
+    const totalOrigStake = parsedBets.reduce((s, b) => s + b.stake, 0);
+    const totalPayout = parsedBets.reduce((s, b) => s + b.stake * b.dec!, 0);
+    const hedgeStake = totalPayout / hedgeDec!;
+    const profitIfOrig = totalPayout - totalOrigStake - hedgeStake;
+    const profitIfHedge = hedgeStake * hedgeDec! - hedgeStake - totalOrigStake;
+    const guarProfit = Math.min(profitIfOrig, profitIfHedge);
+    res = {
+      totalOrigStake,
+      totalPayout,
+      hedgeStake,
+      profitIfOrig,
+      profitIfHedge,
+      totalRisk: totalOrigStake + hedgeStake,
+      roi: (guarProfit / (totalOrigStake + hedgeStake)) * 100,
+    };
   }
+
   const guaranteed = res ? Math.min(res.profitIfOrig, res.profitIfHedge) : null;
   const isProfit = guaranteed !== null && guaranteed > 0;
 
@@ -258,14 +292,86 @@ function HedgeCalculator({ mode }: { mode: OddsMode }) {
     <div className="space-y-6">
       <div>
         <h2 className="text-xl font-bold tracking-tight">Hedge Calculator</h2>
-        <p className="text-sm text-muted-foreground mt-1">Lock in guaranteed profit by betting both sides with optimal stakes.</p>
+        <p className="text-sm text-muted-foreground mt-1">
+          Add one or more original bets at any stake/odds, then enter the hedge odds to lock in guaranteed profit.
+        </p>
       </div>
 
       <InputPanel>
-        <div className="grid gap-4 sm:grid-cols-3">
-          <MoneyInput id="orig-stake" label="Original stake" value={origStake} onChange={setOrigStake} />
-          <OddsInput  id="orig-odds"  label="Original odds"  value={origOdds}  onChange={setOrigOdds}  mode={mode} placeholder={mode === "american" ? "+200" : "3.00"} />
-          <OddsInput  id="hedge-odds" label="Hedge odds"     value={hedgeOdds} onChange={setHedgeOdds} mode={mode} placeholder={mode === "american" ? "-150" : "1.67"} />
+        {/* Original bets */}
+        <div className="space-y-3">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Original bet{bets.length > 1 ? "s" : ""} ({bets.length})
+          </p>
+          {bets.map((bet, idx) => (
+            <div key={bet.id} className="flex items-end gap-2">
+              {bets.length > 1 && (
+                <div className="flex h-11 w-7 shrink-0 items-center justify-center text-xs font-bold text-muted-foreground">
+                  {idx + 1}
+                </div>
+              )}
+              <div className="flex-1 grid gap-3 sm:grid-cols-2">
+                <MoneyInput
+                  id={`orig-stake-${bet.id}`}
+                  label={idx === 0 ? "Stake" : ""}
+                  value={bet.stake}
+                  onChange={(v) => updateBet(bet.id, "stake", v)}
+                />
+                <OddsInput
+                  id={`orig-odds-${bet.id}`}
+                  label={idx === 0 ? "Odds" : ""}
+                  value={bet.odds}
+                  onChange={(v) => updateBet(bet.id, "odds", v)}
+                  mode={mode}
+                  placeholder={mode === "american" ? "+200" : "3.00"}
+                />
+              </div>
+              {bets.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => removeBet(bet.id)}
+                  className="mb-0.5 flex h-11 w-10 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-red-500/10 hover:text-red-500 transition-colors"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+          ))}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={addBet}
+            disabled={bets.length >= 8}
+            className="gap-2 h-9 border-dashed"
+          >
+            <Plus className="h-4 w-4" /> Add another bet
+          </Button>
+        </div>
+
+        {/* Divider */}
+        <div className="border-t border-border/40" />
+
+        {/* Hedge odds */}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <OddsInput
+            id="hedge-odds"
+            label="Hedge odds (opposing outcome)"
+            value={hedgeOdds}
+            onChange={setHedgeOdds}
+            mode={mode}
+            placeholder={mode === "american" ? "-150" : "1.67"}
+          />
+          {res && (
+            <div className="space-y-1.5">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Combined original payout
+              </p>
+              <div className="flex h-11 items-center rounded-md border border-border/60 bg-muted/30 px-3 text-base font-bold tabular-nums text-foreground">
+                {fmt$(res.totalPayout)}
+              </div>
+            </div>
+          )}
         </div>
       </InputPanel>
 
@@ -273,8 +379,8 @@ function HedgeCalculator({ mode }: { mode: OddsMode }) {
         <div className="space-y-4">
           {/* Outcome cards */}
           <div className="flex gap-3">
-            <OutcomeCard label="If original wins" profit={res.profitIfOrig} sub="Net after both stakes" />
-            <OutcomeCard label="If hedge wins"    profit={res.profitIfHedge} sub="Net after both stakes" />
+            <OutcomeCard label="If original wins" profit={res.profitIfOrig} sub="Net after all stakes" />
+            <OutcomeCard label="If hedge wins"    profit={res.profitIfHedge} sub="Net after all stakes" />
           </div>
 
           {/* Guaranteed summary */}
@@ -292,16 +398,17 @@ function HedgeCalculator({ mode }: { mode: OddsMode }) {
           </div>
 
           <ResultsPanel>
-            <StatRow label="Hedge stake to place" value={fmt$(res.hedgeStake)} sub="Bet this amount on the opposing outcome" sentiment="neutral" hero />
-            <StatRow label="Total money at risk"  value={fmt$(res.totalRisk)} sentiment="neutral" />
+            <StatRow label="Hedge stake to place"  value={fmt$(res.hedgeStake)}     sub="Bet this amount on the opposing outcome" sentiment="neutral" hero />
+            <StatRow label="Total original stakes" value={fmt$(res.totalOrigStake)} sentiment="neutral" />
+            <StatRow label="Total money at risk"   value={fmt$(res.totalRisk)}      sentiment="neutral" />
           </ResultsPanel>
 
           {!isProfit && (
-            <Warning text="These odds don't produce a guaranteed profit — both payouts must exceed the total combined stake. Try better odds on the hedge." />
+            <Warning text="These odds don't produce a guaranteed profit — the combined payout must exceed the total amount staked including the hedge. Try better odds." />
           )}
         </div>
       ) : (
-        <EmptyState text="Enter your original stake and both sets of odds to calculate." />
+        <EmptyState text="Enter stake and odds for each original bet, plus the hedge odds." />
       )}
     </div>
   );
