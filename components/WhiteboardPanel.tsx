@@ -123,7 +123,7 @@ export function WhiteboardPanel({ token }: Props) {
             <div
               key={board.id}
               className={cn(
-                "group flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-sm transition-all",
+                "flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-sm transition-all",
                 activeBoardId === board.id
                   ? "border-primary/40 bg-background text-foreground shadow-sm"
                   : "border-transparent text-muted-foreground hover:bg-background/60 hover:text-foreground cursor-pointer",
@@ -151,29 +151,35 @@ export function WhiteboardPanel({ token }: Props) {
                 </div>
               ) : (
                 <>
-                  <span className="max-w-[140px] truncate">{board.name}</span>
-                  {activeBoardId === board.id && (
-                    <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <span className="max-w-[120px] truncate">{board.name}</span>
+                  {/* Always visible — no need to select a tab first to delete/rename */}
+                  <div className="flex items-center gap-0.5 shrink-0">
+                    <button
+                      type="button"
+                      title="Rename board"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActiveBoardId(board.id);
+                        startRename(board);
+                      }}
+                      className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                    {boards.length > 1 ? (
                       <button
                         type="button"
-                        title="Rename"
-                        onClick={(e) => { e.stopPropagation(); startRename(board); }}
-                        className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                        title="Delete board"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void deleteBoard(board.id);
+                        }}
+                        className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-red-500/10 hover:text-red-500"
                       >
-                        <Pencil className="h-3 w-3" />
+                        <Trash2 className="h-3 w-3" />
                       </button>
-                      {boards.length > 1 && (
-                        <button
-                          type="button"
-                          title="Delete board"
-                          onClick={(e) => { e.stopPropagation(); void deleteBoard(board.id); }}
-                          className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-red-500/10 hover:text-red-500"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </button>
-                      )}
-                    </div>
-                  )}
+                    ) : null}
+                  </div>
                 </>
               )}
             </div>

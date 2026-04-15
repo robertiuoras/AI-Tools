@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Tldraw, getSnapshot } from "tldraw";
 import type { Editor, TLEditorSnapshot } from "tldraw";
 import "tldraw/tldraw.css";
@@ -11,15 +11,17 @@ interface Props {
   boardId: string;
 }
 
+/** ~45s — avoids tying saves to the old 2s debounce and keeps work off the interaction path */
+const AUTOSAVE_INTERVAL_MS = 45_000;
+
 /**
- * Persisted snapshots can include `session.isFocusMode: true` (tldraw “focus mode”),
- * which hides the toolbar and chrome — the canvas looks like a blank void with no way
- * to exit. Always load and save with focus mode off for this embedded editor.
+ * Persisted snapshots can include `session.isFocusMode: true`, which hides chrome.
+ * Always load and save with focus mode off.
  */
 function normalizeWhiteboardSnapshot(
-  s: TLEditorSnapshot | null,
+  s: TLEditorSnapshot | null | undefined,
 ): TLEditorSnapshot | undefined {
-  if (!s) return undefined;
+  if (s == null) return undefined;
   const session = s.session ?? { version: 1 as const };
   return {
     document: s.document,
@@ -42,8 +44,30 @@ function snapshotForPersist(editor: Editor) {
   };
 }
 
+async function postSave(
+  token: string,
+  boardId: string,
+  snapshot: TLEditorSnapshot,
+) {
+  const res = await fetch("/api/whiteboard", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      action: "save",
+      boardId,
+      snapshot,
+    }),
+  });
+  if (!res.ok) console.warn("[whiteboard] Save failed:", res.status);
+}
+
 /**
- * Isolated from parent state so autosave never re-renders the editor subtree.
+ * CRITICAL: `snapshot` must be referentially stable whenever `initialSnapshot` is unchanged.
+ * Building a new object every parent re-render made `memo` useless and forced Tldraw to
+ * re-apply the snapshot on every Notes page re-render (~2s when bootstrap/auth settles).
  */
 const TldrawEditor = memo(function TldrawEditor({
   snapshot,
@@ -67,7 +91,6 @@ export default function WhiteboardInner({ token, boardId }: Props) {
     TLEditorSnapshot | null | undefined
   >(undefined);
 
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
   const tokenRef = useRef(token);
   const boardIdRef = useRef(boardId);
   tokenRef.current = token;
@@ -93,45 +116,45 @@ export default function WhiteboardInner({ token, boardId }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const snapshotForEditor = useMemo(
+    () => normalizeWhiteboardSnapshot(initialSnapshot),
+    [initialSnapshot],
+  );
+
   const handleMount = useCallback((editor: Editor) => {
-    // Belt-and-suspenders: ensure UI is visible even if snapshot missed a field.
     editor.updateInstanceState({ isFocusMode: false });
     requestAnimationFrame(() => {
       editor.updateInstanceState({ isFocusMode: false });
     });
 
-    const unsub = editor.store.listen(
-      () => {
-        clearTimeout(timerRef.current);
-        timerRef.current = setTimeout(async () => {
-          try {
-            const snapshot = snapshotForPersist(editor);
-            const res = await fetch("/api/whiteboard", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${tokenRef.current}`,
-              },
-              body: JSON.stringify({
-                action: "save",
-                boardId: boardIdRef.current,
-                snapshot,
-              }),
-            });
-            if (!res.ok) {
-              console.warn("[whiteboard] Save failed:", res.status);
-            }
-          } catch (e) {
-            console.warn("[whiteboard] Save error:", e);
-          }
-        }, 2000);
-      },
-      { scope: "document", source: "user" },
-    );
+    // Interval autosave only — no store.listen (avoids coupling saves to edit events).
+    const interval = window.setInterval(() => {
+      void (async () => {
+        try {
+          await postSave(
+            tokenRef.current,
+            boardIdRef.current,
+            snapshotForPersist(editor),
+          );
+        } catch (e) {
+          console.warn("[whiteboard] Save error:", e);
+        }
+      })();
+    }, AUTOSAVE_INTERVAL_MS);
 
     return () => {
-      unsub();
-      clearTimeout(timerRef.current);
+      clearInterval(interval);
+      void (async () => {
+        try {
+          await postSave(
+            tokenRef.current,
+            boardIdRef.current,
+            snapshotForPersist(editor),
+          );
+        } catch {
+          /* ignore on unmount */
+        }
+      })();
     };
   }, []);
 
@@ -145,8 +168,6 @@ export default function WhiteboardInner({ token, boardId }: Props) {
       </div>
     );
   }
-
-  const snapshotForEditor = normalizeWhiteboardSnapshot(initialSnapshot);
 
   return (
     <div
