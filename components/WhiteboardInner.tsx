@@ -12,8 +12,38 @@ interface Props {
 }
 
 /**
- * Isolated from parent state so autosave / toasts never re-render the editor.
- * Re-rendering `<Tldraw>` after mount can collapse or reset the UI (toolbar disappears).
+ * Persisted snapshots can include `session.isFocusMode: true` (tldraw “focus mode”),
+ * which hides the toolbar and chrome — the canvas looks like a blank void with no way
+ * to exit. Always load and save with focus mode off for this embedded editor.
+ */
+function normalizeWhiteboardSnapshot(
+  s: TLEditorSnapshot | null,
+): TLEditorSnapshot | undefined {
+  if (!s) return undefined;
+  const session = s.session ?? { version: 1 as const };
+  return {
+    document: s.document,
+    session: {
+      ...session,
+      isFocusMode: false,
+    },
+  };
+}
+
+function snapshotForPersist(editor: Editor) {
+  const snap = getSnapshot(editor.store) as TLEditorSnapshot;
+  const session = snap.session ?? { version: 1 as const };
+  return {
+    ...snap,
+    session: {
+      ...session,
+      isFocusMode: false,
+    },
+  };
+}
+
+/**
+ * Isolated from parent state so autosave never re-renders the editor subtree.
  */
 const TldrawEditor = memo(function TldrawEditor({
   snapshot,
@@ -23,16 +53,16 @@ const TldrawEditor = memo(function TldrawEditor({
   onMount: (editor: Editor) => void | (() => void);
 }) {
   return (
-    <Tldraw inferDarkMode snapshot={snapshot} onMount={onMount} />
+    <Tldraw
+      inferDarkMode
+      hideUi={false}
+      snapshot={snapshot}
+      onMount={onMount}
+    />
   );
 });
 
 export default function WhiteboardInner({ token, boardId }: Props) {
-  /**
-   * undefined  = still fetching initial snapshot
-   * null       = fetch done, no saved snapshot (blank canvas)
-   * object     = fetch done, use as initial snapshot
-   */
   const [initialSnapshot, setInitialSnapshot] = useState<
     TLEditorSnapshot | null | undefined
   >(undefined);
@@ -50,7 +80,9 @@ export default function WhiteboardInner({ token, boardId }: Props) {
     })
       .then((r) => (r.ok ? r.json() : null))
       .then((data: { snapshot: TLEditorSnapshot } | null) => {
-        if (!cancelled) setInitialSnapshot(data?.snapshot ?? null);
+        if (cancelled) return;
+        const raw = data?.snapshot ?? null;
+        setInitialSnapshot(raw);
       })
       .catch(() => {
         if (!cancelled) setInitialSnapshot(null);
@@ -62,13 +94,18 @@ export default function WhiteboardInner({ token, boardId }: Props) {
   }, []);
 
   const handleMount = useCallback((editor: Editor) => {
+    // Belt-and-suspenders: ensure UI is visible even if snapshot missed a field.
+    editor.updateInstanceState({ isFocusMode: false });
+    requestAnimationFrame(() => {
+      editor.updateInstanceState({ isFocusMode: false });
+    });
+
     const unsub = editor.store.listen(
       () => {
         clearTimeout(timerRef.current);
-        // No setState here — runs on every stroke. Persist in background only.
         timerRef.current = setTimeout(async () => {
           try {
-            const snapshot = getSnapshot(editor.store);
+            const snapshot = snapshotForPersist(editor);
             const res = await fetch("/api/whiteboard", {
               method: "POST",
               headers: {
@@ -101,7 +138,7 @@ export default function WhiteboardInner({ token, boardId }: Props) {
   if (initialSnapshot === undefined) {
     return (
       <div
-        className="flex h-full w-full items-center justify-center"
+        className="flex h-full min-h-[400px] w-full items-center justify-center"
         style={{ position: "absolute", inset: 0 }}
       >
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -109,12 +146,14 @@ export default function WhiteboardInner({ token, boardId }: Props) {
     );
   }
 
+  const snapshotForEditor = normalizeWhiteboardSnapshot(initialSnapshot);
+
   return (
-    <div style={{ position: "absolute", inset: 0 }}>
-      <TldrawEditor
-        snapshot={initialSnapshot ?? undefined}
-        onMount={handleMount}
-      />
+    <div
+      className="h-full min-h-[400px] w-full"
+      style={{ position: "absolute", inset: 0 }}
+    >
+      <TldrawEditor snapshot={snapshotForEditor} onMount={handleMount} />
     </div>
   );
 }
