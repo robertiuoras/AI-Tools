@@ -68,8 +68,10 @@ export default function WhiteboardInner({ token, boardId }: Props) {
     const unsub = editor.store.listen(
       () => {
         clearTimeout(timerRef.current);
-        setSaveStatus("saving");
+        // Never setState here — this runs on every stroke and re-renders the tree,
+        // which breaks tldraw pointer handling after a few seconds of drawing.
         timerRef.current = setTimeout(async () => {
+          setSaveStatus("saving");
           try {
             const snapshot = getSnapshot(editor.store);
             const res = await fetch("/api/whiteboard", {
