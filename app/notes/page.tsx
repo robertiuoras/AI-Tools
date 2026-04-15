@@ -1822,6 +1822,9 @@ export default function NotesPage() {
 
   useEffect(() => {
     if (!isEditing) return;
+    // Only while the note editor is actually shown; otherwise (e.g. Whiteboard tab)
+    // this capture listener steals pointer events from tldraw and breaks drawing.
+    if (notesSubView !== "notes") return;
     const onPointerDownCapture = (e: PointerEvent) => {
       if (e.button !== 0) return;
       if (imageCropOpenRef.current) return;
@@ -1837,7 +1840,7 @@ export default function NotesPage() {
     document.addEventListener("pointerdown", onPointerDownCapture, true);
     return () =>
       document.removeEventListener("pointerdown", onPointerDownCapture, true);
-  }, [isEditing, closeNoteBodyEditAndSave]);
+  }, [isEditing, closeNoteBodyEditAndSave, notesSubView]);
 
   useEffect(() => {
     if (!isEditing || !selectedNoteId) return;
@@ -3769,6 +3772,9 @@ export default function NotesPage() {
                   : "text-muted-foreground hover:bg-muted",
               )}
               onClick={() => {
+                if (notesSubView === "notes" && key !== "notes" && isEditing) {
+                  closeNoteBodyEditAndSave();
+                }
                 setNotesSubView(key);
                 window.history.replaceState({}, "", url);
               }}
