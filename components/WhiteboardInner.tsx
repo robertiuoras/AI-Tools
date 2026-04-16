@@ -19,7 +19,7 @@ function snapshotForPersist(editor: Editor) {
   const session = snap.session ?? { version: 1 as const };
   return {
     ...snap,
-    session: { ...session, isFocusMode: false },
+    session: { ...session, isFocusMode: false, isReadonly: false },
   };
 }
 
@@ -61,7 +61,7 @@ export default function WhiteboardInner({ token, boardId }: Props) {
         if (editorRef.current && snap) {
           try {
             loadSnapshot(editorRef.current.store, snap);
-            editorRef.current.updateInstanceState({ isFocusMode: false });
+            editorRef.current.updateInstanceState({ isFocusMode: false, isReadonly: false });
           } catch (e) {
             console.warn("[whiteboard] Failed to apply snapshot:", e);
           }
@@ -88,7 +88,7 @@ export default function WhiteboardInner({ token, boardId }: Props) {
     if (snap !== undefined && snap !== null) {
       try {
         loadSnapshot(editor.store, snap);
-        editor.updateInstanceState({ isFocusMode: false });
+        editor.updateInstanceState({ isFocusMode: false, isReadonly: false });
       } catch (e) {
         console.warn("[whiteboard] Failed to apply snapshot on mount:", e);
       }
