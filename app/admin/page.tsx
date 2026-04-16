@@ -1268,8 +1268,14 @@ export default function AdminPage() {
         }
         throw new Error(data.message || data.error || data.details || 'Failed to save video')
       }
+      const addedTitle = fd.title.trim()
       resetVideoForm()
       await fetchVideos()
+      addToast({
+        variant: 'success',
+        title: editId ? 'Video updated' : 'Video added',
+        description: `"${addedTitle}" was saved.`,
+      })
       return true
     } catch (err) {
       addToast({
@@ -1285,24 +1291,8 @@ export default function AdminPage() {
 
   const startVideoAutoAddCountdown = useCallback(() => {
     clearVideoAutoAdd()
-    const mySession = videoAutoAddSessionRef.current
-    let left = 5
-    setVideoAutoAddSeconds(left)
-    videoAutoAddIntervalRef.current = setInterval(() => {
-      left -= 1
-      if (left <= 0) {
-        if (videoAutoAddIntervalRef.current) {
-          clearInterval(videoAutoAddIntervalRef.current)
-          videoAutoAddIntervalRef.current = null
-        }
-        setVideoAutoAddSeconds(null)
-        if (videoAutoAddSessionRef.current !== mySession) return
-        if (editingVideoIdRef.current) return
-        void submitVideoCoreRef.current()
-        return
-      }
-      setVideoAutoAddSeconds(left)
-    }, 1000)
+    if (editingVideoIdRef.current) return
+    void submitVideoCoreRef.current()
   }, [clearVideoAutoAdd])
 
   submitVideoCoreRef.current = submitVideoCore
@@ -1366,13 +1356,6 @@ export default function AdminPage() {
       })
       if (clearQuick) setVideoQuickAddUrl('')
       window.scrollTo({ top: 0, behavior: 'smooth' })
-
-      addToast({
-        variant: 'success',
-        title: 'Video details loaded',
-        description: `Saving automatically in 5s — edit the form or press Cancel to stop. ${videoAnalyzeCostHint()}`,
-        duration: 6000,
-      })
 
       const filledTitle = (data.title || '').trim()
       const filledUrl = (data.url || urlToFetch).trim()
@@ -1712,14 +1695,6 @@ export default function AdminPage() {
       pendingToolPostRef.current = payload
       setQuickAddUrl('')
       const usedAi = Boolean((data as { _debug?: { usedOpenAI?: boolean } })._debug?.usedOpenAI)
-      addToast({
-        variant: 'success',
-        title: 'Tool analyzed',
-        description: `Saving automatically in 5s — use Cancel to stop (same as videos).${
-          usedAi ? ` ${openAiCostNote(estimateUsdPerToolAnalyzeCall())}` : ''
-        }`,
-        duration: 6000,
-      })
       toolAutoAddSessionRef.current += 1
       stopToolAutoAddCountdown()
       window.setTimeout(() => startToolAutoAddCountdownRef.current(), 50)
@@ -2042,73 +2017,57 @@ export default function AdminPage() {
 
   const startToolAutoAddCountdown = useCallback(() => {
     stopToolAutoAddCountdown()
-    const mySession = toolAutoAddSessionRef.current
-    let left = 5
-    setToolAutoAddSeconds(left)
-    toolAutoAddIntervalRef.current = setInterval(() => {
-      left -= 1
-      if (left <= 0) {
-        if (toolAutoAddIntervalRef.current) {
-          clearInterval(toolAutoAddIntervalRef.current)
-          toolAutoAddIntervalRef.current = null
-        }
-        setToolAutoAddSeconds(null)
-        if (toolAutoAddSessionRef.current !== mySession) return
-        void (async () => {
-          const payload = pendingToolPostRef.current
-          pendingToolPostRef.current = null
-          if (!payload) return
-          setSubmitting(true)
-          setIsProcessing(true)
-          try {
-            const response = await fetch('/api/tools', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload),
-            })
-            if (!response.ok) {
-              const errorData = await response.json().catch(() => ({}))
-              if (response.status === 409) {
-                addToast({
-                  variant: 'error',
-                  title: 'Duplicate URL',
-                  description:
-                    (errorData as { message?: string }).message ||
-                    'A tool with this URL already exists.',
-                })
-                return
-              }
-              const errorMessage =
-                (errorData as { details?: string }).details ||
-                (errorData as { error?: string }).error ||
-                (errorData as { message?: string }).message ||
-                `HTTP error! status: ${response.status}`
-              throw new Error(errorMessage)
-            }
-            await fetchTools()
-            resetForm()
-            addToast({
-              variant: 'success',
-              title: 'Tool added',
-              description: 'The AI tool was saved to the directory.',
-            })
-          } catch (error) {
-            console.error('Error saving tool:', error)
+    void (async () => {
+      const payload = pendingToolPostRef.current
+      pendingToolPostRef.current = null
+      if (!payload) return
+      setSubmitting(true)
+      setIsProcessing(true)
+      try {
+        const response = await fetch('/api/tools', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}))
+          if (response.status === 409) {
             addToast({
               variant: 'error',
-              title: 'Failed to Save Tool',
+              title: 'Duplicate URL',
               description:
-                error instanceof Error ? error.message : 'Unknown error',
+                (errorData as { message?: string }).message ||
+                'A tool with this URL already exists.',
             })
-          } finally {
-            setSubmitting(false)
-            setIsProcessing(false)
+            return
           }
-        })()
-      } else {
-        setToolAutoAddSeconds(left)
+          const errorMessage =
+            (errorData as { details?: string }).details ||
+            (errorData as { error?: string }).error ||
+            (errorData as { message?: string }).message ||
+            `HTTP error! status: ${response.status}`
+          throw new Error(errorMessage)
+        }
+        await fetchTools()
+        resetForm()
+        addToast({
+          variant: 'success',
+          title: 'Tool added',
+          description: `"${String(payload.name || 'Tool')}" was saved to the directory.`,
+        })
+      } catch (error) {
+        console.error('Error saving tool:', error)
+        addToast({
+          variant: 'error',
+          title: 'Failed to Save Tool',
+          description:
+            error instanceof Error ? error.message : 'Unknown error',
+        })
+      } finally {
+        setSubmitting(false)
+        setIsProcessing(false)
       }
-    }, 1000)
+    })()
   }, [stopToolAutoAddCountdown, addToast, fetchTools, resetForm])
 
   startToolAutoAddCountdownRef.current = startToolAutoAddCountdown
@@ -2216,24 +2175,6 @@ export default function AdminPage() {
                       </p>
                     </div>
                   )}
-                  {toolAutoAddSeconds !== null ? (
-                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
-                      <span>
-                        Saving this tool automatically in{' '}
-                        <strong>{toolAutoAddSeconds}</strong>s —{' '}
-                        <strong>Cancel</strong> to stop.
-                      </span>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="shrink-0 border-amber-300 bg-white hover:bg-amber-100 dark:border-amber-700 dark:bg-transparent dark:hover:bg-amber-900/50"
-                        onClick={() => cancelToolAutoAdd()}
-                      >
-                        Cancel auto-save
-                      </Button>
-                    </div>
-                  ) : null}
                   <div className="flex gap-2">
                     <Input
                       placeholder="https://example.com"
@@ -2988,23 +2929,6 @@ export default function AdminPage() {
                 </div>
               </div>
             )}
-            {/* Auto-save countdown — shown when not editing */}
-            {videoAutoAddSeconds !== null && !editingVideoId ? (
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
-                <span>
-                  Saving this video automatically in <strong>{videoAutoAddSeconds}</strong>s — cancel to stop.
-                </span>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="shrink-0 border-amber-300 bg-white hover:bg-amber-100 dark:border-amber-700 dark:bg-transparent dark:hover:bg-amber-900/50"
-                  onClick={clearVideoAutoAdd}
-                >
-                  Cancel auto-save
-                </Button>
-              </div>
-            ) : null}
 
             {/* Edit form — only shown when editing an existing video */}
             {editingVideoId && (
