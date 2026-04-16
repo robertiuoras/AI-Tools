@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Tldraw, getSnapshot, loadSnapshot } from "tldraw";
+import { Tldraw, getSnapshot } from "tldraw";
 import type { Editor, TLEditorSnapshot } from "tldraw";
 import "tldraw/tldraw.css";
 import { Loader2 } from "lucide-react";
@@ -14,13 +14,20 @@ interface Props {
 /** ~45s autosave interval */
 const AUTOSAVE_INTERVAL_MS = 45_000;
 
+/** Strip focus/readonly from the session before saving so they're never persisted. */
 function snapshotForPersist(editor: Editor) {
   const snap = getSnapshot(editor.store) as TLEditorSnapshot;
   const session = snap.session ?? { version: 1 as const };
   return {
     ...snap,
-    session: { ...session, isFocusMode: false, isReadonly: false },
+    session: { ...session, isFocusMode: false },
   };
+}
+
+/** Strip focus mode from a fetched snapshot before passing it as initial data. */
+function prepareForLoad(snap: TLEditorSnapshot): TLEditorSnapshot {
+  const session = snap.session ?? { version: 1 as const };
+  return { ...snap, session: { ...session, isFocusMode: false } };
 }
 
 async function postSave(token: string, boardId: string, snapshot: TLEditorSnapshot) {
@@ -41,12 +48,12 @@ export default function WhiteboardInner({ token, boardId }: Props) {
   tokenRef.current = token;
   boardIdRef.current = boardId;
 
-  // The fetched snapshot: undefined = still loading, null = empty board, object = saved state
-  const fetchedSnapshotRef = useRef<TLEditorSnapshot | null | undefined>(undefined);
   const editorRef = useRef<Editor | null>(null);
-  const [overlayVisible, setOverlayVisible] = useState(true);
 
-  // Fetch the saved snapshot once on mount
+  // undefined = still loading  |  null = new empty board  |  snapshot = saved state
+  const [initialSnapshot, setInitialSnapshot] = useState<TLEditorSnapshot | null | undefined>(undefined);
+
+  // Fetch BEFORE mounting Tldraw so we never need loadSnapshot imperatively
   useEffect(() => {
     let cancelled = false;
     fetch(`/api/whiteboard?boardId=${encodeURIComponent(boardId)}`, {
@@ -56,43 +63,21 @@ export default function WhiteboardInner({ token, boardId }: Props) {
       .then((data: { snapshot: TLEditorSnapshot } | null) => {
         if (cancelled) return;
         const snap = data?.snapshot ?? null;
-        fetchedSnapshotRef.current = snap;
-        // If editor already mounted, apply now
-        if (editorRef.current && snap) {
-          try {
-            loadSnapshot(editorRef.current.store, snap);
-            editorRef.current.updateInstanceState({ isFocusMode: false, isReadonly: false });
-          } catch (e) {
-            console.warn("[whiteboard] Failed to apply snapshot:", e);
-          }
-        }
-        setOverlayVisible(false);
+        setInitialSnapshot(snap ? prepareForLoad(snap) : null);
       })
       .catch(() => {
-        if (!cancelled) {
-          fetchedSnapshotRef.current = null;
-          setOverlayVisible(false);
-        }
+        if (!cancelled) setInitialSnapshot(null);
       });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, []); // intentionally empty — boardId/token are stable at mount
 
   const handleMount = useCallback((editor: Editor) => {
     let disposed = false;
     editorRef.current = editor;
-    editor.updateInstanceState({ isFocusMode: false });
 
-    // If snapshot already fetched, apply it immediately
-    const snap = fetchedSnapshotRef.current;
-    if (snap !== undefined && snap !== null) {
-      try {
-        loadSnapshot(editor.store, snap);
-        editor.updateInstanceState({ isFocusMode: false, isReadonly: false });
-      } catch (e) {
-        console.warn("[whiteboard] Failed to apply snapshot on mount:", e);
-      }
-    }
+    // Always ensure the editor is interactive regardless of what the snapshot had
+    editor.updateInstanceState({ isFocusMode: false, isReadonly: false });
 
     // Interval autosave
     const interval = window.setInterval(() => {
@@ -120,18 +105,20 @@ export default function WhiteboardInner({ token, boardId }: Props) {
     };
   }, []); // stable — uses refs only
 
+  // Show loading spinner until the fetch resolves
+  if (initialSnapshot === undefined) {
+    return (
+      <div className="absolute inset-0 flex items-center justify-center bg-background">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
   return (
     <div className="h-full min-h-[400px] w-full" style={{ position: "absolute", inset: 0 }}>
-      {overlayVisible && (
-        <div
-          className="absolute inset-0 z-10 flex items-center justify-center bg-background"
-          style={{ zIndex: 10 }}
-        >
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        </div>
-      )}
       <Tldraw
         inferDarkMode
+        snapshot={initialSnapshot ?? undefined}
         onMount={handleMount}
       />
     </div>
