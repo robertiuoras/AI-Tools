@@ -4,34 +4,67 @@
  */
 
 /**
- * True only when the page shows a real installable app: official store links,
- * installable packages (.dmg, .msi, etc.), or known vendor download hubs.
- * Avoids marketing copy like "AI app" / "mobile app" with no actual download.
+ * True only when the page shows a real installable app: a real link to an
+ * official store with an app id, an installable package linked from an `href`,
+ * or a known first-party download hub. Marketing prose like "our AI app" or
+ * stray references to ".exe" inside scripts/CSS are intentionally ignored.
+ *
+ * To avoid false positives like Vidwud/face-swap web tools that merely mention
+ * an "app", every signal must look like a real link in href / src context, and
+ * store URLs must include an app/extension identifier (not just the domain).
  */
 export function detectDownloadableAppFromHtml(html: string): boolean {
   if (!html || html.length < 40) return false
 
-  // Official mobile / desktop store URLs (high confidence)
-  if (
-    /https?:\/\/(apps\.apple\.com|itunes\.apple\.com)\b/i.test(html) ||
-    /https?:\/\/play\.google\.com\/store\/apps\b/i.test(html) ||
-    /microsoft\.com\/(?:store|p)\//i.test(html) ||
-    /testflight\.apple\.com\b/i.test(html)
-  ) {
-    return true
+  // Limit detection to actual link/script attributes so promo copy doesn't trip us up.
+  const hrefValues: string[] = []
+  const attrRe = /(?:href|src|content|data-href|data-url)\s*=\s*("([^"]+)"|'([^']+)')/gi
+  let m: RegExpExecArray | null
+  while ((m = attrRe.exec(html)) !== null) {
+    const v = (m[2] ?? m[3] ?? "").trim()
+    if (v) hrefValues.push(v)
+    if (hrefValues.length > 4000) break
   }
+  if (hrefValues.length === 0) return false
 
-  // Installable artifacts (must look like a file path or href)
-  const artifact =
-    /\.(?:dmg|msi|exe|deb|rpm|pkg|apk|appimage)(\?|#|"|'|\s|>|$)/i
-  if (artifact.test(html)) return true
+  const isAppleStoreApp = (u: string) =>
+    /^https?:\/\/(?:apps\.apple\.com|itunes\.apple\.com)\/[^?#]*\/(?:app|id\d+)/i.test(u) ||
+    /^https?:\/\/(?:apps\.apple\.com|itunes\.apple\.com)\/[^?#]*[?&]id=\d+/i.test(u)
+  const isPlayStoreApp = (u: string) =>
+    /^https?:\/\/play\.google\.com\/store\/apps\/details\?[^"'\s]*id=/i.test(u)
+  const isMicrosoftStoreApp = (u: string) =>
+    /^https?:\/\/(?:apps\.microsoft\.com|www\.microsoft\.com)\/(?:store|p)\/[^"'\s]+\/9[a-z0-9]{10,}/i.test(u) ||
+    /^https?:\/\/(?:apps\.microsoft\.com|www\.microsoft\.com)\/store\/(?:apps|productid)\//i.test(u)
+  const isTestFlight = (u: string) => /^https?:\/\/testflight\.apple\.com\/join\//i.test(u)
+  const isInstallableArtifact = (u: string) =>
+    /\.(?:dmg|msi|exe|deb|rpm|pkg|apk|appimage)(?:$|[?#])/i.test(u)
+  const isChromeWebstoreItem = (u: string) =>
+    /^https?:\/\/chromewebstore\.google\.com\/detail\//i.test(u) ||
+    /^https?:\/\/chrome\.google\.com\/webstore\/detail\//i.test(u)
+  const isFirefoxAddonItem = (u: string) =>
+    /^https?:\/\/addons\.mozilla\.org\/[^/]+\/firefox\/addon\//i.test(u)
+  const isKnownDownloadHub = (u: string) =>
+    /^https?:\/\/slack\.com\/downloads\b/i.test(u) ||
+    /^https?:\/\/(?:zoom\.us|www\.zoom\.us)\/download\b/i.test(u) ||
+    /^https?:\/\/(?:www\.)?notion\.so\/desktop\b/i.test(u) ||
+    /^https?:\/\/(?:www\.)?notion\.com\/desktop\b/i.test(u) ||
+    /^https?:\/\/(?:www\.)?obsidian\.md\/download\b/i.test(u) ||
+    /^https?:\/\/discord\.com\/download\b/i.test(u)
 
-  // Browser / extension stores (user installs a package)
-  if (/chrome\.google\.com\/webstore\b/i.test(html)) return true
-  if (/addons\.mozilla\.org\/[^"'\s<>]+/i.test(html)) return true
-
-  // Known first-party download pages with real desktop clients
-  if (/slack\.com\/downloads\b/i.test(html)) return true
+  for (const u of hrefValues) {
+    if (
+      isAppleStoreApp(u) ||
+      isPlayStoreApp(u) ||
+      isMicrosoftStoreApp(u) ||
+      isTestFlight(u) ||
+      isInstallableArtifact(u) ||
+      isChromeWebstoreItem(u) ||
+      isFirefoxAddonItem(u) ||
+      isKnownDownloadHub(u)
+    ) {
+      return true
+    }
+  }
 
   return false
 }

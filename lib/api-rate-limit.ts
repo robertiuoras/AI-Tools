@@ -60,6 +60,8 @@ export type RateLimitKind =
   | 'video_summary'
   | 'prompts_analyze'
   | 'prompts_improve'
+  | 'cs2_prices'
+  | 'cs2_image'
 
 const LIMITS: Record<RateLimitKind, { windowMs: number; max: number }[]> = {
   tools_analyze: [
@@ -125,6 +127,29 @@ const LIMITS: Record<RateLimitKind, { windowMs: number; max: number }[]> = {
     {
       windowMs: 3_600_000,
       max: envInt('RATE_LIMIT_PROMPTS_IMPROVE_PER_HOUR', 120),
+    },
+  ],
+  // CS2 skin price aggregator (CSFloat + Steam Market). External upstreams,
+  // so we cap aggressively to avoid hammering them from a single client.
+  cs2_prices: [
+    {
+      windowMs: 60_000,
+      max: envInt('RATE_LIMIT_CS2_PRICES_PER_MINUTE', 30),
+    },
+    {
+      windowMs: 3_600_000,
+      max: envInt('RATE_LIMIT_CS2_PRICES_PER_HOUR', 300),
+    },
+  ],
+  // CS2 image analysis (OpenAI vision over a screenshot of a listing/skin).
+  cs2_image: [
+    {
+      windowMs: 60_000,
+      max: envInt('RATE_LIMIT_CS2_IMAGE_PER_MINUTE', 8),
+    },
+    {
+      windowMs: 3_600_000,
+      max: envInt('RATE_LIMIT_CS2_IMAGE_PER_HOUR', 60),
     },
   ],
 }

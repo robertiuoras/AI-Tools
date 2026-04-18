@@ -6434,6 +6434,58 @@ interface ShareRow {
   sharedWith?: { id: string; email: string; name: string | null } | null;
 }
 
+function PermissionToggle({
+  value,
+  onChange,
+  size = "sm",
+}: {
+  value: "view" | "edit";
+  onChange: (p: "view" | "edit") => void;
+  size?: "sm" | "md";
+}) {
+  const h = size === "md" ? "h-9" : "h-7";
+  const px = size === "md" ? "px-3 text-xs" : "px-2 text-[11px]";
+  return (
+    <div
+      role="group"
+      aria-label="Permission"
+      className={cn(
+        "inline-flex shrink-0 items-center rounded-full border border-border bg-muted/40 p-0.5",
+        h,
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => onChange("view")}
+        className={cn(
+          "flex items-center gap-1 rounded-full font-medium transition-colors",
+          px,
+          value === "view"
+            ? "bg-background text-foreground shadow-sm"
+            : "text-muted-foreground hover:text-foreground",
+        )}
+      >
+        <Eye className="h-3 w-3" />
+        View
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange("edit")}
+        className={cn(
+          "flex items-center gap-1 rounded-full font-medium transition-colors",
+          px,
+          value === "edit"
+            ? "bg-background text-foreground shadow-sm"
+            : "text-muted-foreground hover:text-foreground",
+        )}
+      >
+        <Pencil className="h-3 w-3" />
+        Edit
+      </button>
+    </div>
+  );
+}
+
 function ShareNoteDialog({
   noteId,
   noteTitle,
@@ -6568,10 +6620,18 @@ function ShareNoteDialog({
       <div className="flex w-full max-w-md flex-col overflow-hidden rounded-2xl border border-border bg-background shadow-2xl">
         <div className="flex items-start justify-between gap-3 border-b border-border/60 p-4">
           <div className="min-w-0">
-            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+            <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
+              <Share2 className="h-3 w-3" />
               Share note
-            </p>
-            <h3 className="truncate text-base font-semibold">{noteTitle}</h3>
+            </div>
+            <h3 className="mt-0.5 truncate text-base font-semibold">{noteTitle}</h3>
+            {!loading && shares.length > 0 && (
+              <p className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
+                <Users className="h-3 w-3" />
+                Shared with {shares.length}{" "}
+                {shares.length === 1 ? "person" : "people"}
+              </p>
+            )}
           </div>
           <button
             type="button"
@@ -6584,8 +6644,8 @@ function ShareNoteDialog({
         </div>
 
         <div className="space-y-3 p-4">
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <div className="relative flex-1">
+          <div className="flex flex-col gap-2">
+            <div className="relative">
               <Mail className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input
                 type="email"
@@ -6602,30 +6662,27 @@ function ShareNoteDialog({
                 autoFocus
               />
             </div>
-            <select
-              value={permission}
-              onChange={(e) =>
-                setPermission(e.target.value === "edit" ? "edit" : "view")
-              }
-              className="h-9 rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            >
-              <option value="view">Can view</option>
-              <option value="edit">Can edit</option>
-            </select>
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => void submit()}
-              disabled={!email.trim() || submitting}
-              className="gap-1.5"
-            >
-              {submitting ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Share2 className="h-3.5 w-3.5" />
-              )}
-              Share
-            </Button>
+            <div className="flex items-center gap-2">
+              <PermissionToggle
+                value={permission}
+                onChange={setPermission}
+                size="md"
+              />
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => void submit()}
+                disabled={!email.trim() || submitting}
+                className="ml-auto gap-1.5"
+              >
+                {submitting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Share2 className="h-3.5 w-3.5" />
+                )}
+                Share
+              </Button>
+            </div>
           </div>
           {error && (
             <p className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
@@ -6647,43 +6704,47 @@ function ShareNoteDialog({
                 Nobody else has access yet.
               </p>
             ) : (
-              <ul className="divide-y divide-border/60 rounded-md border border-border/60">
+              <ul className="divide-y divide-border/60 overflow-hidden rounded-lg border border-border/60 bg-card/40">
                 {shares.map((s) => {
                   const label =
                     s.sharedWith?.name ||
                     s.sharedWith?.email ||
                     s.sharedWithId;
+                  const initials = (label || "?")
+                    .split(/[\s@.]+/)
+                    .filter(Boolean)
+                    .slice(0, 2)
+                    .map((p) => p[0]?.toUpperCase() ?? "")
+                    .join("");
                   return (
                     <li
                       key={s.id}
-                      className="flex items-center gap-2 px-3 py-2 text-sm"
+                      className="flex items-center gap-3 px-3 py-2.5 text-sm transition-colors hover:bg-muted/40"
                     >
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary">
+                        {initials || "?"}
+                      </div>
                       <div className="min-w-0 flex-1">
-                        <p className="truncate font-medium">{label}</p>
+                        <p className="truncate text-sm font-medium leading-tight">
+                          {label}
+                        </p>
                         {s.sharedWith?.email && s.sharedWith?.name && (
                           <p className="truncate text-[11px] text-muted-foreground">
                             {s.sharedWith.email}
                           </p>
                         )}
                       </div>
-                      <select
+                      <PermissionToggle
                         value={s.permission}
-                        onChange={(e) =>
-                          void updatePermission(
-                            s.id,
-                            e.target.value === "edit" ? "edit" : "view",
-                          )
-                        }
-                        className="h-7 rounded-md border border-input bg-background px-1.5 text-xs"
-                      >
-                        <option value="view">View</option>
-                        <option value="edit">Edit</option>
-                      </select>
+                        onChange={(p) => void updatePermission(s.id, p)}
+                        size="sm"
+                      />
                       <button
                         type="button"
                         onClick={() => void revoke(s.id)}
-                        className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-destructive"
+                        className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
                         aria-label="Revoke share"
+                        title="Remove access"
                       >
                         <XIcon className="h-3.5 w-3.5" />
                       </button>
@@ -6695,10 +6756,9 @@ function ShareNoteDialog({
           </div>
         </div>
 
-        <div className="flex justify-between border-t border-border/60 bg-muted/20 px-4 py-2.5">
+        <div className="flex items-center justify-between gap-3 border-t border-border/60 bg-muted/20 px-4 py-2.5">
           <p className="text-[11px] text-muted-foreground">
-            Recipients will see this note in their <em>Shared with me</em>{" "}
-            section.
+            Recipients see this in <em>Shared with me</em>.
           </p>
           <Button type="button" variant="ghost" size="sm" onClick={onClose}>
             Done

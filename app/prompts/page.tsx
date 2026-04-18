@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -26,8 +26,6 @@ import {
   ArrowRight,
   ArrowUpRight,
   Check,
-  ChevronLeft,
-  ChevronRight,
   Copy,
   Loader2,
   Plus,
@@ -515,76 +513,23 @@ function PromptRail({
   prompts: CommunityPrompt[];
   onOpen: (p: CommunityPrompt) => void;
 }) {
-  const scrollerRef = useRef<HTMLDivElement | null>(null);
-  const [canLeft, setCanLeft] = useState(false);
-  const [canRight, setCanRight] = useState(false);
-
-  const updateScrollState = useCallback(() => {
-    const el = scrollerRef.current;
-    if (!el) return;
-    setCanLeft(el.scrollLeft > 4);
-    setCanRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
-  }, []);
-
-  useEffect(() => {
-    updateScrollState();
-    const el = scrollerRef.current;
-    if (!el) return;
-    el.addEventListener("scroll", updateScrollState, { passive: true });
-    window.addEventListener("resize", updateScrollState);
-    return () => {
-      el.removeEventListener("scroll", updateScrollState);
-      window.removeEventListener("resize", updateScrollState);
-    };
-  }, [updateScrollState, prompts.length]);
-
-  const scrollBy = (delta: number) => {
-    scrollerRef.current?.scrollBy({ left: delta, behavior: "smooth" });
-  };
-
   return (
     <div>
       <div className="mb-2 flex items-center justify-between">
         <h3 className="text-base font-medium text-foreground sm:text-lg">
           {title}
         </h3>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => scrollBy(-320)}
-            disabled={!canLeft}
-            className={cn(
-              "flex h-7 w-7 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition-opacity",
-              canLeft ? "hover:text-foreground" : "opacity-30",
-            )}
-            aria-label={`Scroll ${title} left`}
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => scrollBy(320)}
-            disabled={!canRight}
-            className={cn(
-              "flex h-7 w-7 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition-opacity",
-              canRight ? "hover:text-foreground" : "opacity-30",
-            )}
-            aria-label={`Scroll ${title} right`}
-          >
-            <ChevronRight className="h-4 w-4" />
-          </button>
-        </div>
+        <span className="text-xs text-muted-foreground">
+          {prompts.length} {prompts.length === 1 ? "prompt" : "prompts"}
+        </span>
       </div>
-      <div
-        ref={scrollerRef}
-        className="-mx-1 flex snap-x gap-3 overflow-x-auto px-1 pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-      >
+      <div className="-mx-1 grid grid-cols-1 gap-3 px-1 pb-3 sm:grid-cols-2 lg:grid-cols-3">
         {prompts.map((p) => (
           <button
             key={p.id}
             type="button"
             onClick={() => onOpen(p)}
-            className="group relative flex w-[15rem] shrink-0 snap-start flex-col gap-2 rounded-xl border border-border/70 bg-card/80 p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-foreground/30 hover:shadow-md sm:w-[16rem]"
+            className="group relative flex min-h-[7rem] flex-col gap-2 rounded-xl border border-border/70 bg-card/80 p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-foreground/30 hover:shadow-md"
           >
             <div className="flex items-start justify-between gap-2">
               <div className="text-sm font-semibold leading-snug text-foreground">

@@ -22,6 +22,7 @@ import {
   TrendingUp,
   ArrowRight,
   Wand2,
+  Crosshair,
 } from "lucide-react";
 
 export default function ProjectsPage() {
@@ -211,6 +212,67 @@ export default function ProjectsPage() {
                     </div>
                     <div className="mt-4 flex items-center gap-1 text-xs font-medium text-violet-700 dark:text-violet-400 group-hover:gap-2 transition-all">
                       Open summariser
+                      <ArrowRight className="h-3.5 w-3.5" />
+                    </div>
+                  </CardContent>
+                </Card>
+              </Link>
+            </li>
+
+            {/* ── CS2 Skin Bot ───────────────────────────────── */}
+            <li>
+              <Link
+                href="/projects/cs2-bot"
+                className="block h-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-2xl"
+              >
+                <Card
+                  className={cn(
+                    "group relative h-full overflow-hidden border-border/80 bg-card/80 shadow-md backdrop-blur-sm transition-all cursor-pointer",
+                    "hover:border-orange-500/40 hover:shadow-xl hover:shadow-orange-500/10 hover:-translate-y-0.5",
+                  )}
+                >
+                  <div
+                    className="pointer-events-none absolute inset-0 bg-gradient-to-br from-orange-500/[0.08] via-transparent to-red-500/[0.06]"
+                    aria-hidden
+                  />
+                  <CardHeader className="relative space-y-3 pb-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <div
+                        className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-orange-500/20 to-red-600/20 ring-1 ring-orange-500/20"
+                        aria-hidden
+                      >
+                        <Crosshair className="h-6 w-6 text-orange-700 dark:text-orange-300" />
+                      </div>
+                      <Badge
+                        variant="secondary"
+                        className="shrink-0 border border-orange-500/25 bg-orange-500/10 text-orange-900 dark:text-orange-200"
+                      >
+                        New
+                      </Badge>
+                    </div>
+                    <CardTitle className="text-xl font-semibold tracking-tight">
+                      CS2 Skin Bot
+                    </CardTitle>
+                    <CardDescription className="text-sm leading-relaxed">
+                      Compare CSFloat / Steam prices, calculate fees, and let
+                      AI rank a listing screenshot for you.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="relative pt-2">
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      {["CSFloat", "Steam", "Fees", "AI vision", "Arbitrage"].map(
+                        (tag) => (
+                          <span
+                            key={tag}
+                            className="inline-flex items-center gap-1 rounded-md bg-muted/80 px-2 py-1 font-medium"
+                          >
+                            {tag}
+                          </span>
+                        ),
+                      )}
+                    </div>
+                    <div className="mt-4 flex items-center gap-1 text-xs font-medium text-orange-700 dark:text-orange-400 group-hover:gap-2 transition-all">
+                      Open CS2 bot
                       <ArrowRight className="h-3.5 w-3.5" />
                     </div>
                   </CardContent>

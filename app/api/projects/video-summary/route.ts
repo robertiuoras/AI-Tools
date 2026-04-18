@@ -185,6 +185,92 @@ async function fetchYouTubeTranscript(
   }
 }
 
+/**
+ * Pull the visible description / caption text from a video page's HTML.
+ *
+ * This is the "no transcript" fallback most paid summariser tools use too:
+ * - TikTok pages embed the caption + hashtags in the SIGI_STATE JSON and meta tags
+ * - YouTube watch pages embed shortDescription in ytInitialPlayerResponse
+ *
+ * The goal is to give the model significantly more material to ground its summary in
+ * before falling back to title-only guessing.
+ */
+async function fetchVideoPageDescription(
+  url: string,
+): Promise<{ description: string | null; extra: string[] } | null> {
+  try {
+    const res = await fetch(url, {
+      headers: {
+        // Use a desktop UA so we get the rich HTML, not a stripped mobile/share variant
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+    if (!html) return null;
+
+    const extra: string[] = [];
+    const pieces: string[] = [];
+
+    const ogDesc = html.match(
+      /<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i,
+    );
+    if (ogDesc?.[1]) pieces.push(ogDesc[1]);
+
+    const twDesc = html.match(
+      /<meta[^>]+name=["']twitter:description["'][^>]+content=["']([^"']+)["']/i,
+    );
+    if (twDesc?.[1] && twDesc[1] !== ogDesc?.[1]) pieces.push(twDesc[1]);
+
+    const ytShort = html.match(/"shortDescription":"((?:\\.|[^"\\])*)"/);
+    if (ytShort?.[1]) {
+      try {
+        const decoded = JSON.parse(`"${ytShort[1]}"`) as string;
+        if (decoded && decoded.length > (ogDesc?.[1]?.length ?? 0)) {
+          pieces.push(decoded);
+        }
+      } catch {
+        // ignore — fall through to other signals
+      }
+    }
+
+    const ttDesc = html.match(/"desc":"((?:\\.|[^"\\])*)"/);
+    if (ttDesc?.[1]) {
+      try {
+        const decoded = JSON.parse(`"${ttDesc[1]}"`) as string;
+        if (decoded) pieces.push(decoded);
+      } catch {
+        // ignore
+      }
+    }
+
+    const hashtags = Array.from(html.matchAll(/#([A-Za-z0-9_]{2,30})/g))
+      .map((m) => `#${m[1]}`)
+      .filter((tag, i, arr) => arr.indexOf(tag) === i)
+      .slice(0, 12);
+    if (hashtags.length) extra.push(`Hashtags: ${hashtags.join(" ")}`);
+
+    const keywords = html.match(
+      /<meta[^>]+name=["']keywords["'][^>]+content=["']([^"']+)["']/i,
+    );
+    if (keywords?.[1]) extra.push(`Keywords: ${keywords[1]}`);
+
+    const merged = pieces
+      .map((s) => s.replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .filter((s, i, arr) => arr.indexOf(s) === i)
+      .join("\n");
+
+    if (!merged && extra.length === 0) return null;
+    return { description: merged || null, extra };
+  } catch {
+    return null;
+  }
+}
+
 interface OpenAiSummary {
   summary: string;
   keyPoints: string[];
@@ -202,6 +288,8 @@ async function summariseWithOpenAi(args: {
   title: string | null;
   author: string | null;
   transcript: string | null;
+  description: string | null;
+  extra: string[];
 }): Promise<{
   data: OpenAiSummary;
   modelUsed: string;
@@ -234,13 +322,24 @@ async function summariseWithOpenAi(args: {
     args.author ? `Author/channel: ${args.author}` : "",
   ].filter(Boolean);
 
+  if (args.description) {
+    userParts.push(
+      `Author-written description / caption:\n${args.description.slice(0, 4000)}`,
+    );
+  }
+  for (const x of args.extra) userParts.push(x);
+
   if (transcriptSnippet) {
     userParts.push(
       `Transcript${truncated ? " (truncated to fit context — summarise everything provided, ignore that this is a partial)" : ""}:\n${transcriptSnippet}`,
     );
+  } else if (args.description) {
+    userParts.push(
+      "(no spoken transcript was available — base the summary on the author's description above; if a fact isn't directly supported by it, omit it. Include in keyPoints a brief note that this summary is built from the description, not the spoken audio.)",
+    );
   } else {
     userParts.push(
-      "(no transcript available — produce the most useful summary you can from the title alone, and add to keyPoints a clear caveat that no transcript was available)",
+      "(no transcript or description available — produce the most useful summary you can from the title alone, and add to keyPoints a clear caveat that nothing beyond the title was available)",
     );
   }
 
@@ -343,6 +442,8 @@ export async function POST(request: NextRequest) {
     let thumbnailUrl: string | null = null;
     let transcriptText: string | null = null;
     let language: string | null = null;
+    let descriptionText: string | null = null;
+    let descriptionExtra: string[] = [];
 
     if (source === SOURCE_YOUTUBE) {
       const videoId = getYouTubeVideoId(url);
@@ -352,29 +453,47 @@ export async function POST(request: NextRequest) {
           { status: 400 },
         );
       }
-      const [meta, transcript] = await Promise.all([
+      const [meta, transcript, page] = await Promise.all([
         fetchYouTubeOembed(url),
         fetchYouTubeTranscript(videoId),
+        fetchVideoPageDescription(`https://www.youtube.com/watch?v=${videoId}`),
       ]);
       title = meta?.title ?? null;
       author = meta?.author_name ?? null;
       thumbnailUrl = meta?.thumbnail_url ?? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+      descriptionText = page?.description ?? null;
+      descriptionExtra = page?.extra ?? [];
       if (transcript) {
         transcriptText = transcript.text;
         language = transcript.language;
+      } else if (descriptionText) {
+        warnings.push(
+          "No captions available — summary is built from the author's description and metadata, not the spoken audio.",
+        );
       } else {
         warnings.push(
-          "No captions available for this video — summary is generated from the title only and may be vague.",
+          "No captions or description available — summary is generated from the title only and may be vague.",
         );
       }
     } else {
-      const meta = await fetchTikTokOembed(url);
+      const [meta, page] = await Promise.all([
+        fetchTikTokOembed(url),
+        fetchVideoPageDescription(url),
+      ]);
       title = meta?.title ?? null;
       author = meta?.author_name ?? null;
       thumbnailUrl = meta?.thumbnail_url ?? null;
-      warnings.push(
-        "TikTok summaries use only the post title and author — TikTok does not expose transcripts to third-party apps.",
-      );
+      descriptionText = page?.description ?? null;
+      descriptionExtra = page?.extra ?? [];
+      if (descriptionText) {
+        warnings.push(
+          "TikTok doesn't expose spoken transcripts — this summary is grounded in the post caption, hashtags, and metadata.",
+        );
+      } else {
+        warnings.push(
+          "TikTok summaries use only the post title and author — TikTok does not expose transcripts to third-party apps.",
+        );
+      }
     }
 
     const ai = await summariseWithOpenAi({
@@ -382,6 +501,8 @@ export async function POST(request: NextRequest) {
       title,
       author,
       transcript: transcriptText,
+      description: descriptionText,
+      extra: descriptionExtra,
     });
 
     if (!ai) {
