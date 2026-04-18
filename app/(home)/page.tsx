@@ -48,6 +48,7 @@ import { toolCategoryList, toolIsAgency } from "@/lib/tool-categories";
 import { AGENCY_CATEGORY_LABEL, categories as defaultCategories, sortToolCategoryLabelsForDisplay } from "@/lib/schemas";
 import { NewToolsBanner } from "@/components/NewToolsBanner";
 import { HomeSplashLoader } from "@/components/HomeSplashLoader";
+import { LiveSyncBadge } from "@/components/LiveSyncBadge";
 import { ToolCardGridSkeleton, ToolCardListSkeleton } from "@/components/ToolCardSkeleton";
 import { useToolsCatalog } from "@/components/ToolsCatalogProvider";
 import {
@@ -475,12 +476,9 @@ function HomePageContent() {
                   suggestions={searchSuggestions}
                 />
                 {refreshing ? (
-                  <p
-                    className="pl-3 text-[11px] text-muted-foreground"
-                    aria-live="polite"
-                  >
-                    Updating list…
-                  </p>
+                  <div className="pl-3 pt-0.5">
+                    <LiveSyncBadge label="Syncing catalog" />
+                  </div>
                 ) : null}
               </div>
               <UpvoteTimer />

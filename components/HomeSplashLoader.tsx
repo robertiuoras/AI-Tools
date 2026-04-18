@@ -10,10 +10,11 @@ type HomeSplashLoaderProps = {
 };
 
 const LOADING_MESSAGES = [
-  "Fetching AI tools…",
-  "Sorting by popularity…",
-  "Building catalog…",
-  "Almost ready…",
+  "Pulling fresh tools from the catalog",
+  "Ranking by community upvotes",
+  "Indexing categories & tags",
+  "Calibrating recommendations",
+  "Polishing the last details",
 ];
 
 /** Fast linear ramp, then slow crawl so the bar never looks stuck before data arrives. */
@@ -79,17 +80,23 @@ export function HomeSplashLoader({ loading }: HomeSplashLoaderProps) {
     >
       <span className="sr-only">Loading AI tools catalog</span>
 
-      {/* Ambient background blobs */}
+      {/* Layer 1: ambient color blobs (kept subtle so the dot grid reads first) */}
       <div
-        className="pointer-events-none absolute -left-[20%] top-1/4 h-[min(80vw,28rem)] w-[min(80vw,28rem)] rounded-full bg-indigo-500/20 blur-3xl home-splash-blob"
+        className="pointer-events-none absolute -left-[20%] top-1/4 h-[min(80vw,28rem)] w-[min(80vw,28rem)] rounded-full bg-indigo-500/15 blur-3xl home-splash-blob"
         aria-hidden
       />
       <div
-        className="pointer-events-none absolute -right-[15%] bottom-1/4 h-[min(70vw,24rem)] w-[min(70vw,24rem)] rounded-full bg-violet-500/15 blur-3xl home-splash-blob-delayed"
+        className="pointer-events-none absolute -right-[15%] bottom-1/4 h-[min(70vw,24rem)] w-[min(70vw,24rem)] rounded-full bg-violet-500/12 blur-3xl home-splash-blob-delayed"
         aria-hidden
       />
       <div
-        className="pointer-events-none absolute left-1/2 top-1/2 h-[min(90vw,32rem)] w-[min(90vw,32rem)] -translate-x-1/2 -translate-y-1/2 rounded-full bg-pink-500/10 blur-[100px] home-splash-blob-slow"
+        className="pointer-events-none absolute left-1/2 top-1/2 h-[min(90vw,32rem)] w-[min(90vw,32rem)] -translate-x-1/2 -translate-y-1/2 rounded-full bg-pink-500/8 blur-[100px] home-splash-blob-slow"
+        aria-hidden
+      />
+
+      {/* Layer 2: precise dot grid — the "engineered" texture that anchors the splash and pulls it away from generic SaaS gradient backgrounds. */}
+      <div
+        className="pointer-events-none absolute inset-0 splash-dot-grid"
         aria-hidden
       />
 
@@ -105,41 +112,61 @@ export function HomeSplashLoader({ loading }: HomeSplashLoaderProps) {
 
           <div className="flex flex-col items-center gap-8 text-center">
 
-            {/* Icon with orbit ring + pulse */}
+            {/* Icon with twin orbit rings, pulse halo, and a satellite tracer dot */}
             <div className="relative flex h-24 w-24 items-center justify-center">
-              {/* Slow spinning dashed orbit */}
+              {/* Outer dashed orbit (clockwise, slow) */}
               <div
-                className="absolute inset-0 animate-spin rounded-full border border-dashed border-indigo-400/40 dark:border-indigo-400/30"
-                style={{ animationDuration: "9s" }}
+                className="absolute inset-0 animate-spin rounded-full border border-dashed border-indigo-400/45 dark:border-indigo-400/35"
+                style={{ animationDuration: "11s" }}
                 aria-hidden
               />
-              {/* Ping pulse */}
+              {/* Inner solid hairline orbit (counter-clockwise, slower) — adds a sense of mechanism */}
+              <div
+                className="orbit-spin-rev absolute inset-[10%] rounded-full border border-violet-400/35 dark:border-violet-300/30"
+                aria-hidden
+              />
+              {/* Satellite tracer dot — a single dot riding the outer orbit */}
+              <div
+                className="orbit-satellite absolute inset-0"
+                aria-hidden
+              >
+                <span className="absolute left-1/2 top-0 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-indigo-400 shadow-[0_0_8px_rgba(129,140,248,0.95)]" />
+              </div>
+              {/* Soft expanding halo */}
               <div
                 className="absolute h-16 w-16 animate-ping rounded-full bg-indigo-500/12 dark:bg-indigo-400/10"
-                style={{ animationDuration: "2.2s" }}
+                style={{ animationDuration: "2.4s" }}
                 aria-hidden
               />
-              {/* Icon button */}
-              <div className="relative flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 via-violet-500 to-purple-600 shadow-lg shadow-indigo-500/35">
+              {/* Icon plate */}
+              <div className="relative flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 via-violet-500 to-purple-600 shadow-lg shadow-indigo-500/35 ring-1 ring-white/15">
                 <Sparkles className="h-8 w-8 text-white" strokeWidth={1.75} />
               </div>
             </div>
 
-            {/* Title + cycling message */}
+            {/* Title + cycling message — message styled like a status feed line */}
             <div className="space-y-2">
               <h2 className="text-2xl font-bold tracking-tight text-foreground">
                 AI Tools
               </h2>
               <p
-                className="min-h-[1.25rem] text-sm text-muted-foreground transition-opacity duration-250"
+                className="flex min-h-[1.25rem] items-center justify-center gap-1.5 text-sm text-muted-foreground transition-opacity duration-250"
                 style={{ opacity: msgVisible ? 1 : 0 }}
               >
-                {loading ? LOADING_MESSAGES[msgIdx] : "Ready!"}
+                <span
+                  aria-hidden
+                  className="text-indigo-500/80 dark:text-indigo-400/80"
+                >
+                  ›
+                </span>
+                <span>
+                  {loading ? LOADING_MESSAGES[msgIdx] : "Catalog ready"}
+                </span>
               </p>
             </div>
 
-            {/* Progress bar + percentage */}
-            <div className="w-full space-y-2.5">
+            {/* Progress bar + percentage with a tiny "live" status row */}
+            <div className="w-full space-y-2">
               <div
                 role="progressbar"
                 aria-valuemin={0}
@@ -152,9 +179,16 @@ export function HomeSplashLoader({ loading }: HomeSplashLoaderProps) {
                   style={{ width: widthPct }}
                 />
               </div>
-              <p className="text-xs tabular-nums text-muted-foreground/60">
-                {rounded}%
-              </p>
+              <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.18em] text-muted-foreground/60">
+                <span className="flex items-center gap-1.5">
+                  <span
+                    aria-hidden
+                    className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.9)]"
+                  />
+                  live
+                </span>
+                <span className="tabular-nums">{rounded}%</span>
+              </div>
             </div>
 
           </div>

@@ -305,13 +305,103 @@
   animation: progress-shimmer 1.4s ease-in-out infinite;
 }
 
+/* Live-sync pill: text gradient sweep (think "data flowing through"). */
+@keyframes sync-shimmer-text {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.sync-shimmer-text {
+  background-size: 200% 100%;
+  animation: sync-shimmer-text 2.6s linear infinite;
+}
+
+/* Live-sync pill: pulsing status dot with halo expansion. */
+@keyframes live-dot-halo {
+  0% { transform: scale(0.6); opacity: 0.55; }
+  70% { transform: scale(2.2); opacity: 0; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+.live-dot-halo {
+  animation: live-dot-halo 1.6s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+@keyframes live-dot-core {
+  0%, 100% { transform: scale(1); filter: brightness(1); }
+  50% { transform: scale(1.18); filter: brightness(1.25); }
+}
+.live-dot-core {
+  animation: live-dot-core 1.6s ease-in-out infinite;
+}
+
+/* Live-sync pill: conic-gradient spinner — a tracer arc instead of a dotted spinner. */
+@keyframes conic-spin {
+  to { transform: rotate(360deg); }
+}
+.conic-spinner {
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    transparent 100deg,
+    hsl(var(--ring) / 0.55) 240deg,
+    hsl(var(--ring)) 360deg
+  );
+  -webkit-mask: radial-gradient(circle, transparent 38%, #000 40%, #000 100%);
+          mask: radial-gradient(circle, transparent 38%, #000 40%, #000 100%);
+  animation: conic-spin 0.95s linear infinite;
+}
+
+/* Live-sync pill entrance. */
+@keyframes pill-rise {
+  0% { opacity: 0; transform: translateY(4px) scale(0.96); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+.pill-rise {
+  animation: pill-rise 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Splash dot-grid texture — subtle, modern alternative to the standard AI gradient blobs. */
+.splash-dot-grid {
+  background-image:
+    radial-gradient(circle at 1px 1px, hsl(var(--foreground) / 0.10) 1px, transparent 1.6px);
+  background-size: 22px 22px;
+  -webkit-mask-image: radial-gradient(ellipse at center, #000 30%, transparent 75%);
+          mask-image: radial-gradient(ellipse at center, #000 30%, transparent 75%);
+}
+.dark .splash-dot-grid {
+  background-image:
+    radial-gradient(circle at 1px 1px, hsl(var(--foreground) / 0.14) 1px, transparent 1.6px);
+}
+
+/* Splash icon: counter-rotating dashed orbit ring. */
+@keyframes orbit-spin-rev {
+  to { transform: rotate(-360deg); }
+}
+.orbit-spin-rev {
+  animation: orbit-spin-rev 14s linear infinite;
+}
+
+/* Splash icon: tiny satellite dot tracing the orbit ring. */
+@keyframes orbit-satellite {
+  to { transform: rotate(360deg) translate(0, 0); }
+}
+.orbit-satellite {
+  animation: orbit-satellite 4.2s linear infinite;
+  transform-origin: center;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .home-splash-blob,
   .home-splash-blob-delayed,
   .home-splash-blob-slow,
   .notes-loading-bar,
   .skeleton-wave,
-  .progress-shimmer::after {
+  .progress-shimmer::after,
+  .sync-shimmer-text,
+  .live-dot-halo,
+  .live-dot-core,
+  .conic-spinner,
+  .pill-rise,
+  .orbit-spin-rev,
+  .orbit-satellite {
     animation: none !important;
   }
 }
