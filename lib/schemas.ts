@@ -277,16 +277,29 @@ export const CORPUS_VERTICAL_B2B_BLOCKS_AGENCIES =
   /\b(insurtech|insurance tech|for insurers?|for brokers?|for brokerages?|insurance brokers?|insurance brokerages?|brokerage software|claims software|underwriting software|policy admin|sold to (insurers?|brokers?))\b/i
 
 /**
- * First-party copy that the **vendor is** a marketing/creative services agency.
- * Intentionally narrow — phrases like “marketing agency” in testimonials or “for agencies” ICP copy must not match.
+ * First-party copy that the **vendor is** a marketing/creative services agency,
+ * a consultancy, or a contract-delivery firm. Intentionally narrow — phrases
+ * like “marketing agency” in testimonials or “for agencies” ICP copy must not
+ * match. Patterns are anchored to first-person voice (we are / our / hire us)
+ * so blog mentions of an agency don't flip the flag.
  */
 export const CORPUS_VENDOR_IS_SERVICES_AGENCY = new RegExp(
   [
-    String.raw`\bwe\s+'?re\s+(a\s+)?(digital|creative|marketing|advertising|design|brand|full[- ]service)\s+agenc(y|ies)\b`,
-    String.raw`\bwe\s+are\s+(a\s+)?(digital|creative|marketing|advertising|design|brand|full[- ]service)\s+agenc(y|ies)\b`,
-    String.raw`\bour\s+(digital|creative|marketing|advertising|design)\s+agenc(y|ies)\b`,
-    String.raw`\b(full[- ]service|boutique)\s+agenc(y|ies)\b`,
+    String.raw`\bwe\s+'?re\s+(a\s+)?(digital|creative|marketing|advertising|design|brand|full[- ]service|growth|content|seo|web|product|consulting|consultancy|software\s+development|ai\s+development|engineering|implementation)\s+(agenc(y|ies)|firm|studio|consultancy|consulting\s+firm|partner)\b`,
+    String.raw`\bwe\s+are\s+(a\s+)?(digital|creative|marketing|advertising|design|brand|full[- ]service|growth|content|seo|web|product|consulting|consultancy|software\s+development|ai\s+development|engineering|implementation)\s+(agenc(y|ies)|firm|studio|consultancy|consulting\s+firm|partner)\b`,
+    String.raw`\bour\s+(digital|creative|marketing|advertising|design|growth|content|consulting)\s+(agenc(y|ies)|firm|studio|practice)\b`,
+    String.raw`\b(full[- ]service|boutique|specialist)\s+(agenc(y|ies)|firm|studio|consultancy)\b`,
     String.raw`\bagency\s+(specializing|focused|based)\s+in\b`,
+    String.raw`\b(hire|work\s+with|engage)\s+(our\s+team|us)\b`,
+    String.raw`\b(scope\s+of\s+work|statement\s+of\s+work|sow)\b.{0,40}\b(deliverables?|engagement|client)\b`,
+    String.raw`\bproject[- ]based\s+(engagement|pricing|delivery)\b`,
+    String.raw`\bretainer\s+(engagement|client|model|pricing)\b`,
+    String.raw`\bclient\s+engagements?\b`,
+    String.raw`\bdone[- ]for[- ]you\b`,
+    String.raw`\bcase\s+studies\b.{0,200}\b(roi|results?\s+for\s+clients?|client\s+results?)\b`,
+    String.raw`\bwe\s+(help|helped)\s+(brands?|companies|teams?|clients?|businesses)\s+(build|launch|grow|scale|design|automate|implement)\b`,
+    String.raw`\bworking\s+with\s+us\b.{0,40}\b(process|engagement|onboarding)\b`,
+    String.raw`\bget\s+a\s+(custom\s+)?(quote|proposal|estimate)\b`,
   ].join('|'),
   'i',
 )

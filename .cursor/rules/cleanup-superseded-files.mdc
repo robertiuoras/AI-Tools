@@ -1,0 +1,42 @@
+---
+description: Remove superseded files when introducing replacements (SQL migrations, helpers, configs)
+alwaysApply: true
+---
+
+# Clean up superseded files
+
+When you add or update a file that REPLACES an existing one (or when a feature is removed), delete or update the old file in the same change. Stale duplicates cause drift and confuse future agents.
+
+## When this rule fires
+
+Trigger cleanup whenever you:
+
+- Update `supabase/sql/supabase-migration.sql` (or any other "main" migration) so it now contains what an older `supabase/sql/<feature>-migration.sql` did → either delete the old file or leave a one-line stub explaining it was folded in.
+- Rename / move a helper (e.g. `lib/foo.ts` → `lib/foo/index.ts`).
+- Replace a component or route file with a new path.
+- Remove a feature: delete its API route, page, types, tests, fixtures, env vars in `.env.example`, and any references in `README.md`.
+
+## Required steps
+
+1. Search for ALL references to the old path/symbol with `Grep` BEFORE deleting (look for imports, docs, README, scripts, GitHub workflows, the SQL `README.txt`).
+2. Update every reference, or delete the file.
+3. If a SQL file is no longer needed because its contents live in another script, also remove it from `supabase/sql/README.txt` (or update the description).
+4. Mention the deletion in the commit body so reviewers see what disappeared and why.
+
+## Examples
+
+GOOD: I added `note_share` table support directly inside `supabase-migration.sql`. The old standalone `note-share-migration.sql` is now redundant.
+
+```bash
+# delete the redundant file
+rm supabase/sql/note-share-migration.sql
+# update the index
+edit supabase/sql/README.txt  # remove the line referencing it
+```
+
+BAD: leaving both files around — future runs of the migration index would apply the same DDL twice.
+
+## When NOT to delete
+
+- A migration file that is still referenced from `supabase/sql/README.txt` AND represents a historical step that other environments may still need to apply. In that case, leave it in place and add a comment at the top noting "Historical — already folded into supabase-migration.sql for new projects."
+- Files referenced from `package.json` scripts, CI configs, or external deploy systems — confirm with a `Grep` first.

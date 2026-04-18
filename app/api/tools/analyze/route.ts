@@ -334,6 +334,22 @@ async function scrapeWebsiteInfo(url: string): Promise<{
 }
 
 /**
+ * Heuristic verdicts assembled in the scrape pass. Passed into the AI prompt so
+ * the model corroborates rather than guesses on the tricky boolean fields.
+ *
+ * The model is allowed to OVERRIDE these (its judgement might be better when
+ * the corpus is ambiguous), but it must justify itself implicitly via the
+ * surrounding context. The final {@link POST} handler then re-applies the
+ * downloadable-app heuristic as the source of truth (the model cannot make a
+ * page have a real install link if there isn't one).
+ */
+interface HeuristicHints {
+  hasDownloadableApp: boolean
+  agency: 'likely_agency' | 'likely_product' | 'unclear'
+  agencyReason?: string
+}
+
+/**
  * Use AI to analyze and categorize the tool
  */
 async function analyzeWithAI(
@@ -341,7 +357,8 @@ async function analyzeWithAI(
   title: string,
   description: string,
   pricingContent: string,
-  pageContent: string
+  pageContent: string,
+  hints: HeuristicHints
 ): Promise<Partial<AnalysisResult>> {
   // Check for API key in multiple possible locations
   const openaiApiKey = process.env.OPENAI_API_KEY || process.env.NEXT_PUBLIC_OPENAI_API_KEY
@@ -398,12 +415,20 @@ async function analyzeWithAI(
       ? `\nContent: ${pageContent.substring(0, 1000)}`
       : ''
 
+    const hintsBlock = [
+      `Heuristic verdicts (use as STRONG priors; only override with explicit evidence):`,
+      `- hasDownloadableApp: ${hints.hasDownloadableApp ? 'true (page links to a real install / store / .dmg / .exe / .apk)' : 'false (no install link, App Store id, or download artifact found)'}`,
+      `- agency: ${hints.agency} ${hints.agencyReason ? `(${hints.agencyReason})` : ''}`,
+    ].join('\n')
+
     // Optimized prompt - concise but effective
     const prompt = `Analyze AI tool. Return JSON only.
 
 URL: ${url}
 Title: ${title}
 Desc: ${description || 'N/A'}${pricingContext}${pageContext}
+
+${hintsBlock}
 
 Revenue (MUST be accurate):
 - "free": No paid options (open source, free forever)
@@ -878,6 +903,29 @@ export async function POST(request: NextRequest) {
       scrapingFailed: scrapingFailed,
     })
     
+    // Build heuristic hints to ground the AI's booleans before the call.
+    const corpusForHints = [
+      validUrl.toString(),
+      scraped.title,
+      scraped.description,
+      scraped.pricingContent,
+      scraped.pageContent,
+    ].join('\n').slice(0, 8000)
+    let agencyHint: HeuristicHints['agency'] = 'unclear'
+    let agencyReason: string | undefined
+    if (scraped.agencyHint) {
+      agencyHint = 'likely_agency'
+      agencyReason = 'first-person agency / consultancy phrasing matched'
+    } else if (corpusIndicatesProductVendorNotServicesAgency(corpusForHints)) {
+      agencyHint = 'likely_product'
+      agencyReason = 'self-serve product chrome (login + sign up + pricing) or agency-as-ICP language'
+    }
+    const heuristicHints: HeuristicHints = {
+      hasDownloadableApp: scraped.hasDownloadableAppHeuristic,
+      agency: agencyHint,
+      agencyReason,
+    }
+
     let analysis
     try {
       analysis = await analyzeWithAI(
@@ -885,7 +933,8 @@ export async function POST(request: NextRequest) {
         scraped.title,
         scraped.description,
         scraped.pricingContent,
-        scraped.pageContent
+        scraped.pageContent,
+        heuristicHints
       )
       console.log('✅ [Analyze] OpenAI analysis complete:', JSON.stringify(analysis, null, 2))
     } catch (error) {

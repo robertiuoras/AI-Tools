@@ -139,7 +139,16 @@ export function detectAgencyFromUrlAndText(hostname: string, text: string): bool
 }
 
 /**
- * Fix common mislabel: "freemium" when the product is paid-first / no real free tier.
+ * Fix common mis-labels around the revenue model.
+ *
+ * Two-way refinement:
+ *   - "freemium" → "paid" when there is no real ongoing free tier.
+ *   - "paid"     → "freemium" when there IS a real free tier alongside paid plans.
+ *   - "freemium"/"paid" → "enterprise" when copy is purely "contact sales" / SOW.
+ *   - "free"     → "freemium" when free is mentioned but paid plans clearly exist.
+ *
+ * Trial-only ≠ free tier. "Free trial" / "14-day trial" / "no credit card" alone
+ * are NOT enough to label something freemium.
  */
 export function refineRevenueModel(
   revenue: "free" | "freemium" | "paid" | "enterprise" | null | undefined,
@@ -147,31 +156,64 @@ export function refineRevenueModel(
   pageText: string,
 ): "free" | "freemium" | "paid" | "enterprise" | null {
   const combined = `${pricingText} ${pageText}`.toLowerCase()
+  if (!combined.trim()) return revenue ?? null
+
+  const hasFreeTier =
+    /\bfree\s+(tier|plan|forever|version|account|seat)\b/.test(combined) ||
+    /\bfree\s+to\s+(use|start|sign\s*up)\b/.test(combined) ||
+    /\$\s*0\s*\/\s*(mo|month|yr|year|user|seat)\b/.test(combined) ||
+    /\bforever\s+free\b/.test(combined) ||
+    /\bunlimited\s+free\b/.test(combined) ||
+    /\bfree\s+for\s+(personal|individual|hobby|small\s+teams?)\b/.test(combined)
+
+  const trialOnly =
+    /\b(\d+[- ]?day|two[- ]?week|one[- ]?week|14[- ]?day|7[- ]?day|30[- ]?day)\s+(free\s+)?trial\b/.test(combined) ||
+    /\bfree\s+trial\b/.test(combined)
+
+  const paidPlansExist =
+    /\b(starts?\s+at|from)\s+\$\s?\d/.test(combined) ||
+    /\$\s?\d+(?:\.\d+)?\s*\/\s*(mo|month|yr|year|user|seat)\b/.test(combined) ||
+    /\b(pro|business|premium|enterprise|growth|team)\s+plan\b/.test(combined) ||
+    /\bupgrade\s+to\s+(pro|premium|paid|plus)\b/.test(combined)
+
+  const enterpriseOnly =
+    /\bcontact\s+(us\s+)?(sales|for\s+pricing|to\s+get\s+started)\b/.test(combined) &&
+    !paidPlansExist &&
+    !hasFreeTier
+  const enterpriseHints =
+    /\b(custom\s+pricing|custom\s+quote|talk\s+to\s+sales|book\s+a\s+demo\s+for\s+pricing|annual\s+contract|sso\s+\+\s+saml)\b/.test(combined)
+  const explicitOpenSource =
+    /\b(open[- ]source|mit\s+licen[cs]e|apache\s+2\.0|gpl\s*v?\d|self[- ]hosted)\b/.test(combined)
+  const noPaidAtAll = !paidPlansExist && !/\bpricing\b/.test(combined)
+
+  if (enterpriseOnly || (enterpriseHints && !hasFreeTier && !paidPlansExist)) {
+    return "enterprise"
+  }
+
+  if (revenue === "free" && paidPlansExist) {
+    return "freemium"
+  }
+
+  if (revenue === "paid" && hasFreeTier && paidPlansExist) {
+    return "freemium"
+  }
 
   if (revenue === "freemium") {
-    const hasFreeTier =
-      /\bfree\s+(tier|plan|forever|version)\b/.test(combined) ||
-      /\bfree\s+to\s+use\b/.test(combined) ||
-      /\$\s*0\s*\/\s*mo/.test(combined) ||
-      /\bforever\s+free\b/.test(combined)
-
     const paidOnlySignals =
       /\bpaid\s+only\b/.test(combined) ||
       /\bsubscription\s+only\b/.test(combined) ||
       /\bno\s+free\s+(tier|plan|version)\b/.test(combined) ||
       /\b(?:paid|premium)\s+plans?\s+only\b/.test(combined) ||
-      (/\bstarts?\s+at\s+\$\d/.test(combined) &&
-        !hasFreeTier &&
-        !/\btrial\b/.test(combined)) ||
-      (/\bper\s+month\b/.test(combined) &&
-        /\$\d/.test(combined) &&
-        !hasFreeTier &&
-        !/\bfree\s+trial\b/.test(combined))
+      (paidPlansExist && !hasFreeTier && !trialOnly)
 
     if (paidOnlySignals && !hasFreeTier) {
       return "paid"
     }
   }
+
+  if (!revenue && noPaidAtAll && explicitOpenSource) return "free"
+  if (!revenue && hasFreeTier && paidPlansExist) return "freemium"
+  if (!revenue && paidPlansExist && !hasFreeTier) return "paid"
 
   return revenue ?? null
 }

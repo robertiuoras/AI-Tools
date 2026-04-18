@@ -211,6 +211,9 @@ export default function AdminPage() {
   const [refreshingAllTools, setRefreshingAllTools] = useState(false)
   const [toolBulkRefreshProgress, setToolBulkRefreshProgress] =
     useState<BulkRefreshProgressState | null>(null)
+  /** Mutable stop flag — flipped by the dialog Stop button so the next loop iteration aborts. */
+  const toolBulkStopRef = useRef(false)
+  const videoBulkStopRef = useRef(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [adminCategoryFilter, setAdminCategoryFilter] = useState<string>('all')
@@ -731,7 +734,10 @@ export default function AdminPage() {
   }
 
   const reanalyzeToolCore = useCallback(
-    async (tool: Tool, options?: { silent?: boolean }): Promise<boolean> => {
+    async (
+      tool: Tool,
+      options?: { silent?: boolean },
+    ): Promise<{ ok: boolean; costUsd: number }> => {
       const rawUrl = tool.url?.trim()
       if (!rawUrl) {
         if (!options?.silent) {
@@ -741,7 +747,7 @@ export default function AdminPage() {
             description: 'This tool has no URL to analyze.',
           })
         }
-        return false
+        return { ok: false, costUsd: 0 }
       }
       const analyzeRes = await fetch('/api/tools/analyze', {
         method: 'POST',
@@ -760,8 +766,13 @@ export default function AdminPage() {
               `Failed to analyze tool (${analyzeRes.status})`,
           })
         }
-        return false
+        return { ok: false, costUsd: 0 }
       }
+      const costUsd =
+        typeof analyzeData?.estimatedCostUsd === 'number' &&
+        Number.isFinite(analyzeData.estimatedCostUsd)
+          ? analyzeData.estimatedCostUsd
+          : 0
 
       const nextCategories =
         Array.isArray(analyzeData.categories) &&
@@ -822,9 +833,9 @@ export default function AdminPage() {
               `Failed to update tool (${updateRes.status})`,
           })
         }
-        return false
+        return { ok: false, costUsd }
       }
-      return true
+      return { ok: true, costUsd }
     },
     [addToast],
   )
@@ -833,13 +844,15 @@ export default function AdminPage() {
     if (reanalyzingToolId || refreshingAllTools || refreshingAllVideos) return
     setReanalyzingToolId(tool.id)
     try {
-      const ok = await reanalyzeToolCore(tool)
+      const { ok, costUsd } = await reanalyzeToolCore(tool)
       if (ok) {
         await fetchTools()
+        const cost =
+          costUsd > 0 ? costUsd : estimateUsdPerToolAnalyzeCall()
         addToast({
           variant: 'success',
           title: 'Tool refreshed',
-          description: `Updated logo, info, categories, agency, and downloadable app flags for ${tool.name}. ${openAiCostNote(estimateUsdPerToolAnalyzeCall())}`,
+          description: `Updated logo, info, categories, agency, and downloadable app flags for ${tool.name}. ${openAiCostNote(cost)}`,
         })
       }
     } finally {
@@ -1029,9 +1042,11 @@ export default function AdminPage() {
     })
     let ok = 0
     let fail = 0
+    let totalCostUsd = 0
     let consecutiveFailures = 0
     try {
       for (let i = 0; i < list.length; i++) {
+        if (videoBulkStopRef.current) break
         const v = list[i]
         setReanalyzingVideoId(v.id)
         setVideoBulkRefreshProgress({
@@ -1042,11 +1057,14 @@ export default function AdminPage() {
           succeeded: ok,
           failed: fail,
           startedAt,
+          costUsd: totalCostUsd,
+          stopRequested: videoBulkStopRef.current,
         })
         const success = await reanalyzeVideoCore(v, { silent: true })
         if (success) {
           ok++
           consecutiveFailures = 0
+          totalCostUsd += estimateUsdPerVideoAnalyzeCall()
         } else {
           fail++
           consecutiveFailures++
@@ -1067,7 +1085,10 @@ export default function AdminPage() {
           succeeded: ok,
           failed: fail,
           startedAt,
+          costUsd: totalCostUsd,
+          stopRequested: videoBulkStopRef.current,
         })
+        if (videoBulkStopRef.current) break
         if (i < list.length - 1) {
           await new Promise((r) => setTimeout(r, BULK_REFRESH_DELAY_MS_VIDEO))
         }
@@ -1076,9 +1097,12 @@ export default function AdminPage() {
       setReanalyzingVideoId(null)
       setRefreshingAllVideos(false)
       setVideoBulkRefreshProgress(null)
+      videoBulkStopRef.current = false
     }
     await fetchVideos()
-    const costLine = openAiCostNote(estimateUsdVideoAnalyzeCalls(ok))
+    const costLine = openAiCostNote(
+      totalCostUsd > 0 ? totalCostUsd : estimateUsdVideoAnalyzeCalls(ok),
+    )
     addToast({
       variant: fail === 0 ? 'success' : 'default',
       title: 'Bulk refresh complete',
@@ -1125,9 +1149,13 @@ export default function AdminPage() {
     })
     let ok = 0
     let fail = 0
+    let totalCostUsd = 0
     let consecutiveFailures = 0
     try {
       for (let i = 0; i < list.length; i++) {
+        if (toolBulkStopRef.current) {
+          break
+        }
         const tool = list[i]
         setReanalyzingToolId(tool.id)
         setToolBulkRefreshProgress({
@@ -1138,11 +1166,16 @@ export default function AdminPage() {
           succeeded: ok,
           failed: fail,
           startedAt,
+          costUsd: totalCostUsd,
+          stopRequested: toolBulkStopRef.current,
         })
-        const success = await reanalyzeToolCore(tool, { silent: true })
+        const { ok: success, costUsd } = await reanalyzeToolCore(tool, {
+          silent: true,
+        })
         if (success) {
           ok++
           consecutiveFailures = 0
+          totalCostUsd += costUsd > 0 ? costUsd : estimateUsdPerToolAnalyzeCall()
         } else {
           fail++
           consecutiveFailures++
@@ -1163,7 +1196,12 @@ export default function AdminPage() {
           succeeded: ok,
           failed: fail,
           startedAt,
+          costUsd: totalCostUsd,
+          stopRequested: toolBulkStopRef.current,
         })
+        if (toolBulkStopRef.current) {
+          break
+        }
         if (i < list.length - 1) {
           await new Promise((r) => setTimeout(r, BULK_REFRESH_DELAY_MS_TOOL))
         }
@@ -1172,9 +1210,12 @@ export default function AdminPage() {
       setReanalyzingToolId(null)
       setRefreshingAllTools(false)
       setToolBulkRefreshProgress(null)
+      toolBulkStopRef.current = false
     }
     await fetchTools()
-    const costLine = openAiCostNote(estimateUsdToolAnalyzeCalls(ok))
+    const costLine = openAiCostNote(
+      totalCostUsd > 0 ? totalCostUsd : estimateUsdToolAnalyzeCalls(ok),
+    )
     addToast({
       variant: fail === 0 ? 'success' : 'default',
       title: 'Bulk tool refresh complete',
@@ -2610,21 +2651,20 @@ export default function AdminPage() {
               {!loading && tools.length > 0 && (
                 <Button
                   type="button"
-                  variant="outline"
                   size="sm"
-                  className="shrink-0 gap-2"
+                  className="group shrink-0 gap-2 bg-gradient-to-r from-violet-600 via-fuchsia-600 to-pink-600 text-white shadow-md shadow-fuchsia-500/20 transition-all hover:from-violet-500 hover:via-fuchsia-500 hover:to-pink-500 hover:shadow-lg hover:shadow-fuchsia-500/30 disabled:opacity-60"
                   onClick={() => void handleRefreshAllTools()}
                   disabled={
                     refreshingAllTools ||
                     refreshingAllVideos ||
                     reanalyzingToolId !== null
                   }
-                  title="Re-analyze each tool (same as row refresh): logo, description, categories, agency, app flags"
+                  title="Re-analyze each tool (same as row refresh): logo, description, categories, agency, app flags. Live cost shown in dialog."
                 >
                   {refreshingAllTools ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
-                    <RefreshCw className="h-4 w-4" />
+                    <RefreshCw className="h-4 w-4 transition-transform group-hover:rotate-180" />
                   )}
                   Refresh all
                 </Button>
@@ -3287,6 +3327,12 @@ export default function AdminPage() {
         onOpenChange={(open) => {
           if (!open) setVideoBulkRefreshProgress(null)
         }}
+        onStop={() => {
+          videoBulkStopRef.current = true
+          setVideoBulkRefreshProgress((p) =>
+            p ? { ...p, stopRequested: true } : p,
+          )
+        }}
       />
       <BulkRefreshProgressDialog
         open={toolBulkRefreshProgress !== null}
@@ -3296,6 +3342,12 @@ export default function AdminPage() {
         tick={bulkRefreshTick}
         onOpenChange={(open) => {
           if (!open) setToolBulkRefreshProgress(null)
+        }}
+        onStop={() => {
+          toolBulkStopRef.current = true
+          setToolBulkRefreshProgress((p) =>
+            p ? { ...p, stopRequested: true } : p,
+          )
         }}
       />
     </div>
