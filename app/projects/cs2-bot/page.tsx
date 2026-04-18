@@ -17,14 +17,24 @@ import {
   TrendingDown,
   Minus,
   Activity,
+  Bell,
+  Filter,
+  CheckCircle2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import {
+  DEFAULT_SKIN_SELECTION,
+  SkinPicker,
+  type SkinSelection,
+} from "@/components/cs2/SkinPicker";
+import { MarketLogo, marketLabel, type MarketKey } from "@/components/cs2/MarketLogo";
+import { PriceWatchlist } from "@/components/cs2/PriceWatchlist";
 
 interface PriceQuote {
-  marketplace: "csfloat" | "steam" | "buff";
+  marketplace: MarketKey;
   url: string;
   priceUsd: number | null;
   sellNetUsd: number | null;
@@ -72,12 +82,6 @@ interface AnalyzeResponse {
   cost: { totalCostUsd: number } | null;
 }
 
-const MARKETPLACE_LABEL: Record<PriceQuote["marketplace"], string> = {
-  csfloat: "CSFloat",
-  steam: "Steam Market",
-  buff: "Buff.market",
-};
-
 function formatUsd(v: number | null): string {
   if (v == null) return "—";
   if (v < 0.01) return `$${v.toFixed(4)}`;
@@ -85,14 +89,31 @@ function formatUsd(v: number | null): string {
 }
 
 export default function CS2BotPage() {
+  // ── skin picker + filters ────────────────────────────
+  const [selection, setSelection] = useState<SkinSelection>(DEFAULT_SKIN_SELECTION);
+  const [maxFloat, setMaxFloat] = useState<string>("");
+  const [minFloat, setMinFloat] = useState<string>("");
+  const [maxPrice, setMaxPrice] = useState<string>("");
+
+  const filterPayload = useMemo(() => {
+    const num = (s: string) => {
+      const n = parseFloat(s);
+      return Number.isFinite(n) ? n : null;
+    };
+    return {
+      maxFloat: num(maxFloat),
+      minFloat: num(minFloat),
+      maxPriceUsd: num(maxPrice),
+    };
+  }, [maxFloat, minFloat, maxPrice]);
+
   // ── price lookup ─────────────────────────────────────
-  const [name, setName] = useState("AK-47 | Redline (Field-Tested)");
   const [pricesLoading, setPricesLoading] = useState(false);
   const [prices, setPrices] = useState<PricesResponse | null>(null);
   const [pricesError, setPricesError] = useState<string | null>(null);
 
   const lookup = useCallback(async () => {
-    if (pricesLoading || !name.trim()) return;
+    if (pricesLoading || !selection.marketHashName.trim()) return;
     setPricesLoading(true);
     setPricesError(null);
     setPrices(null);
@@ -100,7 +121,10 @@ export default function CS2BotPage() {
       const res = await fetch("/api/projects/cs2/prices", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim() }),
+        body: JSON.stringify({
+          name: selection.marketHashName,
+          ...filterPayload,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || `Failed (${res.status})`);
@@ -110,20 +134,33 @@ export default function CS2BotPage() {
     } finally {
       setPricesLoading(false);
     }
-  }, [name, pricesLoading]);
+  }, [pricesLoading, selection.marketHashName, filterPayload]);
 
   // ── fee calculator ───────────────────────────────────
   const [calcMode, setCalcMode] = useState<"buyer" | "seller">("seller");
   const [calcAmount, setCalcAmount] = useState("100");
-  const [calcPlatform, setCalcPlatform] = useState<"steam" | "csfloat" | "buff" | "custom">("steam");
+  const [calcPlatform, setCalcPlatform] = useState<MarketKey | "custom">(
+    "steam",
+  );
   const [calcCustomFee, setCalcCustomFee] = useState("5");
 
   const feePct = useMemo(() => {
-    if (calcPlatform === "steam") return 0.15;
-    if (calcPlatform === "csfloat") return 0.02;
-    if (calcPlatform === "buff") return 0.025;
-    const n = parseFloat(calcCustomFee);
-    return Number.isFinite(n) ? Math.max(0, Math.min(50, n)) / 100 : 0;
+    switch (calcPlatform) {
+      case "steam":
+        return 0.15;
+      case "csfloat":
+        return 0.02;
+      case "buff":
+        return 0.025;
+      case "skinport":
+        return 0.12;
+      case "dmarket":
+        return 0.07;
+      default: {
+        const n = parseFloat(calcCustomFee);
+        return Number.isFinite(n) ? Math.max(0, Math.min(50, n)) / 100 : 0;
+      }
+    }
   }, [calcPlatform, calcCustomFee]);
 
   const calcResult = useMemo(() => {
@@ -143,7 +180,7 @@ export default function CS2BotPage() {
       listed: gross,
       fee: gross - amt,
       net: amt,
-      label: "Buyer must list at",
+      label: "You'll need to list at",
     };
   }, [calcAmount, feePct, calcMode]);
 
@@ -157,9 +194,11 @@ export default function CS2BotPage() {
     if (!buy || !sell || buyAt == null || sellNet == null) return null;
     const listAt = sellNet / (1 - sell.sellFeePct);
     return {
-      buyOn: MARKETPLACE_LABEL[buy.marketplace],
+      buyOn: marketLabel(buy.marketplace),
+      buyMarket: buy.marketplace,
       buyAt,
-      sellOn: MARKETPLACE_LABEL[sell.marketplace],
+      sellOn: marketLabel(sell.marketplace),
+      sellMarket: sell.marketplace,
       listAt,
       net: sellNet,
       delta: arbitrage?.arbitrageUsd ?? 0,
@@ -173,43 +212,50 @@ export default function CS2BotPage() {
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
 
-  const onFile = useCallback(
-    async (file: File | null) => {
-      if (!file) return;
-      if (file.size > 5_000_000) {
-        setAnalysisError("Image must be ≤ 5MB.");
-        return;
-      }
-      setAnalysisError(null);
-      setAnalysing(true);
-      setAnalysis(null);
-      try {
-        const reader = new FileReader();
-        const dataUrl: string = await new Promise((resolve, reject) => {
-          reader.onload = () => resolve(reader.result as string);
-          reader.onerror = () => reject(reader.error);
-          reader.readAsDataURL(file);
-        });
-        setImagePreview(dataUrl);
-        const res = await fetch("/api/projects/cs2/analyze-image", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            imageBase64: dataUrl,
-            mimeType: file.type || "image/png",
-          }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data?.error || `Failed (${res.status})`);
-        setAnalysis(data as AnalyzeResponse);
-      } catch (err) {
-        setAnalysisError(err instanceof Error ? err.message : "Analysis failed");
-      } finally {
-        setAnalysing(false);
-      }
-    },
-    [],
-  );
+  const onFile = useCallback(async (file: File | null) => {
+    if (!file) return;
+    if (file.size > 5_000_000) {
+      setAnalysisError("Image must be ≤ 5MB.");
+      return;
+    }
+    setAnalysisError(null);
+    setAnalysing(true);
+    setAnalysis(null);
+    try {
+      const reader = new FileReader();
+      const dataUrl: string = await new Promise((resolve, reject) => {
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+      setImagePreview(dataUrl);
+      const res = await fetch("/api/projects/cs2/analyze-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageBase64: dataUrl,
+          mimeType: file.type || "image/png",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || `Failed (${res.status})`);
+      setAnalysis(data as AnalyzeResponse);
+    } catch (err) {
+      setAnalysisError(err instanceof Error ? err.message : "Analysis failed");
+    } finally {
+      setAnalysing(false);
+    }
+  }, []);
+
+  // sort quotes so cheapest non-null comes first
+  const sortedQuotes = useMemo(() => {
+    if (!prices) return [];
+    return [...prices.quotes].sort((a, b) => {
+      const ap = a.priceUsd ?? Infinity;
+      const bp = b.priceUsd ?? Infinity;
+      return ap - bp;
+    });
+  }, [prices]);
 
   return (
     <div className="relative overflow-hidden">
@@ -233,57 +279,101 @@ export default function CS2BotPage() {
         <header className="mb-8 md:mb-10">
           <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-border/60 bg-muted/40 px-3 py-1 text-xs font-medium text-muted-foreground backdrop-blur-sm">
             <Crosshair className="h-3.5 w-3.5 text-orange-600 dark:text-orange-400" />
-            CS2 Skin Bot · live prices + AI assessment
+            CS2 Skin Bot · live prices across 5 markets
           </div>
           <h1 className="bg-gradient-to-br from-foreground via-foreground to-foreground/70 bg-clip-text text-3xl font-bold tracking-tight text-transparent md:text-4xl">
             CS2 Skin Bot
           </h1>
           <p className="mt-3 max-w-2xl text-base text-muted-foreground md:text-lg">
-            Look up live CSFloat &amp; Steam Market prices, calculate platform
-            fees, and let AI score a screenshot of any listing.
+            Pick a skin, set your filters, and we'll compare CSFloat, Steam,
+            Skinport, DMarket and Buff side-by-side. Add a price alert, run a
+            fee calc, or upload a screenshot for an AI verdict.
           </p>
         </header>
 
-        {/* ── Price lookup ─────────────────────────────── */}
+        {/* ── Price compare ────────────────────────────── */}
         <section className="mb-10 rounded-2xl border border-border/60 bg-card/70 p-5 shadow-sm backdrop-blur-sm">
           <h2 className="mb-3 flex items-center gap-2 text-lg font-semibold">
             <Activity className="h-4 w-4 text-orange-600 dark:text-orange-400" />
             Price compare
           </h2>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-            <div className="flex-1">
-              <Label htmlFor="cs2-name" className="text-xs">
-                market_hash_name
-              </Label>
-              <Input
-                id="cs2-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void lookup();
-                  }
-                }}
-                placeholder="AK-47 | Redline (Field-Tested)"
-                className="h-10 text-sm"
-              />
-              <p className="mt-1 text-[11px] text-muted-foreground">
-                Use the exact name shown on Steam Market (incl. wear in
-                parentheses).
-              </p>
+
+          <SkinPicker value={selection} onChange={setSelection} />
+
+          {/* filters */}
+          <details className="mt-4 rounded-lg border border-border/60 bg-muted/20 p-3 text-sm">
+            <summary className="-mx-1 -my-1 flex cursor-pointer list-none items-center gap-2 px-1 py-1 text-xs font-medium text-muted-foreground hover:text-foreground">
+              <Filter className="h-3.5 w-3.5" />
+              Filters (optional)
+              <span className="ml-auto text-[10px] text-muted-foreground">
+                Float range applies to CSFloat / DMarket
+              </span>
+            </summary>
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              <div>
+                <Label className="text-[11px]">Max price ($)</Label>
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  placeholder="e.g. 25"
+                  value={maxPrice}
+                  min="0"
+                  step="0.01"
+                  onChange={(e) => setMaxPrice(e.target.value)}
+                  className="h-9 text-sm"
+                />
+              </div>
+              <div>
+                <Label className="text-[11px]">Min float</Label>
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={minFloat}
+                  min="0"
+                  max="1"
+                  step="0.001"
+                  onChange={(e) => setMinFloat(e.target.value)}
+                  className="h-9 text-sm"
+                />
+              </div>
+              <div>
+                <Label className="text-[11px]">Max float</Label>
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  placeholder="1.00"
+                  value={maxFloat}
+                  min="0"
+                  max="1"
+                  step="0.001"
+                  onChange={(e) => setMaxFloat(e.target.value)}
+                  className="h-9 text-sm"
+                />
+              </div>
             </div>
+          </details>
+
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[11px] text-muted-foreground">
+              Comparing across:{" "}
+              <span className="inline-flex flex-wrap items-center gap-1.5">
+                {(["csfloat", "steam", "skinport", "dmarket", "buff"] as MarketKey[]).map((m) => (
+                  <MarketLogo key={m} market={m} size={16} />
+                ))}
+              </span>
+            </p>
             <Button
               onClick={() => void lookup()}
-              disabled={pricesLoading || !name.trim()}
-              className="h-10 gap-1.5"
+              disabled={pricesLoading || !selection.marketHashName.trim()}
+              className="h-10 gap-1.5 bg-gradient-to-r from-orange-600 via-red-500 to-pink-500 text-white shadow-md shadow-orange-500/20 hover:from-orange-500 hover:to-pink-400"
             >
               {pricesLoading ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <RefreshCw className="h-4 w-4" />
               )}
-              Compare
+              Compare prices
             </Button>
           </div>
 
@@ -296,40 +386,60 @@ export default function CS2BotPage() {
 
           {prices && (
             <div className="mt-4 space-y-4">
-              <div className="grid gap-3 sm:grid-cols-3">
-                {prices.quotes.map((q) => (
-                  <div
-                    key={q.marketplace}
-                    className="rounded-lg border border-border/60 bg-background p-3 text-sm"
-                  >
-                    <div className="mb-1 flex items-center justify-between">
-                      <span className="font-semibold">
-                        {MARKETPLACE_LABEL[q.marketplace]}
-                      </span>
-                      <a
-                        href={q.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-muted-foreground hover:text-foreground"
-                        aria-label={`Open ${q.marketplace} listing`}
-                      >
-                        <ExternalLink className="h-3.5 w-3.5" />
-                      </a>
-                    </div>
-                    <div className="text-xl font-bold">
-                      {formatUsd(q.priceUsd)}
-                    </div>
-                    <div className="mt-1 text-[11px] text-muted-foreground">
-                      Sell-fee {(q.sellFeePct * 100).toFixed(1)}% · net{" "}
-                      {formatUsd(q.sellNetUsd)}
-                    </div>
-                    {q.note && (
-                      <div className="mt-2 text-[10px] italic text-muted-foreground">
-                        {q.note}
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {sortedQuotes.map((q, idx) => {
+                  const isCheapest =
+                    idx === 0 && q.priceUsd != null && q.priceUsd > 0;
+                  return (
+                    <div
+                      key={q.marketplace}
+                      className={cn(
+                        "rounded-lg border p-3 text-sm transition-colors",
+                        isCheapest
+                          ? "border-emerald-500/40 bg-emerald-500/5"
+                          : "border-border/60 bg-background",
+                      )}
+                    >
+                      <div className="mb-1 flex items-center justify-between">
+                        <MarketLogo market={q.marketplace} withLabel />
+                        <a
+                          href={q.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-muted-foreground hover:text-foreground"
+                          aria-label={`Open ${q.marketplace} listing`}
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
                       </div>
-                    )}
-                  </div>
-                ))}
+                      <div className="flex items-baseline gap-2">
+                        <div className="text-xl font-bold">
+                          {formatUsd(q.priceUsd)}
+                        </div>
+                        {isCheapest && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-400">
+                            <CheckCircle2 className="h-3 w-3" />
+                            Cheapest
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-1 text-[11px] text-muted-foreground">
+                        Sell-fee {(q.sellFeePct * 100).toFixed(1)}% · net{" "}
+                        {formatUsd(q.sellNetUsd)}
+                      </div>
+                      {q.count != null && q.count > 0 && (
+                        <div className="mt-1 text-[10px] text-muted-foreground">
+                          {q.count} listing{q.count === 1 ? "" : "s"}
+                        </div>
+                      )}
+                      {q.note && (
+                        <div className="mt-2 text-[10px] italic text-muted-foreground">
+                          {q.note}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
 
               <div className="rounded-lg border border-orange-500/30 bg-orange-500/5 p-3 text-sm">
@@ -344,7 +454,8 @@ export default function CS2BotPage() {
                       <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
                         Buy on
                       </div>
-                      <div className="font-semibold">
+                      <div className="mt-0.5 inline-flex items-center gap-1.5 font-semibold">
+                        <MarketLogo market={balanceTip.buyMarket} size={16} />
                         {balanceTip.buyOn} · {formatUsd(balanceTip.buyAt)}
                       </div>
                     </div>
@@ -352,9 +463,9 @@ export default function CS2BotPage() {
                       <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
                         List on
                       </div>
-                      <div className="font-semibold">
-                        {balanceTip.sellOn} · list at{" "}
-                        {formatUsd(balanceTip.listAt)} (net{" "}
+                      <div className="mt-0.5 inline-flex items-center gap-1.5 font-semibold">
+                        <MarketLogo market={balanceTip.sellMarket} size={16} />
+                        {balanceTip.sellOn} · {formatUsd(balanceTip.listAt)} (net{" "}
                         {formatUsd(balanceTip.net)})
                       </div>
                     </div>
@@ -363,6 +474,21 @@ export default function CS2BotPage() {
               </div>
             </div>
           )}
+        </section>
+
+        {/* ── Watchlist + alerts ───────────────────────── */}
+        <section className="mb-10 rounded-2xl border border-border/60 bg-card/70 p-5 shadow-sm backdrop-blur-sm">
+          <h2 className="mb-3 flex items-center gap-2 text-lg font-semibold">
+            <Bell className="h-4 w-4 text-orange-600 dark:text-orange-400" />
+            Price alerts
+          </h2>
+          <PriceWatchlist
+            prefillName={selection.marketHashName}
+            prefillFilters={{
+              maxFloat: filterPayload.maxFloat,
+              minFloat: filterPayload.minFloat,
+            }}
+          />
         </section>
 
         {/* ── Fee calculator ───────────────────────────── */}
@@ -393,7 +519,9 @@ export default function CS2BotPage() {
           <div className="grid gap-3 sm:grid-cols-3">
             <div>
               <Label className="text-xs">
-                {calcMode === "seller" ? "Listing price (USD)" : "I want to spend (USD)"}
+                {calcMode === "seller"
+                  ? "Listing price (USD)"
+                  : "I want to spend (USD)"}
               </Label>
               <Input
                 type="number"
@@ -416,6 +544,8 @@ export default function CS2BotPage() {
               >
                 <option value="steam">Steam Market (15%)</option>
                 <option value="csfloat">CSFloat (2%)</option>
+                <option value="skinport">Skinport (12%)</option>
+                <option value="dmarket">DMarket (7%)</option>
                 <option value="buff">Buff.market (2.5%)</option>
                 <option value="custom">Custom</option>
               </select>
@@ -472,9 +602,9 @@ export default function CS2BotPage() {
             AI listing analysis
           </h2>
           <p className="mb-3 text-xs text-muted-foreground">
-            Drop a screenshot of a CSFloat / Steam Market listing (or just the
-            skin). Vision model extracts wear, float, stickers, trend, and
-            scores the buy 1–5.
+            Drop a screenshot of a CSFloat / Steam / Skinport listing (or just
+            the skin). The vision model extracts wear, float, stickers, trend,
+            and scores the buy 1–5.
           </p>
 
           <label
@@ -591,9 +721,13 @@ function AnalysisPanel({ a }: { a: AnalyzeResponse }) {
       {(a.listing.trend || a.listing.trendNotes) && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           {trendIcon}
-          <span className="font-medium capitalize">{a.listing.trend ?? "—"}</span>
+          <span className="font-medium capitalize">
+            {a.listing.trend ?? "—"}
+          </span>
           {a.listing.trendNotes && (
-            <span className="text-muted-foreground">· {a.listing.trendNotes}</span>
+            <span className="text-muted-foreground">
+              · {a.listing.trendNotes}
+            </span>
           )}
         </div>
       )}
