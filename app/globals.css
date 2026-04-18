@@ -388,6 +388,125 @@
   transform-origin: center;
 }
 
+/* ────────────────────────────────────────────────────────────────────────────
+   Hero: dot-grid texture (light/dark) — ties Hero visually to the splash and
+   pulls the page away from generic AI-SaaS gradients.
+   ──────────────────────────────────────────────────────────────────────────── */
+.hero-dot-grid {
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.18) 1px, transparent 1.6px);
+  background-size: 22px 22px;
+  -webkit-mask-image: radial-gradient(ellipse at center, #000 28%, transparent 78%);
+          mask-image: radial-gradient(ellipse at center, #000 28%, transparent 78%);
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+   Brand mark: orbital tracers (used in Hero + Splash for visual cohesion).
+   ──────────────────────────────────────────────────────────────────────────── */
+@keyframes brand-orbit-cw {
+  to { transform: rotate(360deg); }
+}
+@keyframes brand-orbit-ccw {
+  to { transform: rotate(-360deg); }
+}
+@keyframes brand-pulse-core {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.18); opacity: 0.92; }
+}
+.brand-orbit-cw  { animation: brand-orbit-cw  9s linear infinite; transform-origin: center; }
+.brand-orbit-ccw { animation: brand-orbit-ccw 13s linear infinite; transform-origin: center; }
+.brand-pulse-core { animation: brand-pulse-core 2.4s ease-in-out infinite; transform-origin: center; }
+
+/* ────────────────────────────────────────────────────────────────────────────
+   RecentToolsTicker: seamless horizontal marquee, pauses on hover.
+   The track contains two identical halves; -50% translate produces a
+   loop with no visible jump.
+   ──────────────────────────────────────────────────────────────────────────── */
+@keyframes ticker-scroll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+.ticker-track {
+  animation: ticker-scroll 55s linear infinite;
+  will-change: transform;
+}
+.ticker-pause:hover .ticker-track,
+.ticker-pause:focus-within .ticker-track {
+  animation-play-state: paused;
+}
+.ticker-fade-edges {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 6%,
+    #000 94%,
+    transparent 100%
+  );
+          mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 6%,
+    #000 94%,
+    transparent 100%
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+   ToolCard hover: animated conic-gradient border trace + soft glow.
+   Distinctive premium-card feel without changing card layout.
+   Requires @property for the smooth angle animation; degrades gracefully
+   to a static gradient ring in older browsers.
+   ──────────────────────────────────────────────────────────────────────────── */
+@property --tool-trace-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+@keyframes tool-trace-spin {
+  to { --tool-trace-angle: 360deg; }
+}
+
+/* Sits on the inside edge of the card so it works even when the card has
+   overflow-hidden (used by ToolCard for image cropping). The ::before is
+   the rotating gradient ring; the ::after is a separate inset glow. */
+.tool-trace {
+  position: relative;
+  isolation: isolate;
+}
+.tool-trace::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: conic-gradient(
+    from var(--tool-trace-angle),
+    rgba(99, 102, 241, 0)   0deg,
+    rgba(99, 102, 241, 0.95) 70deg,
+    rgba(168, 85, 247, 0.95) 140deg,
+    rgba(236, 72, 153, 0.95) 210deg,
+    rgba(99, 102, 241, 0.95) 290deg,
+    rgba(99, 102, 241, 0)   360deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+          mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 320ms cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+  animation: tool-trace-spin 4s linear infinite;
+}
+.tool-trace:hover::before,
+.tool-trace:focus-within::before {
+  opacity: 1;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .home-splash-blob,
   .home-splash-blob-delayed,
@@ -401,7 +520,12 @@
   .conic-spinner,
   .pill-rise,
   .orbit-spin-rev,
-  .orbit-satellite {
+  .orbit-satellite,
+  .brand-orbit-cw,
+  .brand-orbit-ccw,
+  .brand-pulse-core,
+  .ticker-track,
+  .tool-trace::before {
     animation: none !important;
   }
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Sparkles } from "lucide-react";
+import { BrandMark } from "@/components/BrandMark";
 import { cn } from "@/lib/utils";
 
 type HomeSplashLoaderProps = {
@@ -138,9 +138,9 @@ export function HomeSplashLoader({ loading }: HomeSplashLoaderProps) {
                 style={{ animationDuration: "2.4s" }}
                 aria-hidden
               />
-              {/* Icon plate */}
+              {/* Icon plate — same BrandMark as the Hero for visual cohesion */}
               <div className="relative flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 via-violet-500 to-purple-600 shadow-lg shadow-indigo-500/35 ring-1 ring-white/15">
-                <Sparkles className="h-8 w-8 text-white" strokeWidth={1.75} />
+                <BrandMark size={40} tone="onDark" />
               </div>
             </div>
 

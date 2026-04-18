@@ -456,8 +456,9 @@ export function ToolCard({
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.2, delay: index * 0.02 }}
+        className="group/tool relative rounded-lg transition-shadow duration-300 hover:shadow-[0_18px_40px_-22px_rgba(99,102,241,0.55)] dark:hover:shadow-[0_18px_50px_-22px_rgba(129,140,248,0.6)]"
       >
-        <Card className="relative overflow-hidden border-border/50 transition-colors hover:border-primary/40">
+        <Card className="tool-trace relative overflow-hidden border-border/50 transition-colors group-hover/tool:border-transparent">
           {agencyBanner}
           {cardRibbons}
           <CardContent className="flex min-w-0 flex-col gap-3 p-3 sm:flex-row sm:items-center sm:gap-4">
@@ -607,13 +608,15 @@ export function ToolCard({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, delay: index * 0.05 }}
       className={cn(
-        "min-w-0",
+        "group/tool relative min-w-0 rounded-lg transition-shadow duration-300",
+        "hover:shadow-[0_24px_60px_-24px_rgba(99,102,241,0.55)]",
+        "dark:hover:shadow-[0_24px_70px_-24px_rgba(129,140,248,0.6)]",
         descriptionExpanded ? "h-auto min-h-0" : "h-full min-h-0",
       )}
     >
       <Card
         className={cn(
-          "group relative flex h-full min-h-0 min-w-0 flex-col border-border/50 bg-card transition-all duration-300 hover:border-primary/50 hover:shadow-lg hover:shadow-primary/10 dark:hover:shadow-primary/20",
+          "tool-trace group relative flex h-full min-h-0 min-w-0 flex-col border-border/50 bg-card transition-colors duration-300 group-hover/tool:border-transparent",
           descriptionExpanded ? "overflow-visible" : "overflow-hidden",
         )}
       >
