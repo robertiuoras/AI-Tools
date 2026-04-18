@@ -1192,7 +1192,20 @@ function NotesPageInner() {
     }
   }, [toolbarCompact]);
 
-  const [fmtActive, setFmtActive] = useState({
+  const [fmtActive, setFmtActive] = useState<{
+    bold: boolean;
+    italic: boolean;
+    underline: boolean;
+    strikeThrough: boolean;
+    highlight: boolean;
+    inlineCode: boolean;
+    unorderedList: boolean;
+    orderedList: boolean;
+    taskList: boolean;
+    heading3: boolean;
+    /** Computed font-size at the selection in px (rounded). null = unknown. */
+    fontSizePx: number | null;
+  }>({
     bold: false,
     italic: false,
     underline: false,
@@ -1203,6 +1216,7 @@ function NotesPageInner() {
     orderedList: false,
     taskList: false,
     heading3: false,
+    fontSizePx: null,
   });
   /** Synced color well + hex field in Format panel (6-char #RRGGBB). */
   const [formatPanelColor, setFormatPanelColor] = useState("#2563eb");
@@ -2436,6 +2450,11 @@ function NotesPageInner() {
     return false;
   }, []);
 
+  /** Tracks the most recently focused font-size <input>; while focused we
+   * don't overwrite its value from selection updates so the user can finish
+   * typing a number without it getting clobbered. */
+  const fontSizeInputFocusedRef = useRef(false);
+
   const refreshFmt = useCallback(() => {
     if (!isEditing || !selectionInEditor()) return;
     try {
@@ -2450,6 +2469,33 @@ function NotesPageInner() {
         /* ignore */
       }
       if (!heading3) heading3 = selectionInsideHeading3();
+      // Read font size at the selection so the toolbar input reflects what
+      // is actually under the caret. Walks up to the editor root looking for
+      // the nearest computed font-size.
+      let fontSizePx: number | null = null;
+      try {
+        const root = editorRef.current;
+        const sel = window.getSelection();
+        if (root && sel && sel.rangeCount > 0) {
+          let node: Node | null = sel.getRangeAt(0).startContainer;
+          if (node && node.nodeType === Node.TEXT_NODE) node = node.parentNode;
+          while (
+            node &&
+            node !== root &&
+            node.nodeType === Node.ELEMENT_NODE
+          ) {
+            const cs = window.getComputedStyle(node as Element).fontSize;
+            const v = parseFloat(cs);
+            if (!Number.isNaN(v) && v > 0) {
+              fontSizePx = Math.round(v);
+              break;
+            }
+            node = node.parentNode;
+          }
+        }
+      } catch {
+        /* ignore */
+      }
       setFmtActive({
         bold: document.queryCommandState("bold"),
         italic: document.queryCommandState("italic"),
@@ -2461,7 +2507,11 @@ function NotesPageInner() {
         orderedList: document.queryCommandState("insertOrderedList"),
         taskList: selectionInsideTaskList(),
         heading3,
+        fontSizePx,
       });
+      if (fontSizePx != null && !fontSizeInputFocusedRef.current) {
+        setCustomFontSize(String(fontSizePx));
+      }
       setFmtInMention(selectionInsideNoteMention());
     } catch {
       // ignore
@@ -2478,9 +2528,25 @@ function NotesPageInner() {
 
   useEffect(() => {
     if (!isEditing) return;
-    const onSel = () => {
-      if (contextMenuOpenRef.current) {
+    // Selectionchange fires on every keystroke, every drag step, every caret
+    // movement — running queryCommandState + computed-style walks on each
+    // tick is what made highlighting feel laggy on long notes. We coalesce
+    // into a single rAF tick so the heavy work happens at most once per
+    // frame regardless of how fast the user is dragging.
+    let rafId: number | null = null;
+    const scheduleRefresh = () => {
+      if (rafId != null) return;
+      rafId = window.requestAnimationFrame(() => {
+        rafId = null;
         refreshFmt();
+      });
+    };
+    const onSel = () => {
+      // While a right-click context menu is open, the visible selection may
+      // have been cleared by the menu — keep the saved range untouched and
+      // just refresh the toolbar state on the next frame.
+      if (contextMenuOpenRef.current) {
+        scheduleRefresh();
         return;
       }
       const root = editorRef.current;
@@ -2495,10 +2561,13 @@ function NotesPageInner() {
           editorSelectionRef.current = null;
         }
       }
-      refreshFmt();
+      scheduleRefresh();
     };
     document.addEventListener("selectionchange", onSel);
-    return () => document.removeEventListener("selectionchange", onSel);
+    return () => {
+      document.removeEventListener("selectionchange", onSel);
+      if (rafId != null) window.cancelAnimationFrame(rafId);
+    };
   }, [isEditing, refreshFmt]);
 
   /** execCommand for inline styles; runs twice when needed so toggling off works (context menu + toolbar). */
@@ -2758,11 +2827,13 @@ function NotesPageInner() {
         mark.appendChild(frag);
         r.insertNode(mark);
       }
+      // Keep the selection covering the highlighted text so the user can
+      // chain follow-up actions (e.g. resize, recolor) without re-selecting.
       sel.removeAllRanges();
       const nr = document.createRange();
       nr.selectNodeContents(mark);
-      nr.collapse(false);
       sel.addRange(nr);
+      editorSelectionRef.current = nr.cloneRange();
     }
     root.dispatchEvent(new Event("input", { bubbles: true }));
     refreshFmt();
@@ -2804,6 +2875,8 @@ function NotesPageInner() {
       const span = document.createElement("span");
       span.style.setProperty("font-size", `${size}px`, "important");
       if (r.collapsed) {
+        // Caret-only: insert a zero-width span so the next typed character
+        // picks up the new size, but keep the caret right after the ZWSP.
         span.appendChild(document.createTextNode("\u200b"));
         r.insertNode(span);
         const z = span.firstChild;
@@ -2813,8 +2886,12 @@ function NotesPageInner() {
           nr.collapse(true);
           sel.removeAllRanges();
           sel.addRange(nr);
+          editorSelectionRef.current = nr.cloneRange();
         }
       } else {
+        // Range selection: wrap the contents and KEEP the selection covering
+        // the wrapped text so the user can keep stepping the size repeatedly
+        // (Cmd+/-, +/- buttons) without having to re-select.
         try {
           r.surroundContents(span);
         } catch {
@@ -2825,13 +2902,47 @@ function NotesPageInner() {
         sel.removeAllRanges();
         const nr = document.createRange();
         nr.selectNodeContents(span);
-        nr.collapse(false);
         sel.addRange(nr);
+        // Persist as the canonical "active" range so subsequent toolbar
+        // clicks (which momentarily blur the editor) resume from this exact
+        // selection rather than collapsing to the caret.
+        editorSelectionRef.current = nr.cloneRange();
       }
       root.dispatchEvent(new Event("input", { bubbles: true }));
       refreshFmt();
     },
     [refreshFmt, restoreEditorSelection],
+  );
+
+  /**
+   * Discrete font-size ladder used by Cmd/Ctrl + (=|+|-) and the toolbar
+   * stepper buttons. Steps grow super-linearly so each press at the larger
+   * end produces a meaningfully bigger jump (16 → 18 vs. 64 → 72), matching
+   * what users expect from Pages / Word / Google Docs presets.
+   */
+  const FONT_SIZE_STEPS = useMemo(
+    () => [
+      8, 9, 10, 11, 12, 13, 14, 16, 18, 20, 24, 28, 32, 36, 42, 48, 56, 64, 72,
+      84, 96,
+    ],
+    [],
+  );
+
+  const stepFontSize = useCallback(
+    (current: number, direction: 1 | -1): number => {
+      const steps = FONT_SIZE_STEPS;
+      if (direction === 1) {
+        const next = steps.find((s) => s > current);
+        return next ?? steps[steps.length - 1]!;
+      }
+      let prev: number | null = null;
+      for (const s of steps) {
+        if (s < current) prev = s;
+        else break;
+      }
+      return prev ?? steps[0]!;
+    },
+    [FONT_SIZE_STEPS],
   );
 
   const toggleInlineCode = useCallback(() => {
@@ -3633,18 +3744,14 @@ function NotesPageInner() {
       }
       // Cmd/Ctrl + (=|+|-)  →  step font size on the highlighted selection.
       // We accept "=" because that's what most keyboards send for "+" without
-      // shift, and we read the current size from the selection so each press
-      // bumps from where the user actually is rather than from a fixed base.
+      // shift, and we step through a curated ladder so each press lands on a
+      // standard size (8/10/12/14/16/18/20/24/28/32/36/42/48/56/64/72/84/96)
+      // — bigger jumps at the larger end where small +/-2 steps feel useless.
       if (mod && (e.key === "+" || e.key === "=" || e.key === "-")) {
         const isMinus = e.key === "-";
         e.preventDefault();
-        const FONT_STEP = 2;
-        const FONT_MIN = 8;
-        const FONT_MAX = 96;
         const current = getEditorSelectionFontSize() ?? 16;
-        const next = isMinus
-          ? Math.max(FONT_MIN, current - FONT_STEP)
-          : Math.min(FONT_MAX, current + FONT_STEP);
+        const next = stepFontSize(current, isMinus ? -1 : 1);
         if (next !== current) applyFontSizePx(next);
         return;
       }
@@ -3686,6 +3793,7 @@ function NotesPageInner() {
       copyNoteImageToClipboard,
       applyFontSizePx,
       getEditorSelectionFontSize,
+      stepFontSize,
     ],
   );
 
@@ -5726,56 +5834,101 @@ function NotesPageInner() {
                                       </div>
                                     )}
                                   </div>
-                                  <div className="mt-1.5 flex flex-wrap items-end gap-1 border-t border-border/60 pt-1.5">
+                                  <div className="mt-1.5 flex items-center gap-1 border-t border-border/60 pt-1.5">
                                     <Label
                                       htmlFor="note-custom-font-size"
-                                      className="sr-only"
-                                    >
-                                      Font size (px)
-                                    </Label>
-                                    <Input
-                                      id="note-custom-font-size"
-                                      type="number"
-                                      min={1}
-                                      max={100}
-                                      className="h-7 w-16 text-xs"
-                                      value={customFontSize}
-                                      onChange={(e) =>
-                                        setCustomFontSize(e.target.value)
-                                      }
-                                      onMouseDown={(e) => e.stopPropagation()}
-                                      onClick={(e) => e.stopPropagation()}
-                                      onKeyDown={(e) => {
-                                        e.stopPropagation();
-                                        if (e.key !== "Enter") return;
-                                        e.preventDefault();
-                                        const n = Number(customFontSize);
-                                        if (!Number.isFinite(n)) return;
-                                        queueMicrotask(() => {
-                                          editorRef.current?.focus();
-                                          applyFontSizePx(n);
-                                        });
-                                      }}
-                                      title="Font size (px)"
-                                    />
-                                    <Button
-                                      type="button"
-                                      variant="secondary"
-                                      size="sm"
-                                      className="h-7 shrink-0 px-2 text-xs"
-                                      onMouseDown={(e) => e.preventDefault()}
-                                      onClick={() => {
-                                        const n = Number(customFontSize);
-                                        if (!Number.isFinite(n)) return;
-                                        queueMicrotask(() => {
-                                          editorRef.current?.focus();
-                                          applyFontSizePx(n);
-                                        });
-                                      }}
-                                      title="Apply font size"
+                                      className="text-[10px] uppercase tracking-wide text-muted-foreground"
                                     >
                                       Size
-                                    </Button>
+                                    </Label>
+                                    <div className="ml-auto inline-flex items-stretch overflow-hidden rounded-md border border-border">
+                                      <button
+                                        type="button"
+                                        className="flex h-7 w-7 items-center justify-center text-base leading-none text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                                        title="Decrease font size"
+                                        onMouseDown={(e) => e.preventDefault()}
+                                        onClick={() => {
+                                          const cur =
+                                            fmtActive.fontSizePx ??
+                                            (Number(customFontSize) || 16);
+                                          const next = stepFontSize(cur, -1);
+                                          setCustomFontSize(String(next));
+                                          applyFontSizePx(next);
+                                        }}
+                                      >
+                                        −
+                                      </button>
+                                      <Input
+                                        id="note-custom-font-size"
+                                        type="number"
+                                        min={1}
+                                        max={100}
+                                        className="h-7 w-12 rounded-none border-x border-y-0 border-border px-1 text-center text-xs tabular-nums focus-visible:ring-0"
+                                        value={customFontSize}
+                                        onFocus={() => {
+                                          fontSizeInputFocusedRef.current = true;
+                                        }}
+                                        onBlur={(e) => {
+                                          fontSizeInputFocusedRef.current = false;
+                                          const n = Number(e.target.value);
+                                          if (
+                                            Number.isFinite(n) &&
+                                            n >= 1 &&
+                                            n <= 100 &&
+                                            n !== fmtActive.fontSizePx
+                                          ) {
+                                            applyFontSizePx(n);
+                                          }
+                                        }}
+                                        onChange={(e) =>
+                                          setCustomFontSize(e.target.value)
+                                        }
+                                        onMouseDown={(e) => e.stopPropagation()}
+                                        onClick={(e) => e.stopPropagation()}
+                                        onKeyDown={(e) => {
+                                          e.stopPropagation();
+                                          if (
+                                            e.key === "ArrowUp" ||
+                                            e.key === "ArrowDown"
+                                          ) {
+                                            e.preventDefault();
+                                            const cur =
+                                              Number(customFontSize) ||
+                                              fmtActive.fontSizePx ||
+                                              16;
+                                            const next = stepFontSize(
+                                              cur as number,
+                                              e.key === "ArrowUp" ? 1 : -1,
+                                            );
+                                            setCustomFontSize(String(next));
+                                            applyFontSizePx(next);
+                                            return;
+                                          }
+                                          if (e.key !== "Enter") return;
+                                          e.preventDefault();
+                                          const n = Number(customFontSize);
+                                          if (!Number.isFinite(n)) return;
+                                          applyFontSizePx(n);
+                                        }}
+                                        title="Font size (px)"
+                                      />
+                                      <button
+                                        type="button"
+                                        className="flex h-7 w-7 items-center justify-center text-base leading-none text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                                        title="Increase font size"
+                                        onMouseDown={(e) => e.preventDefault()}
+                                        onClick={() => {
+                                          const cur =
+                                            fmtActive.fontSizePx ??
+                                            (Number(customFontSize) || 16);
+                                          const next = stepFontSize(cur, 1);
+                                          setCustomFontSize(String(next));
+                                          applyFontSizePx(next);
+                                        }}
+                                      >
+                                        +
+                                      </button>
+                                    </div>
                                   </div>
                                 </div>,
                                 document.body,
