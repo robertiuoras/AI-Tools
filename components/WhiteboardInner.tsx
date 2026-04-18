@@ -11,28 +11,57 @@ interface Props {
   boardId: string;
 }
 
-/** ~45s autosave interval */
 const AUTOSAVE_INTERVAL_MS = 45_000;
 
 /**
- * Strip focus mode from the session before persisting. `isReadonly` is NOT
- * in `session` (it lives in the instance record inside `document.store`), so
- * we handle it via a runtime side-effect listener in `handleMount` instead —
- * see the call to `editor.sideEffects.registerAfterChangeHandler` below.
+ * Walks `document.store` and forces `isReadonly: false` on any tldraw
+ * `instance`-typed record. tldraw's schema marks `isReadonly` as a
+ * "preserved" instance field, which means snapshots round-trip the value
+ * across loads. If a snapshot was ever saved with `isReadonly: true` (e.g.
+ * because tldraw briefly toggled it during a load race), every subsequent
+ * mount would re-hydrate the canvas as read-only — that's the "uneditable
+ * after a few seconds" bug. We strip it on the way in AND on the way out.
  */
-function snapshotForPersist(editor: Editor) {
-  const snap = getSnapshot(editor.store) as TLEditorSnapshot;
+function stripReadonlyFromStore(store: Record<string, unknown> | undefined): void {
+  if (!store) return;
+  for (const key of Object.keys(store)) {
+    const rec = store[key] as { typeName?: string; isReadonly?: boolean } | null;
+    if (rec && typeof rec === "object" && rec.typeName === "instance" && rec.isReadonly) {
+      (rec as { isReadonly: boolean }).isReadonly = false;
+    }
+  }
+}
+
+function snapshotForPersist(editor: Editor): TLEditorSnapshot {
+  const snap = getSnapshot(editor.store) as TLEditorSnapshot & {
+    document?: { store?: Record<string, unknown> };
+  };
   const session = snap.session ?? { version: 1 as const };
+  const docStore = snap.document?.store ? { ...snap.document.store } : undefined;
+  stripReadonlyFromStore(docStore);
+  const document = snap.document
+    ? { ...snap.document, ...(docStore ? { store: docStore } : {}) }
+    : snap.document;
   return {
     ...snap,
     session: { ...session, isFocusMode: false },
-  };
+    ...(document ? { document } : {}),
+  } as TLEditorSnapshot;
 }
 
-/** Strip focus mode from a fetched snapshot before passing it as initial data. */
 function prepareForLoad(snap: TLEditorSnapshot): TLEditorSnapshot {
-  const session = snap.session ?? { version: 1 as const };
-  return { ...snap, session: { ...session, isFocusMode: false } };
+  const s = snap as TLEditorSnapshot & { document?: { store?: Record<string, unknown> } };
+  const session = s.session ?? { version: 1 as const };
+  const docStore = s.document?.store ? { ...s.document.store } : undefined;
+  stripReadonlyFromStore(docStore);
+  const document = s.document
+    ? { ...s.document, ...(docStore ? { store: docStore } : {}) }
+    : s.document;
+  return {
+    ...s,
+    session: { ...session, isFocusMode: false },
+    ...(document ? { document } : {}),
+  } as TLEditorSnapshot;
 }
 
 async function postSave(token: string, boardId: string, snapshot: TLEditorSnapshot) {
@@ -55,10 +84,8 @@ export default function WhiteboardInner({ token, boardId }: Props) {
 
   const editorRef = useRef<Editor | null>(null);
 
-  // undefined = still loading  |  null = new empty board  |  snapshot = saved state
   const [initialSnapshot, setInitialSnapshot] = useState<TLEditorSnapshot | null | undefined>(undefined);
 
-  // Fetch BEFORE mounting Tldraw so we never need loadSnapshot imperatively
   useEffect(() => {
     let cancelled = false;
     fetch(`/api/whiteboard?boardId=${encodeURIComponent(boardId)}`, {
@@ -75,38 +102,32 @@ export default function WhiteboardInner({ token, boardId }: Props) {
       });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // intentionally empty — boardId/token are stable at mount
+  }, []);
 
   const handleMount = useCallback((editor: Editor) => {
     let disposed = false;
     editorRef.current = editor;
 
-    // Always ensure the editor is interactive regardless of what the snapshot had
     editor.updateInstanceState({ isFocusMode: false, isReadonly: false });
 
     /**
-     * Defensive: if anything (a stale instance record from a saved snapshot,
-     * an internal tldraw transition, a stray `setReadonly` call) flips
-     * `isReadonly` back to true after mount, immediately reset it. This is
-     * what was making the canvas appear "uneditable after a few seconds" —
-     * the loaded snapshot's instance record carried readonly=true and would
-     * eventually win over our one-shot `updateInstanceState` above.
+     * BEFORE-change interceptor: any attempt to flip `isReadonly` to `true`
+     * on the instance record is rewritten to `false`. Unlike the after-change
+     * approach, this runs *before* the write commits, so we can't lose to
+     * subsequent reactive writes (e.g. the snapshot hydration race or any
+     * collaboration-mode reactor). This is the durable fix.
      */
-    const offReadonly = editor.sideEffects.registerAfterChangeHandler(
+    const offBefore = editor.sideEffects.registerBeforeChangeHandler(
       "instance",
       (_prev, next) => {
-        if (disposed) return;
         const inst = next as { isReadonly?: boolean };
         if (inst.isReadonly === true) {
-          // Schedule on next tick so we don't recurse inside the change handler.
-          queueMicrotask(() => {
-            if (!disposed) editor.updateInstanceState({ isReadonly: false });
-          });
+          return { ...inst, isReadonly: false } as typeof next;
         }
+        return next;
       },
     );
 
-    // Interval autosave
     const interval = window.setInterval(() => {
       if (disposed) return;
       void (async () => {
@@ -122,7 +143,7 @@ export default function WhiteboardInner({ token, boardId }: Props) {
       disposed = true;
       editorRef.current = null;
       try {
-        offReadonly?.();
+        offBefore?.();
       } catch {
         /* ignore */
       }
@@ -135,9 +156,8 @@ export default function WhiteboardInner({ token, boardId }: Props) {
         }
       })();
     };
-  }, []); // stable — uses refs only
+  }, []);
 
-  // Show loading spinner until the fetch resolves
   if (initialSnapshot === undefined) {
     return (
       <div className="absolute inset-0 flex items-center justify-center bg-background">

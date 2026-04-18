@@ -85,7 +85,20 @@ import {
   Heading3,
   ChevronsLeftRight,
   ChevronsRightLeft,
+  MoreHorizontal,
+  Share2,
+  Users,
+  Eye,
+  Mail,
+  X as XIcon,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { linkifyText } from "@/lib/linkify";
 import {
@@ -1102,6 +1115,38 @@ function NotesPageInner() {
   useEffect(() => {
     if (!selectedNoteId) setFocusMode(false);
   }, [selectedNoteId]);
+
+  /**
+   * Notes shared WITH the current user (Google-Docs-style). Each entry has
+   * `permission` ("view" | "edit") and the underlying `note` (whose `userId`
+   * is the OWNER, not the current user). When the current user opens a
+   * shared note we still load it via /api/notes/:id but the API enforces
+   * shared-edit permissions on PUT.
+   */
+  const [sharedNotes, setSharedNotes] = useState<
+    Array<{
+      shareId: string;
+      permission: "view" | "edit";
+      sharedAt: string;
+      owner: { id: string; email: string; name: string | null } | null;
+      note: Note;
+    }>
+  >([]);
+  const sharedNotesRef = useRef(sharedNotes);
+  sharedNotesRef.current = sharedNotes;
+  const isSharedNoteSelected = useMemo(
+    () => sharedNotes.some((s) => s.note.id === selectedNoteId),
+    [sharedNotes, selectedNoteId],
+  );
+  const selectedSharedPermission = useMemo(() => {
+    const s = sharedNotes.find((x) => x.note.id === selectedNoteId);
+    return s?.permission ?? null;
+  }, [sharedNotes, selectedNoteId]);
+  /** Open Share dialog state. */
+  const [shareDialog, setShareDialog] = useState<
+    | { noteId: string; noteTitle: string }
+    | null
+  >(null);
   const [loading, setLoading] = useState(false);
   const [notesLoading, setNotesLoading] = useState(true);
   const pagesRef = useRef(pages);
@@ -1396,6 +1441,26 @@ function NotesPageInner() {
     }),
     [token],
   );
+
+  /** Fetch the list of notes shared WITH the current user. */
+  const refreshSharedNotes = useCallback(async () => {
+    const bearer = accessTokenRef.current;
+    if (!bearer) return;
+    try {
+      const res = await fetch("/api/notes/shared", {
+        headers: { Authorization: `Bearer ${bearer}` },
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as typeof sharedNotes;
+      if (Array.isArray(data)) setSharedNotes(data);
+    } catch {
+      /* network error; silent — sharing is non-critical */
+    }
+  }, []);
+  useEffect(() => {
+    if (!userId) return;
+    void refreshSharedNotes();
+  }, [userId, refreshSharedNotes]);
 
   useEffect(() => {
     setNoteBodyFullscreen(false);
@@ -2844,11 +2909,19 @@ function NotesPageInner() {
   }, [refreshFmt, selectionInsideHeading3, restoreEditorSelection]);
 
   const beginEditingNote = useCallback(() => {
+    // View-only shared notes can never enter edit mode.
+    if (
+      sharedNotesRef.current.some(
+        (s) => s.note.id === selectedNoteId && s.permission !== "edit",
+      )
+    ) {
+      return;
+    }
     const wrap = readNoteBodyWrapRef.current;
     pendingEditorScrollRef.current = wrap ? wrap.scrollTop : null;
     setEditorSession((s) => s + 1);
     setIsEditing(true);
-  }, []);
+  }, [selectedNoteId]);
 
   const onEditorSessionHydrated = useCallback((baseline: string) => {
     lastAutoSavedBodyRef.current = baseline;
@@ -4071,10 +4144,10 @@ function NotesPageInner() {
         <div
           className={cn(
             "relative grid min-h-[min(70vh,560px)] grid-cols-1 gap-4 lg:items-start",
-            // Animate the grid template — keep all tracks in the same unit
-            // (px) so browsers actually tween between the two states. Mixing
-            // `0fr` with a `px` value used to cause the layout to snap.
-            "transition-[grid-template-columns,gap] duration-[450ms] ease-[cubic-bezier(0.22,1,0.36,1)]",
+            // Smoother grid-template animation: a tighter curve plus a touch
+            // longer duration reads as "expanding into focus" rather than a
+            // pop. Keep all tracks in `px`/`fr` mix that browsers can tween.
+            "transition-[grid-template-columns,gap] duration-[520ms] ease-[cubic-bezier(0.16,1,0.3,1)]",
             focusMode
               ? "lg:grid-cols-[minmax(0,0px)_minmax(0,0px)_minmax(0,1fr)] lg:gap-0"
               : "lg:grid-cols-[minmax(0,280px)_minmax(0,320px)_minmax(0,1fr)]",
@@ -4089,8 +4162,11 @@ function NotesPageInner() {
               // Only animate opacity + clip overflow while the grid track
               // collapses — animating padding/border/translate at the same
               // time looked janky against the grid template tween.
-              "lg:overflow-hidden transition-opacity duration-300 ease-out",
-              focusMode && "lg:pointer-events-none lg:opacity-0",
+              // Slight scale + opacity gives the columns a "tucking away"
+              // feel that pairs with the grid-template tween.
+              "lg:overflow-hidden transition-[opacity,transform] duration-[420ms] ease-out",
+              focusMode &&
+                "lg:pointer-events-none lg:scale-[0.97] lg:opacity-0",
             )}
             aria-hidden={focusMode || undefined}
           >
@@ -4224,66 +4300,85 @@ function NotesPageInner() {
                         }}
                       />
                     ) : (
-                      <>
-                        <button
-                          type="button"
-                          className="min-w-0 flex-1 truncate text-left text-sm"
-                          onClick={() => {
-                            setSelectedPageId(p.id);
-                            setSelectedNoteId(null);
-                          }}
-                        >
-                          {p.title}
-                        </button>
-                        <Button
-                          type="button"
-                          size="icon"
-                          variant="ghost"
-                          className="h-8 w-8 shrink-0"
-                          title="Edit page name"
-                          onClick={() => {
-                            setSelectedPageId(p.id);
-                            setSelectedNoteId(null);
-                            setEditingPageId(p.id);
-                          }}
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                      </>
+                      <button
+                        type="button"
+                        className="min-w-0 flex-1 truncate text-left text-sm"
+                        onClick={() => {
+                          setSelectedPageId(p.id);
+                          setSelectedNoteId(null);
+                        }}
+                      >
+                        {p.title}
+                      </button>
                     )}
-                    <button
-                      type="button"
-                      className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-                      title="Copy page title"
-                      onClick={() => void copyText(p.title, `page-${p.id}`)}
-                    >
-                      {copiedKey === `page-${p.id}` ? (
-                        <Check className="h-4 w-4 text-emerald-500" />
-                      ) : (
-                        <Copy className="h-4 w-4" />
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        updatePage(p.id, { favorite: !p.favorite })
-                      }
-                    >
+                    {p.favorite && editingPageId !== p.id && (
                       <Star
-                        className={cn(
-                          "h-4 w-4",
-                          p.favorite
-                            ? "fill-yellow-400 text-yellow-400"
-                            : "text-muted-foreground",
-                        )}
+                        className="h-3.5 w-3.5 shrink-0 fill-yellow-400 text-yellow-400"
+                        aria-hidden="true"
                       />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => deletePage(p.id)}
-                    >
-                      <Trash2 className="h-4 w-4 text-destructive" />
-                    </button>
+                    )}
+                    {editingPageId !== p.id && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            className="shrink-0 rounded-md p-1 text-muted-foreground opacity-60 transition-opacity hover:bg-muted hover:text-foreground hover:opacity-100 data-[state=open]:opacity-100"
+                            title="More actions"
+                            onClick={(e) => e.stopPropagation()}
+                            aria-label={`Page actions for ${p.title}`}
+                          >
+                            <MoreHorizontal className="h-4 w-4" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-44">
+                          <DropdownMenuItem
+                            onSelect={() => {
+                              setSelectedPageId(p.id);
+                              setSelectedNoteId(null);
+                              setEditingPageId(p.id);
+                            }}
+                          >
+                            <Pencil className="h-4 w-4" />
+                            Rename
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onSelect={() =>
+                              void copyText(p.title, `page-${p.id}`)
+                            }
+                          >
+                            {copiedKey === `page-${p.id}` ? (
+                              <Check className="h-4 w-4 text-emerald-500" />
+                            ) : (
+                              <Copy className="h-4 w-4" />
+                            )}
+                            Copy title
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onSelect={() =>
+                              void updatePage(p.id, { favorite: !p.favorite })
+                            }
+                          >
+                            <Star
+                              className={cn(
+                                "h-4 w-4",
+                                p.favorite
+                                  ? "fill-yellow-400 text-yellow-400"
+                                  : "",
+                              )}
+                            />
+                            {p.favorite ? "Unfavorite" : "Favorite"}
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            onSelect={() => void deletePage(p.id)}
+                            className="text-destructive focus:text-destructive"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            Delete page
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
                   </div>
                 </Fragment>
               ))}
@@ -4317,13 +4412,124 @@ function NotesPageInner() {
                   />
                 )}
             </div>
+
+            {sharedNotes.length > 0 && (
+              <div className="mt-4 space-y-1.5 border-t border-border/60 pt-3">
+                <div className="flex items-center gap-1.5 px-1 text-xs font-medium text-muted-foreground">
+                  <Users className="h-3.5 w-3.5" />
+                  Shared with me
+                </div>
+                <div className="space-y-1">
+                  {sharedNotes.map((s) => {
+                    const note = s.note;
+                    const ownerLabel =
+                      s.owner?.name ||
+                      s.owner?.email ||
+                      "Unknown user";
+                    const isSelected = selectedNoteId === note.id;
+                    return (
+                      <div
+                        key={s.shareId}
+                        className={cn(
+                          "group flex items-center gap-1.5 rounded-lg border border-transparent px-2 py-1.5 text-sm transition-colors",
+                          "hover:border-primary/30 hover:bg-muted/30",
+                          isSelected && "border-violet-500/60 bg-violet-500/10",
+                        )}
+                      >
+                        <button
+                          type="button"
+                          className="min-w-0 flex-1 text-left"
+                          onClick={() => {
+                            setSelectedNoteId(note.id);
+                            setFocusMode(true);
+                          }}
+                          title={`Shared by ${ownerLabel}`}
+                        >
+                          <span className="flex items-center gap-1.5">
+                            <Share2 className="h-3 w-3 shrink-0 text-violet-500" />
+                            <span className="truncate">{note.title}</span>
+                          </span>
+                          <span className="block truncate text-[10px] text-muted-foreground">
+                            {ownerLabel} ·{" "}
+                            {s.permission === "edit" ? "Can edit" : "View only"}
+                          </span>
+                        </button>
+                        {s.permission === "view" && (
+                          <Eye
+                            className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                            aria-label="View only"
+                          />
+                        )}
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              type="button"
+                              className="shrink-0 rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100 data-[state=open]:opacity-100"
+                              aria-label={`Shared note actions for ${note.title}`}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <MoreHorizontal className="h-3.5 w-3.5" />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-48">
+                            <DropdownMenuItem
+                              onSelect={() =>
+                                void copyText(
+                                  note.title,
+                                  `shared-${s.shareId}`,
+                                )
+                              }
+                            >
+                              <Copy className="h-4 w-4" />
+                              Copy title
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              className="text-destructive focus:text-destructive"
+                              onSelect={async () => {
+                                const bearer = accessTokenRef.current;
+                                if (!bearer) return;
+                                try {
+                                  await fetch(
+                                    `/api/notes/${note.id}/shares/${s.shareId}`,
+                                    {
+                                      method: "DELETE",
+                                      headers: {
+                                        Authorization: `Bearer ${bearer}`,
+                                      },
+                                    },
+                                  );
+                                  setSharedNotes((prev) =>
+                                    prev.filter((x) => x.shareId !== s.shareId),
+                                  );
+                                  if (selectedNoteId === note.id) {
+                                    setSelectedNoteId(null);
+                                    setFocusMode(false);
+                                  }
+                                } catch {
+                                  /* ignore */
+                                }
+                              }}
+                            >
+                              <XIcon className="h-4 w-4" />
+                              Remove from my notes
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </section>
 
           <section
             className={cn(
               "min-w-0 cursor-default rounded-xl border bg-card p-3 space-y-3",
-              "lg:overflow-hidden transition-opacity duration-300 ease-out",
-              focusMode && "lg:pointer-events-none lg:opacity-0",
+              "lg:overflow-hidden transition-[opacity,transform] duration-[420ms] ease-out",
+              focusMode &&
+                "lg:pointer-events-none lg:scale-[0.97] lg:opacity-0",
             )}
             aria-hidden={focusMode || undefined}
           >
@@ -4524,95 +4730,129 @@ function NotesPageInner() {
                         }}
                       />
                     ) : (
-                      <>
-                        <button
-                          type="button"
-                          className="min-w-0 flex-1 truncate text-left text-sm"
-                          onClick={() => setSelectedNoteId(n.id)}
-                        >
-                          <span className="block truncate">{n.title}</span>
-                          {n.updatedAt ? (
-                            <span
-                              className="block truncate text-[10px] text-muted-foreground tabular-nums"
-                              title={new Date(n.updatedAt).toLocaleString()}
-                            >
-                              Updated{" "}
-                              {formatNoteEditedRelative(
-                                n.updatedAt,
-                                editedNowMs,
-                              )}
-                            </span>
-                          ) : null}
-                        </button>
-                        <Button
-                          type="button"
-                          size="icon"
-                          variant="ghost"
-                          className="h-8 w-8 shrink-0"
-                          title="Edit note name"
-                          onClick={() => {
-                            setSelectedNoteId(n.id);
-                            setEditingNoteRowId(n.id);
-                          }}
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                      </>
+                      <button
+                        type="button"
+                        className="min-w-0 flex-1 truncate text-left text-sm"
+                        onClick={() => {
+                          setSelectedNoteId(n.id);
+                          setFocusMode(true);
+                        }}
+                      >
+                        <span className="block truncate">{n.title}</span>
+                        {n.updatedAt ? (
+                          <span
+                            className="block truncate text-[10px] text-muted-foreground tabular-nums"
+                            title={new Date(n.updatedAt).toLocaleString()}
+                          >
+                            Updated{" "}
+                            {formatNoteEditedRelative(
+                              n.updatedAt,
+                              editedNowMs,
+                            )}
+                          </span>
+                        ) : null}
+                      </button>
                     )}
-                    <button
-                      type="button"
-                      className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-                      title="Copy note title"
-                      onClick={() =>
-                        void copyText(n.title, `note-title-${n.id}`)
-                      }
-                    >
-                      {copiedKey === `note-title-${n.id}` ? (
-                        <Check className="h-4 w-4 text-emerald-500" />
-                      ) : (
-                        <Copy className="h-4 w-4" />
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const next = !n.favorite;
-                        setNotes((prev) => {
-                          const nextList = sortNotesFavoritesFirst(
-                            prev.map((x) =>
-                              x.id === n.id ? { ...x, favorite: next } : x,
-                            ),
-                          );
-                          if (selectedPageId) {
-                            writeOrderIds(
-                              `${LS_NOTE_ORDER_KEY_PREFIX}${selectedPageId}`,
-                              nextList.map((x) => x.id),
-                            );
-                          }
-                          return nextList;
-                        });
-                        void updateNote(
-                          n.id,
-                          { favorite: next },
-                          { silent: true },
-                        );
-                      }}
-                    >
+                    {n.favorite && editingNoteRowId !== n.id && (
                       <Star
-                        className={cn(
-                          "h-4 w-4",
-                          n.favorite
-                            ? "fill-yellow-400 text-yellow-400"
-                            : "text-muted-foreground",
-                        )}
+                        className="h-3.5 w-3.5 shrink-0 fill-yellow-400 text-yellow-400"
+                        aria-hidden="true"
                       />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => deleteNote(n.id)}
-                    >
-                      <Trash2 className="h-4 w-4 text-destructive" />
-                    </button>
+                    )}
+                    {editingNoteRowId !== n.id && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            className="shrink-0 rounded-md p-1 text-muted-foreground opacity-60 transition-opacity hover:bg-muted hover:text-foreground hover:opacity-100 data-[state=open]:opacity-100"
+                            title="More actions"
+                            onClick={(e) => e.stopPropagation()}
+                            aria-label={`Note actions for ${n.title}`}
+                          >
+                            <MoreHorizontal className="h-4 w-4" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-48">
+                          <DropdownMenuItem
+                            onSelect={() => {
+                              setSelectedNoteId(n.id);
+                              setEditingNoteRowId(n.id);
+                            }}
+                          >
+                            <Pencil className="h-4 w-4" />
+                            Rename
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onSelect={() =>
+                              void copyText(n.title, `note-title-${n.id}`)
+                            }
+                          >
+                            {copiedKey === `note-title-${n.id}` ? (
+                              <Check className="h-4 w-4 text-emerald-500" />
+                            ) : (
+                              <Copy className="h-4 w-4" />
+                            )}
+                            Copy title
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onSelect={() => {
+                              const next = !n.favorite;
+                              setNotes((prev) => {
+                                const nextList = sortNotesFavoritesFirst(
+                                  prev.map((x) =>
+                                    x.id === n.id
+                                      ? { ...x, favorite: next }
+                                      : x,
+                                  ),
+                                );
+                                if (selectedPageId) {
+                                  writeOrderIds(
+                                    `${LS_NOTE_ORDER_KEY_PREFIX}${selectedPageId}`,
+                                    nextList.map((x) => x.id),
+                                  );
+                                }
+                                return nextList;
+                              });
+                              void updateNote(
+                                n.id,
+                                { favorite: next },
+                                { silent: true },
+                              );
+                            }}
+                          >
+                            <Star
+                              className={cn(
+                                "h-4 w-4",
+                                n.favorite
+                                  ? "fill-yellow-400 text-yellow-400"
+                                  : "",
+                              )}
+                            />
+                            {n.favorite ? "Unfavorite" : "Favorite"}
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            onSelect={() =>
+                              setShareDialog({
+                                noteId: n.id,
+                                noteTitle: n.title,
+                              })
+                            }
+                          >
+                            <Share2 className="h-4 w-4" />
+                            Share…
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            onSelect={() => void deleteNote(n.id)}
+                            className="text-destructive focus:text-destructive"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            Delete note
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
                   </div>
                 </Fragment>
               ))}
@@ -4762,6 +5002,30 @@ function NotesPageInner() {
                         <span className="min-w-0 truncate font-semibold">
                           {selectedNote.title}
                         </span>
+                        {isSharedNoteSelected && (
+                          <span
+                            className={cn(
+                              "ml-1 flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+                              selectedSharedPermission === "edit"
+                                ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                                : "bg-muted text-muted-foreground",
+                            )}
+                            title={
+                              selectedSharedPermission === "edit"
+                                ? "Shared with you · You can edit"
+                                : "Shared with you · View only"
+                            }
+                          >
+                            {selectedSharedPermission === "edit" ? (
+                              <Share2 className="h-3 w-3" />
+                            ) : (
+                              <Eye className="h-3 w-3" />
+                            )}
+                            {selectedSharedPermission === "edit"
+                              ? "Shared · edit"
+                              : "View only"}
+                          </span>
+                        )}
                         <Button
                           type="button"
                           size="icon"
@@ -4783,16 +5047,18 @@ function NotesPageInner() {
                           <span className="sr-only">Copy title</span>
                         </Button>
                       </div>
-                      <Button
-                        type="button"
-                        size="icon"
-                        variant="ghost"
-                        className="h-8 w-8 shrink-0"
-                        title="Edit note title"
-                        onClick={() => setEditingMainTitle(true)}
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
+                      {!(isSharedNoteSelected && selectedSharedPermission === "view") && (
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="ghost"
+                          className="h-8 w-8 shrink-0"
+                          title="Edit note title"
+                          onClick={() => setEditingMainTitle(true)}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
                     </>
                   )}
                 </div>
@@ -5759,7 +6025,20 @@ function NotesPageInner() {
                   )}
                   {isEditing && contextMenu.open && (
                     <div
-                      className="fixed z-[120] w-[min(17rem,calc(100vw-1rem))] rounded-md border border-border bg-popover p-1 shadow-lg"
+                      ref={(el) => {
+                        if (!el) return;
+                        const rect = el.getBoundingClientRect();
+                        const pad = 8;
+                        const vw = window.innerWidth;
+                        const vh = window.innerHeight;
+                        let left = contextMenu.x;
+                        let top = contextMenu.y;
+                        if (left + rect.width > vw - pad) left = Math.max(pad, vw - rect.width - pad);
+                        if (top + rect.height > vh - pad) top = Math.max(pad, vh - rect.height - pad);
+                        if (left !== contextMenu.x) el.style.left = `${left}px`;
+                        if (top !== contextMenu.y) el.style.top = `${top}px`;
+                      }}
+                      className="fixed z-[120] max-h-[min(80vh,32rem)] w-[min(17rem,calc(100vw-1rem))] overflow-y-auto rounded-md border border-border bg-popover p-1 shadow-lg"
                       style={{ left: contextMenu.x, top: contextMenu.y }}
                       role="menu"
                     >
@@ -6118,6 +6397,14 @@ function NotesPageInner() {
           </div>,
           document.body,
         )}
+      {shareDialog && (
+        <ShareNoteDialog
+          noteId={shareDialog.noteId}
+          noteTitle={shareDialog.noteTitle}
+          token={token}
+          onClose={() => setShareDialog(null)}
+        />
+      )}
     </div>
   );
 }
@@ -6133,5 +6420,291 @@ export default function NotesPage() {
     >
       <NotesPageInner />
     </Suspense>
+  );
+}
+
+interface ShareRow {
+  id: string;
+  noteId: string;
+  ownerId: string;
+  sharedWithId: string;
+  permission: "view" | "edit";
+  createdAt: string;
+  updatedAt: string;
+  sharedWith?: { id: string; email: string; name: string | null } | null;
+}
+
+function ShareNoteDialog({
+  noteId,
+  noteTitle,
+  token,
+  onClose,
+}: {
+  noteId: string;
+  noteTitle: string;
+  token: string | null;
+  onClose: () => void;
+}) {
+  const [shares, setShares] = useState<ShareRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [email, setEmail] = useState("");
+  const [permission, setPermission] = useState<"view" | "edit">("view");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const headers = useMemo(
+    () => ({
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    }),
+    [token],
+  );
+
+  useEffect(() => {
+    const handler = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/notes/${noteId}/shares`, { headers });
+        if (!res.ok) {
+          if (!cancelled) setShares([]);
+          return;
+        }
+        const data = (await res.json()) as ShareRow[];
+        if (!cancelled) setShares(Array.isArray(data) ? data : []);
+      } catch {
+        if (!cancelled) setShares([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [noteId, headers]);
+
+  const submit = useCallback(async () => {
+    const trimmed = email.trim().toLowerCase();
+    if (!trimmed || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/notes/${noteId}/shares`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ email: trimmed, permission }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || `Failed (${res.status})`);
+      }
+      setShares((prev) => {
+        const without = prev.filter((s) => s.id !== data.id);
+        return [...without, data as ShareRow];
+      });
+      setEmail("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not share.");
+    } finally {
+      setSubmitting(false);
+    }
+  }, [email, permission, headers, noteId, submitting]);
+
+  const updatePermission = useCallback(
+    async (shareId: string, perm: "view" | "edit") => {
+      const prev = shares;
+      setShares((curr) =>
+        curr.map((s) => (s.id === shareId ? { ...s, permission: perm } : s)),
+      );
+      try {
+        const res = await fetch(
+          `/api/notes/${noteId}/shares/${shareId}`,
+          {
+            method: "PATCH",
+            headers,
+            body: JSON.stringify({ permission: perm }),
+          },
+        );
+        if (!res.ok) throw new Error();
+      } catch {
+        setShares(prev);
+      }
+    },
+    [shares, noteId, headers],
+  );
+
+  const revoke = useCallback(
+    async (shareId: string) => {
+      const prev = shares;
+      setShares((curr) => curr.filter((s) => s.id !== shareId));
+      try {
+        await fetch(`/api/notes/${noteId}/shares/${shareId}`, {
+          method: "DELETE",
+          headers,
+        });
+      } catch {
+        setShares(prev);
+      }
+    },
+    [shares, noteId, headers],
+  );
+
+  return (
+    <div
+      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 p-4"
+      role="dialog"
+      aria-modal="true"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="flex w-full max-w-md flex-col overflow-hidden rounded-2xl border border-border bg-background shadow-2xl">
+        <div className="flex items-start justify-between gap-3 border-b border-border/60 p-4">
+          <div className="min-w-0">
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+              Share note
+            </p>
+            <h3 className="truncate text-base font-semibold">{noteTitle}</h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label="Close"
+          >
+            <XIcon className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="space-y-3 p-4">
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <div className="relative flex-1">
+              <Mail className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void submit();
+                  }
+                }}
+                placeholder="friend@example.com"
+                className="h-9 pl-8 text-sm"
+                autoFocus
+              />
+            </div>
+            <select
+              value={permission}
+              onChange={(e) =>
+                setPermission(e.target.value === "edit" ? "edit" : "view")
+              }
+              className="h-9 rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              <option value="view">Can view</option>
+              <option value="edit">Can edit</option>
+            </select>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => void submit()}
+              disabled={!email.trim() || submitting}
+              className="gap-1.5"
+            >
+              {submitting ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Share2 className="h-3.5 w-3.5" />
+              )}
+              Share
+            </Button>
+          </div>
+          {error && (
+            <p className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              {error}
+            </p>
+          )}
+
+          <div>
+            <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              People with access
+            </p>
+            {loading ? (
+              <div className="flex items-center justify-center py-6 text-xs text-muted-foreground">
+                <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                Loading…
+              </div>
+            ) : shares.length === 0 ? (
+              <p className="rounded-md border border-dashed border-border/60 bg-muted/20 px-3 py-3 text-center text-xs text-muted-foreground">
+                Nobody else has access yet.
+              </p>
+            ) : (
+              <ul className="divide-y divide-border/60 rounded-md border border-border/60">
+                {shares.map((s) => {
+                  const label =
+                    s.sharedWith?.name ||
+                    s.sharedWith?.email ||
+                    s.sharedWithId;
+                  return (
+                    <li
+                      key={s.id}
+                      className="flex items-center gap-2 px-3 py-2 text-sm"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-medium">{label}</p>
+                        {s.sharedWith?.email && s.sharedWith?.name && (
+                          <p className="truncate text-[11px] text-muted-foreground">
+                            {s.sharedWith.email}
+                          </p>
+                        )}
+                      </div>
+                      <select
+                        value={s.permission}
+                        onChange={(e) =>
+                          void updatePermission(
+                            s.id,
+                            e.target.value === "edit" ? "edit" : "view",
+                          )
+                        }
+                        className="h-7 rounded-md border border-input bg-background px-1.5 text-xs"
+                      >
+                        <option value="view">View</option>
+                        <option value="edit">Edit</option>
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => void revoke(s.id)}
+                        className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-destructive"
+                        aria-label="Revoke share"
+                      >
+                        <XIcon className="h-3.5 w-3.5" />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </div>
+
+        <div className="flex justify-between border-t border-border/60 bg-muted/20 px-4 py-2.5">
+          <p className="text-[11px] text-muted-foreground">
+            Recipients will see this note in their <em>Shared with me</em>{" "}
+            section.
+          </p>
+          <Button type="button" variant="ghost" size="sm" onClick={onClose}>
+            Done
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }

@@ -17,6 +17,8 @@ export interface CommunityPrompt {
   category: PromptCategory;
   title: string;
   body: string;
+  /** Short 1-line description shown on the rail card (Promptcowboy style). */
+  blurb?: string;
 }
 
 /** Curated starter prompts — extend over time or move to DB later. */

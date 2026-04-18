@@ -266,3 +266,70 @@ CREATE TRIGGER update_note_page_updated_at BEFORE UPDATE ON "note_page"
 CREATE TRIGGER update_note_updated_at BEFORE UPDATE ON "note"
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+-- 16. Note sharing (Google-Docs-style: share a note with another user by email)
+CREATE TABLE IF NOT EXISTS "note_share" (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "noteId" UUID NOT NULL REFERENCES "note"(id) ON DELETE CASCADE,
+  "ownerId" UUID NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  "sharedWithId" UUID NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  permission TEXT NOT NULL DEFAULT 'view' CHECK (permission IN ('view', 'edit')),
+  "createdAt" TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  "updatedAt" TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  UNIQUE ("noteId", "sharedWithId")
+);
+
+CREATE INDEX IF NOT EXISTS "note_share_noteId_idx" ON "note_share"("noteId");
+CREATE INDEX IF NOT EXISTS "note_share_sharedWithId_idx" ON "note_share"("sharedWithId");
+CREATE INDEX IF NOT EXISTS "note_share_ownerId_idx" ON "note_share"("ownerId");
+
+ALTER TABLE "note_share" ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Owner or recipient can read share" ON "note_share";
+DROP POLICY IF EXISTS "Owner can insert share" ON "note_share";
+DROP POLICY IF EXISTS "Owner can update share" ON "note_share";
+DROP POLICY IF EXISTS "Owner can delete share" ON "note_share";
+
+CREATE POLICY "Owner or recipient can read share" ON "note_share"
+  FOR SELECT USING (auth.uid() = "ownerId" OR auth.uid() = "sharedWithId");
+CREATE POLICY "Owner can insert share" ON "note_share"
+  FOR INSERT WITH CHECK (auth.uid() = "ownerId");
+CREATE POLICY "Owner can update share" ON "note_share"
+  FOR UPDATE USING (auth.uid() = "ownerId")
+  WITH CHECK (auth.uid() = "ownerId");
+CREATE POLICY "Owner can delete share" ON "note_share"
+  FOR DELETE USING (auth.uid() = "ownerId");
+
+DROP TRIGGER IF EXISTS update_note_share_updated_at ON "note_share";
+CREATE TRIGGER update_note_share_updated_at BEFORE UPDATE ON "note_share"
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Extend RLS so recipients can also read/update notes they have access to
+DROP POLICY IF EXISTS "Recipients can read shared notes" ON "note";
+DROP POLICY IF EXISTS "Recipients can update shared notes when they have edit" ON "note";
+
+CREATE POLICY "Recipients can read shared notes" ON "note"
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM "note_share" ns
+      WHERE ns."noteId" = "note".id AND ns."sharedWithId" = auth.uid()
+    )
+  );
+
+CREATE POLICY "Recipients can update shared notes when they have edit" ON "note"
+  FOR UPDATE USING (
+    EXISTS (
+      SELECT 1 FROM "note_share" ns
+      WHERE ns."noteId" = "note".id
+        AND ns."sharedWithId" = auth.uid()
+        AND ns.permission = 'edit'
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM "note_share" ns
+      WHERE ns."noteId" = "note".id
+        AND ns."sharedWithId" = auth.uid()
+        AND ns.permission = 'edit'
+    )
+  );
+

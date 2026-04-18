@@ -59,6 +59,7 @@ export type RateLimitKind =
   | 'openai_test'
   | 'video_summary'
   | 'prompts_analyze'
+  | 'prompts_improve'
 
 const LIMITS: Record<RateLimitKind, { windowMs: number; max: number }[]> = {
   tools_analyze: [
@@ -112,6 +113,18 @@ const LIMITS: Record<RateLimitKind, { windowMs: number; max: number }[]> = {
     {
       windowMs: 3_600_000,
       max: envInt('RATE_LIMIT_PROMPTS_ANALYZE_PER_HOUR', 200),
+    },
+  ],
+  // Prompt improver — rewrites lazy prompts into structured prompts.
+  // Slightly heavier than analyse (longer outputs).
+  prompts_improve: [
+    {
+      windowMs: 60_000,
+      max: envInt('RATE_LIMIT_PROMPTS_IMPROVE_PER_MINUTE', 20),
+    },
+    {
+      windowMs: 3_600_000,
+      max: envInt('RATE_LIMIT_PROMPTS_IMPROVE_PER_HOUR', 120),
     },
   ],
 }

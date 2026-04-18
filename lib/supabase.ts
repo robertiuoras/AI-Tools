@@ -141,3 +141,18 @@ export interface Note {
   createdAt: string;
   updatedAt: string;
 }
+
+export type NoteSharePermission = "view" | "edit";
+
+export interface NoteShare {
+  id: string;
+  noteId: string;
+  ownerId: string;
+  sharedWithId: string;
+  permission: NoteSharePermission;
+  createdAt: string;
+  updatedAt: string;
+  // Optional embedded user info (populated by joined queries)
+  sharedWith?: { id: string; email: string; name: string | null };
+  owner?: { id: string; email: string; name: string | null };
+}
