@@ -14,7 +14,15 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/toaster";
 import { cn } from "@/lib/utils";
-import { Bot, LayoutGrid, Loader2, Sparkles, TrendingUp, ArrowRight } from "lucide-react";
+import {
+  Bot,
+  LayoutGrid,
+  Loader2,
+  Sparkles,
+  TrendingUp,
+  ArrowRight,
+  Wand2,
+} from "lucide-react";
 
 export default function ProjectsPage() {
   const router = useRouter();
@@ -142,6 +150,67 @@ export default function ProjectsPage() {
                     </div>
                     <div className="mt-4 flex items-center gap-1 text-xs font-medium text-emerald-700 dark:text-emerald-400 group-hover:gap-2 transition-all">
                       Open calculator
+                      <ArrowRight className="h-3.5 w-3.5" />
+                    </div>
+                  </CardContent>
+                </Card>
+              </Link>
+            </li>
+
+            {/* ── AI Video Summariser ──────────────────────── */}
+            <li>
+              <Link
+                href="/projects/ai-video-summariser"
+                className="block h-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-2xl"
+              >
+                <Card
+                  className={cn(
+                    "group relative h-full overflow-hidden border-border/80 bg-card/80 shadow-md backdrop-blur-sm transition-all cursor-pointer",
+                    "hover:border-violet-500/40 hover:shadow-xl hover:shadow-violet-500/10 hover:-translate-y-0.5",
+                  )}
+                >
+                  <div
+                    className="pointer-events-none absolute inset-0 bg-gradient-to-br from-violet-500/[0.08] via-transparent to-fuchsia-500/[0.06]"
+                    aria-hidden
+                  />
+                  <CardHeader className="relative space-y-3 pb-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <div
+                        className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500/20 to-fuchsia-600/20 ring-1 ring-violet-500/20"
+                        aria-hidden
+                      >
+                        <Wand2 className="h-6 w-6 text-violet-700 dark:text-violet-300" />
+                      </div>
+                      <Badge
+                        variant="secondary"
+                        className="shrink-0 border border-violet-500/25 bg-violet-500/10 text-violet-900 dark:text-violet-200"
+                      >
+                        New
+                      </Badge>
+                    </div>
+                    <CardTitle className="text-xl font-semibold tracking-tight">
+                      AI Video Summariser
+                    </CardTitle>
+                    <CardDescription className="text-sm leading-relaxed">
+                      Paste a YouTube or TikTok URL — get a TL;DR, key points
+                      and a slide-ready outline. Export to Markdown or PDF.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="relative pt-2">
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      {["YouTube", "TikTok", "Key points", "Outline", "PDF"].map(
+                        (tag) => (
+                          <span
+                            key={tag}
+                            className="inline-flex items-center gap-1 rounded-md bg-muted/80 px-2 py-1 font-medium"
+                          >
+                            {tag}
+                          </span>
+                        ),
+                      )}
+                    </div>
+                    <div className="mt-4 flex items-center gap-1 text-xs font-medium text-violet-700 dark:text-violet-400 group-hover:gap-2 transition-all">
+                      Open summariser
                       <ArrowRight className="h-3.5 w-3.5" />
                     </div>
                   </CardContent>

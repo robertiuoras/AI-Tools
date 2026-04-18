@@ -24,6 +24,23 @@ interface VideoCardProps {
   onToggleWatched?: (videoId: string, watched: boolean) => void;
 }
 
+/**
+ * Parse a TikTok URL and return the numeric video id if we can find one.
+ * Handles canonical `/@user/video/{id}`, the bare `/video/{id}`, and
+ * shortlinks `vm.tiktok.com/{slug}` / `vt.tiktok.com/{slug}` (returns null
+ * for shortlinks since we can't expand them client-side — those still fall
+ * back to the external link card).
+ */
+function getTikTokVideoId(url: string): string | null {
+  try {
+    const u = new URL(url);
+    const m = u.pathname.match(/\/video\/(\d+)/);
+    return m?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function getYoutubeEmbedUrl(url: string): string | null {
   try {
     const u = new URL(url);
@@ -71,6 +88,8 @@ export function VideoCard({
   const [tiktokPreviewError, setTiktokPreviewError] = useState(false);
   const source = (video as { source?: string }).source ?? "youtube";
   const embedUrl = source === "youtube" ? getYoutubeEmbedUrl(video.url) : null;
+  const tiktokVideoId =
+    source === "tiktok" ? getTikTokVideoId(video.url) : null;
   const subscriberLabel = formatSubscribers(video.subscriberCount);
   const tagsArray =
     typeof video.tags === "string"
@@ -183,8 +202,43 @@ export function VideoCard({
             </div>
           </div>
 
-          {/* TikTok: embeds are unreliable in browsers; open official app/site instead */}
-          {source === "tiktok" && (
+          {/* TikTok: prefer the official embed iframe when we can parse a
+              numeric video id from the URL; fall back to the external-link
+              card for shortlinks (vm.tiktok.com / vt.tiktok.com) or any URL
+              we can't resolve client-side. The embed uses TikTok's portrait
+              9:16 aspect to avoid letterboxing. */}
+          {source === "tiktok" && tiktokVideoId && (
+            <div
+              className="relative w-full mx-auto overflow-hidden rounded-xl border border-border/70 bg-black shadow-md"
+              style={{ maxWidth: "min(100%, 360px)" }}
+            >
+              <div
+                className="relative w-full"
+                style={{ paddingTop: "177.78%" /* 16:9 inverted = portrait */ }}
+              >
+                <iframe
+                  src={`https://www.tiktok.com/embed/v2/${tiktokVideoId}`}
+                  title={video.title}
+                  className="absolute inset-0 h-full w-full"
+                  allow="autoplay; clipboard-write; encrypted-media; picture-in-picture; web-share"
+                  allowFullScreen
+                  loading="lazy"
+                  referrerPolicy="strict-origin-when-cross-origin"
+                />
+              </div>
+              <a
+                href={video.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full bg-black/60 px-2 py-1 text-[10px] font-medium text-white/90 backdrop-blur-sm transition-colors hover:bg-black/80"
+                title="Open in TikTok"
+              >
+                <ExternalLink className="h-3 w-3" aria-hidden />
+                Open
+              </a>
+            </div>
+          )}
+          {source === "tiktok" && !tiktokVideoId && (
             <a
               href={video.url}
               target="_blank"
@@ -219,8 +273,7 @@ export function VideoCard({
                       Watch on TikTok
                     </p>
                     <p className="text-xs text-white/65 max-w-[240px] sm:max-w-xs">
-                      Playback opens in a new tab — embeds often don&apos;t work
-                      here.
+                      Shortlink — opens in a new tab.
                     </p>
                   </div>
                   <span className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black shadow-lg transition-transform group-hover:scale-[1.02] group-active:scale-[0.98]">

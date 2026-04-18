@@ -53,7 +53,11 @@ export function getClientIp(request: NextRequest): string {
   return 'unknown'
 }
 
-export type RateLimitKind = 'tools_analyze' | 'videos_analyze' | 'openai_test'
+export type RateLimitKind =
+  | 'tools_analyze'
+  | 'videos_analyze'
+  | 'openai_test'
+  | 'video_summary'
 
 const LIMITS: Record<RateLimitKind, { windowMs: number; max: number }[]> = {
   tools_analyze: [
@@ -84,6 +88,18 @@ const LIMITS: Record<RateLimitKind, { windowMs: number; max: number }[]> = {
     {
       windowMs: 3_600_000,
       max: envInt('RATE_LIMIT_OPENAI_TEST_PER_HOUR', 50),
+    },
+  ],
+  // AI Video Summariser project. Tighter than `videos_analyze` because each
+  // call may transcribe + summarise (more tokens, longer wall time).
+  video_summary: [
+    {
+      windowMs: 60_000,
+      max: envInt('RATE_LIMIT_VIDEO_SUMMARY_PER_MINUTE', 10),
+    },
+    {
+      windowMs: 3_600_000,
+      max: envInt('RATE_LIMIT_VIDEO_SUMMARY_PER_HOUR', 80),
     },
   ],
 }

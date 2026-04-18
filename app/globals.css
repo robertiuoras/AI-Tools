@@ -77,6 +77,20 @@
   cursor: text;
 }
 
+/* Notes: italics — guarantee em/i (and inline font-style:italic spans) render
+   as italic everywhere in the editor + read view. Some browsers skip italic
+   synthesis when the loaded font lacks an italic face; allow synthesis as a
+   fallback alongside the now-loaded Plus Jakarta Sans italic. */
+.note-html-view em,
+.note-html-view i,
+.note-html-view [style*="italic"] {
+  font-style: italic;
+}
+.note-html-view {
+  font-synthesis-style: auto;
+  -webkit-font-synthesis: style;
+}
+
 /* Notes: highlights — one rule for edit + read (avoid li vs non-li mismatch); dark text on yellow for contrast */
 .note-html-view mark,
 .note-html-view mark.note-highlight {

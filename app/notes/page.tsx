@@ -76,7 +76,15 @@ import {
   Search,
   ArrowDown,
   ArrowUp,
+  ArrowLeft,
   Crop,
+  PanelLeftOpen,
+  List as ListIcon,
+  ListOrdered,
+  Code as CodeIcon,
+  Heading3,
+  ChevronsLeftRight,
+  ChevronsRightLeft,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { linkifyText } from "@/lib/linkify";
@@ -939,6 +947,19 @@ function NotesPageInner() {
   const [notes, setNotes] = useState<Note[]>([]);
   const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
+  /**
+   * Focus mode: when the user opens a note, the Pages + Notes columns slide
+   * away on lg+ screens so the editor takes the full grid width. The grid
+   * template animates because both side columns collapse to `0fr` and the
+   * editor column expands to `1fr` — modern browsers transition this
+   * smoothly. A "Back" button in the editor header leaves focus mode.
+   */
+  const [focusMode, setFocusMode] = useState(false);
+  // Always exit focus mode if the active note disappears (delete, switch tabs)
+  // so the user is never stranded with the side columns hidden.
+  useEffect(() => {
+    if (!selectedNoteId) setFocusMode(false);
+  }, [selectedNoteId]);
   const [loading, setLoading] = useState(false);
   const [notesLoading, setNotesLoading] = useState(true);
   const pagesRef = useRef(pages);
@@ -958,6 +979,32 @@ function NotesPageInner() {
     maxH: number;
   } | null>(null);
   const [editorSession, setEditorSession] = useState(0);
+  /**
+   * Toolbar density. When `false` (default), the editor shows a Google
+   * Docs-style mini ribbon (B/I/U/S, H3, lists, task, highlight, code) inline
+   * with Undo/Redo. When `true`, the ribbon collapses and only Undo/Redo +
+   * the Format dropdown remain — useful for distraction-free writing. The
+   * preference is persisted in localStorage.
+   */
+  const [toolbarCompact, setToolbarCompact] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem("notes:toolbarCompact") === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        "notes:toolbarCompact",
+        toolbarCompact ? "1" : "0",
+      );
+    } catch {
+      /* ignore quota / privacy errors */
+    }
+  }, [toolbarCompact]);
+
   const [fmtActive, setFmtActive] = useState({
     bold: false,
     italic: false,
@@ -2480,6 +2527,29 @@ function NotesPageInner() {
     refreshFmt();
   }, [refreshFmt, restoreEditorSelection]);
 
+  /**
+   * Read the effective font size (px) at the current editor selection.
+   * Walks up from the selection's anchor element to find the nearest
+   * computed font-size; used by the Cmd/Ctrl +/- shortcut to step from
+   * the *actual* current size rather than always assuming 16px.
+   */
+  const getEditorSelectionFontSize = useCallback((): number | null => {
+    const root = editorRef.current;
+    if (!root) return null;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return null;
+    const r = sel.getRangeAt(0);
+    let node: Node | null = r.startContainer;
+    if (node && node.nodeType === Node.TEXT_NODE) node = node.parentNode;
+    while (node && node !== root && node.nodeType === Node.ELEMENT_NODE) {
+      const cs = window.getComputedStyle(node as Element).fontSize;
+      const px = parseFloat(cs);
+      if (!Number.isNaN(px) && px > 0) return Math.round(px);
+      node = node.parentNode;
+    }
+    return null;
+  }, []);
+
   const applyFontSizePx = useCallback(
     (px: number) => {
       const size = Math.min(100, Math.max(1, Math.round(Number(px)) || 16));
@@ -3312,6 +3382,23 @@ function NotesPageInner() {
         toggleHighlightColor();
         return;
       }
+      // Cmd/Ctrl + (=|+|-)  →  step font size on the highlighted selection.
+      // We accept "=" because that's what most keyboards send for "+" without
+      // shift, and we read the current size from the selection so each press
+      // bumps from where the user actually is rather than from a fixed base.
+      if (mod && (e.key === "+" || e.key === "=" || e.key === "-")) {
+        const isMinus = e.key === "-";
+        e.preventDefault();
+        const FONT_STEP = 2;
+        const FONT_MIN = 8;
+        const FONT_MAX = 96;
+        const current = getEditorSelectionFontSize() ?? 16;
+        const next = isMinus
+          ? Math.max(FONT_MIN, current - FONT_STEP)
+          : Math.min(FONT_MAX, current + FONT_STEP);
+        if (next !== current) applyFontSizePx(next);
+        return;
+      }
       if (!mod) return;
       if (e.key.toLowerCase() === "z") {
         if (e.shiftKey) {
@@ -3348,6 +3435,8 @@ function NotesPageInner() {
       moveImageFigureUp,
       moveImageFigureDown,
       copyNoteImageToClipboard,
+      applyFontSizePx,
+      getEditorSelectionFontSize,
     ],
   );
 
@@ -3803,11 +3892,28 @@ function NotesPageInner() {
       ) : notesSubView === "storage" ? (
         <StoragePanel token={token} />
       ) : (
-        <div className="relative grid min-h-[min(70vh,560px)] grid-cols-1 gap-4 lg:grid-cols-[minmax(0,280px)_minmax(0,320px)_minmax(0,1fr)] lg:items-start">
+        <div
+          className={cn(
+            "relative grid min-h-[min(70vh,560px)] grid-cols-1 gap-4 lg:items-start",
+            // Animate the grid template — sides collapse to 0fr in focus mode.
+            "transition-[grid-template-columns,gap] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
+            focusMode
+              ? "lg:grid-cols-[minmax(0,0fr)_minmax(0,0fr)_minmax(0,1fr)] lg:gap-0"
+              : "lg:grid-cols-[minmax(0,280px)_minmax(0,320px)_minmax(0,1fr)]",
+          )}
+        >
           {notesLoading && initialNotesBootstrapDone ? (
             <NotesOverlayLoader message="Loading notes…" />
           ) : null}
-          <section className="min-w-0 cursor-default rounded-xl border bg-card p-3 space-y-3">
+          <section
+            className={cn(
+              "min-w-0 cursor-default rounded-xl border bg-card p-3 space-y-3",
+              "transition-[opacity,padding,border-width,transform] duration-400 ease-out",
+              focusMode &&
+                "lg:pointer-events-none lg:overflow-hidden lg:opacity-0 lg:-translate-x-3 lg:p-0 lg:border-0 lg:space-y-0",
+            )}
+            aria-hidden={focusMode || undefined}
+          >
             <Label className="text-xs text-muted-foreground">Pages</Label>
             <div className="flex gap-2">
               <Input
@@ -4021,7 +4127,15 @@ function NotesPageInner() {
             </div>
           </section>
 
-          <section className="min-w-0 cursor-default rounded-xl border bg-card p-3 space-y-3">
+          <section
+            className={cn(
+              "min-w-0 cursor-default rounded-xl border bg-card p-3 space-y-3",
+              "transition-[opacity,padding,border-width,transform] duration-400 ease-out",
+              focusMode &&
+                "lg:pointer-events-none lg:overflow-hidden lg:opacity-0 lg:-translate-x-2 lg:p-0 lg:border-0 lg:space-y-0",
+            )}
+            aria-hidden={focusMode || undefined}
+          >
             <Label className="text-xs text-muted-foreground">Notes</Label>
             <div className="flex gap-2">
               <Input
@@ -4209,7 +4323,10 @@ function NotesPageInner() {
                         <button
                           type="button"
                           className="min-w-0 flex-1 truncate text-left text-sm"
-                          onClick={() => setSelectedNoteId(n.id)}
+                          onClick={() => {
+                            setSelectedNoteId(n.id);
+                            setFocusMode(true);
+                          }}
                         >
                           <span className="block truncate">{n.title}</span>
                           {n.updatedAt ? (
@@ -4335,7 +4452,61 @@ function NotesPageInner() {
                 ref={noteEditShellRef}
                 className="flex min-h-0 min-w-0 max-w-full flex-1 flex-col gap-4 overflow-hidden"
               >
+                {/* Focus mode: Back button to expand the Pages + Notes columns again.
+                    Animated in/out to keep the header from jumping when toggling. */}
+                <div
+                  className={cn(
+                    "hidden lg:flex items-center gap-2 overflow-hidden",
+                    "transition-[max-height,opacity,margin] duration-300 ease-out",
+                    focusMode
+                      ? "max-h-10 opacity-100"
+                      : "max-h-0 opacity-0 -mb-4",
+                  )}
+                  aria-hidden={!focusMode}
+                >
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setFocusMode(false)}
+                    className="h-8 gap-1.5 px-2 text-muted-foreground hover:text-foreground"
+                    title="Back to all notes"
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                    <span className="text-xs font-medium">All notes</span>
+                  </Button>
+                  <span className="text-xs text-muted-foreground/60">
+                    Focused on this note
+                  </span>
+                </div>
+
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  {/* Mobile-friendly toggle to leave focus on small screens too */}
+                  {focusMode ? (
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => setFocusMode(false)}
+                      className="h-8 w-8 shrink-0 lg:hidden"
+                      title="Back to all notes"
+                      aria-label="Back to all notes"
+                    >
+                      <ArrowLeft className="h-4 w-4" />
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => setFocusMode(true)}
+                      className="hidden h-8 w-8 shrink-0 lg:inline-flex"
+                      title="Focus on this note"
+                      aria-label="Focus on this note"
+                    >
+                      <PanelLeftOpen className="h-4 w-4" />
+                    </Button>
+                  )}
                   <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
                   {editingMainTitle ? (
                     <>
@@ -4591,6 +4762,221 @@ function NotesPageInner() {
                               <Redo2 className="h-3.5 w-3.5" />
                               <span className="sr-only">Redo</span>
                             </Button>
+
+                            {/* Google Docs-style inline mini ribbon. Hidden in
+                                compact mode (Format dropdown still has every
+                                option). All buttons defer focus via
+                                onMouseDown=preventDefault so the editor
+                                selection survives the click. */}
+                            {!toolbarCompact && (
+                              <>
+                                <div
+                                  aria-hidden
+                                  className="mx-0.5 hidden h-5 w-px shrink-0 bg-border/60 sm:block"
+                                />
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className={cn(
+                                    "h-7 w-7 shrink-0 px-0",
+                                    fmtActive.bold &&
+                                      "border-primary bg-primary/10 text-primary",
+                                  )}
+                                  title={`Bold (${noteKbParen("B")})`}
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => runFormatCommand("bold")}
+                                >
+                                  <Bold className="h-3.5 w-3.5" />
+                                  <span className="sr-only">Bold</span>
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className={cn(
+                                    "h-7 w-7 shrink-0 px-0",
+                                    fmtActive.italic &&
+                                      "border-primary bg-primary/10 text-primary",
+                                  )}
+                                  title={`Italic (${noteKbParen("I")})`}
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => runFormatCommand("italic")}
+                                >
+                                  <Italic className="h-3.5 w-3.5" />
+                                  <span className="sr-only">Italic</span>
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className={cn(
+                                    "h-7 w-7 shrink-0 px-0",
+                                    fmtActive.underline &&
+                                      "border-primary bg-primary/10 text-primary",
+                                  )}
+                                  title={`Underline (${noteKbParen("U")})`}
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => runFormatCommand("underline")}
+                                >
+                                  <UnderlineIcon className="h-3.5 w-3.5" />
+                                  <span className="sr-only">Underline</span>
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className={cn(
+                                    "h-7 w-7 shrink-0 px-0",
+                                    fmtActive.strikeThrough &&
+                                      "border-primary bg-primary/10 text-primary",
+                                  )}
+                                  title="Strikethrough"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() =>
+                                    runFormatCommand("strikeThrough")
+                                  }
+                                >
+                                  <Strikethrough className="h-3.5 w-3.5" />
+                                  <span className="sr-only">Strikethrough</span>
+                                </Button>
+                                <div
+                                  aria-hidden
+                                  className="mx-0.5 hidden h-5 w-px shrink-0 bg-border/60 sm:block"
+                                />
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className={cn(
+                                    "h-7 w-7 shrink-0 px-0",
+                                    fmtActive.heading3 &&
+                                      "border-primary bg-primary/10 text-primary",
+                                  )}
+                                  title="Heading"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => toggleHeadingBlock()}
+                                >
+                                  <Heading3 className="h-3.5 w-3.5" />
+                                  <span className="sr-only">Heading</span>
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className={cn(
+                                    "h-7 w-7 shrink-0 px-0",
+                                    fmtActive.unorderedList &&
+                                      "border-primary bg-primary/10 text-primary",
+                                  )}
+                                  title="Bulleted list"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() =>
+                                    runFormatCommand("insertUnorderedList")
+                                  }
+                                >
+                                  <ListIcon className="h-3.5 w-3.5" />
+                                  <span className="sr-only">Bulleted list</span>
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className={cn(
+                                    "h-7 w-7 shrink-0 px-0",
+                                    fmtActive.orderedList &&
+                                      "border-primary bg-primary/10 text-primary",
+                                  )}
+                                  title="Numbered list"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() =>
+                                    runFormatCommand("insertOrderedList")
+                                  }
+                                >
+                                  <ListOrdered className="h-3.5 w-3.5" />
+                                  <span className="sr-only">Numbered list</span>
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className={cn(
+                                    "h-7 w-7 shrink-0 px-0",
+                                    fmtActive.taskList &&
+                                      "border-primary bg-primary/10 text-primary",
+                                  )}
+                                  title="Task list"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => insertTaskList()}
+                                >
+                                  <ListChecks className="h-3.5 w-3.5" />
+                                  <span className="sr-only">Task list</span>
+                                </Button>
+                                <div
+                                  aria-hidden
+                                  className="mx-0.5 hidden h-5 w-px shrink-0 bg-border/60 sm:block"
+                                />
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className={cn(
+                                    "h-7 w-7 shrink-0 px-0",
+                                    fmtActive.highlight &&
+                                      "border-amber-400 bg-amber-100 text-amber-900 dark:bg-amber-500/20 dark:text-amber-200",
+                                  )}
+                                  title={`Highlight ${noteKbHighlightParen()}`}
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => toggleHighlightColor()}
+                                >
+                                  <Highlighter className="h-3.5 w-3.5" />
+                                  <span className="sr-only">Highlight</span>
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className={cn(
+                                    "h-7 w-7 shrink-0 px-0",
+                                    fmtActive.inlineCode &&
+                                      "border-primary bg-primary/10 text-primary",
+                                  )}
+                                  title="Inline code"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => toggleInlineCode()}
+                                >
+                                  <CodeIcon className="h-3.5 w-3.5" />
+                                  <span className="sr-only">Inline code</span>
+                                </Button>
+                              </>
+                            )}
+
+                            {/* Toggle: ribbon ↔ minimal. Persisted to localStorage. */}
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 w-7 shrink-0 px-0 text-muted-foreground hover:text-foreground"
+                              title={
+                                toolbarCompact
+                                  ? "Show formatting toolbar"
+                                  : "Hide formatting toolbar"
+                              }
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => setToolbarCompact((c) => !c)}
+                            >
+                              {toolbarCompact ? (
+                                <ChevronsLeftRight className="h-3.5 w-3.5" />
+                              ) : (
+                                <ChevronsRightLeft className="h-3.5 w-3.5" />
+                              )}
+                              <span className="sr-only">
+                                {toolbarCompact
+                                  ? "Show formatting toolbar"
+                                  : "Hide formatting toolbar"}
+                              </span>
+                            </Button>
+
                             <div className="relative">
                               <Button
                                 ref={formatMenuButtonRef}
@@ -4602,7 +4988,7 @@ function NotesPageInner() {
                                   formatMenuOpen &&
                                     "border-primary ring-1 ring-primary/30",
                                 )}
-                                title={`Formatting — ${noteKbParen("B")} ${noteKbParen("I")} ${noteKbParen("U")}`}
+                                title={`More formatting — ${noteKbParen("B")} ${noteKbParen("I")} ${noteKbParen("U")}`}
                                 onMouseDown={(e) => e.preventDefault()}
                                 onClick={() =>
                                   setFormatMenuOpen((o) => {
@@ -4613,7 +4999,7 @@ function NotesPageInner() {
                                 }
                               >
                                 <Type className="h-3.5 w-3.5" />
-                                Format
+                                More
                                 <ChevronDown
                                   className={cn(
                                     "h-3.5 w-3.5 transition-transform",

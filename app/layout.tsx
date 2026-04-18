@@ -12,7 +12,15 @@ import { AdminNavLink } from '@/components/AdminNavLink'
 import { ToolsCatalogProvider } from '@/components/ToolsCatalogProvider'
 import { AuthSessionProvider } from '@/components/AuthSessionProvider'
 
-const plusJakartaSans = Plus_Jakarta_Sans({ subsets: ['latin'], weight: ['400', '500', '600', '700'] })
+const plusJakartaSans = Plus_Jakarta_Sans({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700'],
+  // Italic was previously missing — without an italic font face, the editor's
+  // <em>/<i> tags fell back to whatever the browser synthesized (or nothing
+  // in some configurations). Loading the real italic faces guarantees that
+  // Cmd/Ctrl+I in the notes editor produces visible italic text.
+  style: ['normal', 'italic'],
+})
 
 export const metadata: Metadata = {
   title: 'AI Tools Directory - Discover the Best AI Tools',
