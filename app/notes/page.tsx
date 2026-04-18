@@ -3895,10 +3895,12 @@ function NotesPageInner() {
         <div
           className={cn(
             "relative grid min-h-[min(70vh,560px)] grid-cols-1 gap-4 lg:items-start",
-            // Animate the grid template — sides collapse to 0fr in focus mode.
-            "transition-[grid-template-columns,gap] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
+            // Animate the grid template — keep all tracks in the same unit
+            // (px) so browsers actually tween between the two states. Mixing
+            // `0fr` with a `px` value used to cause the layout to snap.
+            "transition-[grid-template-columns,gap] duration-[450ms] ease-[cubic-bezier(0.22,1,0.36,1)]",
             focusMode
-              ? "lg:grid-cols-[minmax(0,0fr)_minmax(0,0fr)_minmax(0,1fr)] lg:gap-0"
+              ? "lg:grid-cols-[minmax(0,0px)_minmax(0,0px)_minmax(0,1fr)] lg:gap-0"
               : "lg:grid-cols-[minmax(0,280px)_minmax(0,320px)_minmax(0,1fr)]",
           )}
         >
@@ -3908,9 +3910,11 @@ function NotesPageInner() {
           <section
             className={cn(
               "min-w-0 cursor-default rounded-xl border bg-card p-3 space-y-3",
-              "transition-[opacity,padding,border-width,transform] duration-400 ease-out",
-              focusMode &&
-                "lg:pointer-events-none lg:overflow-hidden lg:opacity-0 lg:-translate-x-3 lg:p-0 lg:border-0 lg:space-y-0",
+              // Only animate opacity + clip overflow while the grid track
+              // collapses — animating padding/border/translate at the same
+              // time looked janky against the grid template tween.
+              "lg:overflow-hidden transition-opacity duration-300 ease-out",
+              focusMode && "lg:pointer-events-none lg:opacity-0",
             )}
             aria-hidden={focusMode || undefined}
           >
@@ -4130,9 +4134,8 @@ function NotesPageInner() {
           <section
             className={cn(
               "min-w-0 cursor-default rounded-xl border bg-card p-3 space-y-3",
-              "transition-[opacity,padding,border-width,transform] duration-400 ease-out",
-              focusMode &&
-                "lg:pointer-events-none lg:overflow-hidden lg:opacity-0 lg:-translate-x-2 lg:p-0 lg:border-0 lg:space-y-0",
+              "lg:overflow-hidden transition-opacity duration-300 ease-out",
+              focusMode && "lg:pointer-events-none lg:opacity-0",
             )}
             aria-hidden={focusMode || undefined}
           >
@@ -4323,10 +4326,7 @@ function NotesPageInner() {
                         <button
                           type="button"
                           className="min-w-0 flex-1 truncate text-left text-sm"
-                          onClick={() => {
-                            setSelectedNoteId(n.id);
-                            setFocusMode(true);
-                          }}
+                          onClick={() => setSelectedNoteId(n.id)}
                         >
                           <span className="block truncate">{n.title}</span>
                           {n.updatedAt ? (
@@ -4452,61 +4452,37 @@ function NotesPageInner() {
                 ref={noteEditShellRef}
                 className="flex min-h-0 min-w-0 max-w-full flex-1 flex-col gap-4 overflow-hidden"
               >
-                {/* Focus mode: Back button to expand the Pages + Notes columns again.
-                    Animated in/out to keep the header from jumping when toggling. */}
-                <div
-                  className={cn(
-                    "hidden lg:flex items-center gap-2 overflow-hidden",
-                    "transition-[max-height,opacity,margin] duration-300 ease-out",
-                    focusMode
-                      ? "max-h-10 opacity-100"
-                      : "max-h-0 opacity-0 -mb-4",
-                  )}
-                  aria-hidden={!focusMode}
-                >
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  {/* One labeled toggle that switches between "Focus" (expand
+                      the editor full width) and "Exit focus" (bring the
+                      Pages + Notes lists back). Visible on every screen size
+                      so the user always has an obvious way back. */}
                   <Button
                     type="button"
                     size="sm"
-                    variant="ghost"
-                    onClick={() => setFocusMode(false)}
-                    className="h-8 gap-1.5 px-2 text-muted-foreground hover:text-foreground"
-                    title="Back to all notes"
+                    variant={focusMode ? "outline" : "ghost"}
+                    onClick={() => setFocusMode((f) => !f)}
+                    className={cn(
+                      "h-8 shrink-0 gap-1.5 px-2 text-xs font-medium",
+                      focusMode
+                        ? "border-primary/40 text-primary hover:text-primary"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                    title={focusMode ? "Exit focus mode" : "Focus on this note"}
+                    aria-pressed={focusMode}
                   >
-                    <ArrowLeft className="h-4 w-4" />
-                    <span className="text-xs font-medium">All notes</span>
+                    {focusMode ? (
+                      <>
+                        <ArrowLeft className="h-4 w-4" />
+                        Exit focus
+                      </>
+                    ) : (
+                      <>
+                        <PanelLeftOpen className="h-4 w-4" />
+                        Focus
+                      </>
+                    )}
                   </Button>
-                  <span className="text-xs text-muted-foreground/60">
-                    Focused on this note
-                  </span>
-                </div>
-
-                <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  {/* Mobile-friendly toggle to leave focus on small screens too */}
-                  {focusMode ? (
-                    <Button
-                      type="button"
-                      size="icon"
-                      variant="ghost"
-                      onClick={() => setFocusMode(false)}
-                      className="h-8 w-8 shrink-0 lg:hidden"
-                      title="Back to all notes"
-                      aria-label="Back to all notes"
-                    >
-                      <ArrowLeft className="h-4 w-4" />
-                    </Button>
-                  ) : (
-                    <Button
-                      type="button"
-                      size="icon"
-                      variant="ghost"
-                      onClick={() => setFocusMode(true)}
-                      className="hidden h-8 w-8 shrink-0 lg:inline-flex"
-                      title="Focus on this note"
-                      aria-label="Focus on this note"
-                    >
-                      <PanelLeftOpen className="h-4 w-4" />
-                    </Button>
-                  )}
                   <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
                   {editingMainTitle ? (
                     <>
