@@ -39,6 +39,53 @@ interface SummaryResponse {
   outline: Array<{ section: string; bullets: string[] }>;
   generatedAt: string;
   warnings: string[];
+  /** Token usage + USD cost for this single summarisation (gpt-4o-mini). */
+  cost: {
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    inputCostUsd: number;
+    outputCostUsd: number;
+    totalCostUsd: number;
+  } | null;
+}
+
+/**
+ * Prices in USD per 1M tokens. Updated for gpt-4o-mini (Aug 2024 pricing).
+ * Anything else falls back to a conservative estimate so the UI still shows
+ * a number rather than nothing.
+ */
+const MODEL_PRICING_PER_MTOK: Record<string, { input: number; output: number }> = {
+  "gpt-4o-mini": { input: 0.15, output: 0.6 },
+  "gpt-4o-mini-2024-07-18": { input: 0.15, output: 0.6 },
+  "gpt-4o": { input: 2.5, output: 10 },
+  "gpt-4o-2024-08-06": { input: 2.5, output: 10 },
+};
+
+function computeCost(
+  model: string,
+  inputTokens: number,
+  outputTokens: number,
+): SummaryResponse["cost"] {
+  const base = model.toLowerCase();
+  const key = Object.keys(MODEL_PRICING_PER_MTOK).find((k) =>
+    base.startsWith(k),
+  );
+  const rates = key
+    ? MODEL_PRICING_PER_MTOK[key]!
+    : { input: 0.5, output: 1.5 };
+  const inputCostUsd = (inputTokens / 1_000_000) * rates.input;
+  const outputCostUsd = (outputTokens / 1_000_000) * rates.output;
+  return {
+    model,
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+    inputCostUsd,
+    outputCostUsd,
+    totalCostUsd: inputCostUsd + outputCostUsd,
+  };
 }
 
 function detectSource(url: string): Source | null {
@@ -144,12 +191,22 @@ interface OpenAiSummary {
   outline: Array<{ section: string; bullets: string[] }>;
 }
 
+interface OpenAiUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+}
+
 async function summariseWithOpenAi(args: {
   source: Source;
   title: string | null;
   author: string | null;
   transcript: string | null;
-}): Promise<{ data: OpenAiSummary; modelUsed: string } | null> {
+}): Promise<{
+  data: OpenAiSummary;
+  modelUsed: string;
+  usage: OpenAiUsage | null;
+} | null> {
   const key = process.env.OPENAI_API_KEY;
   if (!key?.startsWith("sk-")) return null;
 
@@ -217,7 +274,8 @@ async function summariseWithOpenAi(args: {
       choices?: Array<{ message?: { content?: string } }>;
     };
     const modelUsed = data.model ?? "gpt-4o-mini";
-    if (data.usage) logOpenAIUsage(modelUsed, "video_summary", data.usage);
+    const usage = data.usage ?? null;
+    if (usage) logOpenAIUsage(modelUsed, "video_summary", usage);
     const raw = data.choices?.[0]?.message?.content?.trim();
     if (!raw) return null;
     const cleaned = raw.replace(/^```json?\s*|\s*```$/g, "").trim();
@@ -248,7 +306,7 @@ async function summariseWithOpenAi(args: {
           .slice(0, 8)
       : [];
     if (!summary && keyPoints.length === 0 && outline.length === 0) return null;
-    return { data: { summary, keyPoints, outline }, modelUsed };
+    return { data: { summary, keyPoints, outline }, modelUsed, usage };
   } catch {
     return null;
   }
@@ -337,6 +395,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const cost = ai.usage
+      ? computeCost(ai.modelUsed, ai.usage.prompt_tokens, ai.usage.completion_tokens)
+      : null;
+
     const payload: SummaryResponse = {
       source,
       videoUrl: url,
@@ -351,6 +413,7 @@ export async function POST(request: NextRequest) {
       outline: ai.data.outline,
       generatedAt: new Date().toISOString(),
       warnings,
+      cost,
     };
     return NextResponse.json(payload);
   } catch (err) {

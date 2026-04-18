@@ -229,16 +229,45 @@ Tone: [FORMAL / CASUAL]. Max ~200 words.`,
 
 export const USER_PROMPTS_STORAGE_KEY = "ai-tools-user-prompts-v1";
 
+/**
+ * Prompt "type" describes intent / shape of the prompt (vs the topical
+ * category). Inspired by promptcowboy.ai's typology — answers questions
+ * like "what is this prompt for?" rather than "what subject is it about?".
+ */
+export const PROMPT_TYPES = [
+  "Agent",
+  "Research",
+  "Planning",
+  "Automation",
+  "Writing",
+  "Analysis",
+  "Coding",
+  "Brainstorm",
+  "Roleplay",
+  "Other",
+] as const;
+
+export type PromptType = (typeof PROMPT_TYPES)[number];
+
 export interface UserPrompt {
   id: string;
   category: PromptCategory;
   title: string;
   body: string;
   createdAt: string;
+  /** Added in v2 — optional for backwards compatibility with v1 data. */
+  type?: PromptType;
+  tags?: string[];
+  /** Short one-liner produced by the analyser to make the list scannable. */
+  summary?: string;
 }
 
 export function isPromptCategory(s: string): s is PromptCategory {
   return (PROMPT_CATEGORIES as readonly string[]).includes(s);
+}
+
+export function isPromptType(s: string): s is PromptType {
+  return (PROMPT_TYPES as readonly string[]).includes(s);
 }
 
 export function loadUserPrompts(): UserPrompt[] {
@@ -248,17 +277,31 @@ export function loadUserPrompts(): UserPrompt[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (p): p is UserPrompt =>
-        typeof p === "object" &&
-        p !== null &&
-        typeof (p as UserPrompt).id === "string" &&
-        typeof (p as UserPrompt).title === "string" &&
-        typeof (p as UserPrompt).body === "string" &&
-        typeof (p as UserPrompt).category === "string" &&
-        isPromptCategory((p as UserPrompt).category) &&
-        typeof (p as UserPrompt).createdAt === "string",
-    );
+    return parsed
+      .filter(
+        (p): p is UserPrompt =>
+          typeof p === "object" &&
+          p !== null &&
+          typeof (p as UserPrompt).id === "string" &&
+          typeof (p as UserPrompt).title === "string" &&
+          typeof (p as UserPrompt).body === "string" &&
+          typeof (p as UserPrompt).category === "string" &&
+          isPromptCategory((p as UserPrompt).category) &&
+          typeof (p as UserPrompt).createdAt === "string",
+      )
+      .map((p) => {
+        // Coerce v2 fields to safe defaults so the UI can rely on them.
+        const type =
+          typeof p.type === "string" && isPromptType(p.type) ? p.type : undefined;
+        const tags = Array.isArray(p.tags)
+          ? p.tags.filter((t): t is string => typeof t === "string").slice(0, 8)
+          : undefined;
+        const summary =
+          typeof p.summary === "string" && p.summary.trim().length > 0
+            ? p.summary.trim()
+            : undefined;
+        return { ...p, type, tags, summary };
+      });
   } catch {
     return [];
   }

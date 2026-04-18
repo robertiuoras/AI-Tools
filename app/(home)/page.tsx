@@ -57,7 +57,10 @@ import {
   markHomeSplashSeen,
 } from "@/lib/home-splash";
 import { countToolsAddedToday } from "@/lib/tool-recent";
-import { setClientToolsCache } from "@/lib/tools-client-cache";
+import {
+  getClientToolsCacheAgeMs,
+  setClientToolsCache,
+} from "@/lib/tools-client-cache";
 
 const MIN_INITIAL_SPLASH_MS = 1400;
 const SPLASH_EXIT_MS = 520;
@@ -418,6 +421,42 @@ function HomePageContent() {
   ]);
 
   useEffect(() => {
+    // When returning to / from another route (e.g. /notes), the catalog
+    // provider has already hydrated `tools` from the in-memory cache so the
+    // page is interactive immediately. Hitting `/api/tools` synchronously on
+    // every nav added a perceptible "few second" delay because it competed
+    // with the heavy /notes tear-down + /home re-mount. Strategy:
+    //   - If cache is fresh (< 60s), skip the background fetch entirely.
+    //   - Otherwise, defer the background revalidation to the next idle frame
+    //     so the route transition completes first.
+    const cacheAge = getClientToolsCacheAgeMs();
+    const hasFreshCache = toolsRef.current.length > 0 && cacheAge < 60_000;
+    if (hasFreshCache) return;
+
+    if (toolsRef.current.length > 0) {
+      const idle =
+        typeof window !== "undefined" &&
+        typeof (window as unknown as { requestIdleCallback?: unknown })
+          .requestIdleCallback === "function"
+          ? (
+              window as unknown as {
+                requestIdleCallback: (cb: () => void) => number;
+                cancelIdleCallback?: (id: number) => void;
+              }
+            )
+          : null;
+      if (idle) {
+        const id = idle.requestIdleCallback(() => {
+          void fetchTools();
+        });
+        return () => {
+          idle.cancelIdleCallback?.(id);
+        };
+      }
+      const t = window.setTimeout(() => void fetchTools(), 80);
+      return () => window.clearTimeout(t);
+    }
+
     void fetchTools();
   }, [fetchTools]);
 

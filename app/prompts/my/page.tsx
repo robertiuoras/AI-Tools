@@ -24,7 +24,8 @@ export default function MyPromptsPage() {
                 </span>
               </h1>
               <p className="text-muted-foreground">
-                Your personal library — same categories as the community page.
+                Paste any prompt — the AI auto-tags it and saves it to your
+                library. Filter by type, category, or tag.
               </p>
             </div>
             <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-fuchsia-500/20 to-violet-500/20 ring-1 ring-border/60">

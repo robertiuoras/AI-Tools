@@ -1,10 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Bell, BellOff, Plus, Trash2 } from "lucide-react";
+import { Bell, BellOff, Plus, Trash2, Clock, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/toaster";
 import {
   formatCountdown,
@@ -22,22 +21,51 @@ type Props = {
   variant?: "full" | "embedded";
 };
 
+const QUICK_NOTIFY_OPTIONS = [
+  { label: "1h", hours: 1 },
+  { label: "12h", hours: 12 },
+  { label: "1d", hours: 24 },
+  { label: "3d", hours: 72 },
+  { label: "1w", hours: 168 },
+];
+
+/**
+ * Reminders panel — minimalist redesign.
+ *
+ * The previous version stacked two redundant blurbs ("data stays in browser",
+ * "Phone: install this site…") above a 2-column grid. The new layout collapses
+ * the form to a single tidy row with progressive disclosure for the optional
+ * note + custom alert window — closer to a quick-add control than a full form.
+ */
 export function RemindersPanel({ variant = "full" }: Props) {
   const { addToast } = useToast();
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [title, setTitle] = useState("");
   const [renewalLocal, setRenewalLocal] = useState("");
   const [note, setNote] = useState("");
-  const [notifyHours, setNotifyHours] = useState("24");
+  const [notifyHours, setNotifyHours] = useState(24);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const [notificationPerm, setNotificationPerm] =
+    useState<NotificationPermission | "unsupported">("default");
 
   useEffect(() => {
     setReminders(loadReminders());
   }, []);
 
+  // Keep countdowns ticking but don't burn a frame every second — once a
+  // reminder is more than a minute away, second-precision is just noise.
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      setNotificationPerm("unsupported");
+      return;
+    }
+    setNotificationPerm(Notification.permission);
   }, []);
 
   useReminderNotifications(reminders);
@@ -61,22 +89,19 @@ export function RemindersPanel({ variant = "full" }: Props) {
       addToast({
         variant: "error",
         title: "Not supported",
-        description: "Notifications are not available in this browser.",
+        description: "Notifications aren't available in this browser.",
       });
       return;
     }
     const perm = await Notification.requestPermission();
+    setNotificationPerm(perm);
     if (perm === "granted") {
-      addToast({
-        title: "Notifications enabled",
-        description:
-          "We’ll alert you while this site is open. Add this app to your home screen for alerts on your phone (PWA).",
-      });
+      addToast({ title: "Alerts on", description: "We'll notify you while this site is open." });
     } else {
       addToast({
         variant: "error",
         title: "Permission denied",
-        description: "Enable notifications in your browser settings to use alerts.",
+        description: "Enable notifications in browser settings to use alerts.",
       });
     }
   }, [addToast]);
@@ -88,7 +113,7 @@ export function RemindersPanel({ variant = "full" }: Props) {
       return;
     }
     if (!renewalLocal) {
-      addToast({ variant: "error", title: "Pick a renewal date & time" });
+      addToast({ variant: "error", title: "Pick a date & time" });
       return;
     }
     const d = new Date(renewalLocal);
@@ -96,7 +121,7 @@ export function RemindersPanel({ variant = "full" }: Props) {
       addToast({ variant: "error", title: "Invalid date" });
       return;
     }
-    const h = Math.max(0, Math.min(168, Number(notifyHours) || 24));
+    const h = Math.max(0, Math.min(168, notifyHours || 24));
     const r: Reminder = {
       id: newReminderId(),
       title: t,
@@ -109,7 +134,8 @@ export function RemindersPanel({ variant = "full" }: Props) {
     setTitle("");
     setRenewalLocal("");
     setNote("");
-    addToast({ title: "Reminder saved", description: "Stored on this device only." });
+    setShowAdvanced(false);
+    addToast({ title: "Saved", description: "Reminder added." });
   }, [title, renewalLocal, note, notifyHours, reminders, persist, addToast]);
 
   const remove = useCallback(
@@ -124,156 +150,211 @@ export function RemindersPanel({ variant = "full" }: Props) {
   return (
     <div
       className={cn(
-        "space-y-6",
-        embedded ? "rounded-xl border bg-card p-4" : "",
+        "space-y-5",
+        embedded && "rounded-xl border bg-card p-4",
       )}
     >
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
+      {/* Header — single line, no marketing copy */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
           <h2
             className={cn(
-              "font-semibold text-foreground",
-              embedded ? "text-lg" : "text-xl",
+              "font-semibold tracking-tight text-foreground",
+              embedded ? "text-base" : "text-lg",
             )}
           >
-            Renewals & reminders
+            Reminders
           </h2>
-          <p className="text-sm text-muted-foreground">
-            Track memberships and billing dates. Data stays in this browser
-            until you clear site data.
+          <p className="text-xs text-muted-foreground">
+            {sorted.length === 0
+              ? "Stored in this browser"
+              : `${sorted.length} upcoming`}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={requestNotify}>
-            {typeof window !== "undefined" &&
-            "Notification" in window &&
-            Notification.permission === "granted" ? (
-              <>
-                <Bell className="mr-1.5 h-4 w-4" />
-                Alerts on
-              </>
-            ) : (
-              <>
-                <BellOff className="mr-1.5 h-4 w-4" />
-                Enable web alerts
-              </>
-            )}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className={cn(
+            "h-8 gap-1.5 px-2 text-xs",
+            notificationPerm === "granted"
+              ? "text-emerald-600 hover:text-emerald-700 dark:text-emerald-400"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+          onClick={requestNotify}
+          disabled={notificationPerm === "unsupported"}
+          title={
+            notificationPerm === "granted"
+              ? "Notifications enabled"
+              : "Enable browser notifications"
+          }
+        >
+          {notificationPerm === "granted" ? (
+            <Bell className="h-3.5 w-3.5" />
+          ) : (
+            <BellOff className="h-3.5 w-3.5" />
+          )}
+          {notificationPerm === "granted" ? "Alerts on" : "Enable alerts"}
+        </Button>
+      </div>
+
+      {/* Quick-add — single compact row */}
+      <div className="rounded-xl border border-border/60 bg-card/60 p-3 transition-colors focus-within:border-primary/40 focus-within:bg-card">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,auto)_auto]">
+          <Input
+            id="rem-title"
+            placeholder="What renews? (e.g. ChatGPT Plus)"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && title.trim() && renewalLocal) {
+                e.preventDefault();
+                addReminder();
+              }
+            }}
+            className="h-9 border-0 bg-transparent px-2 text-sm shadow-none focus-visible:ring-0"
+          />
+          <Input
+            id="rem-when"
+            type="datetime-local"
+            value={renewalLocal}
+            onChange={(e) => setRenewalLocal(e.target.value)}
+            className="h-9 border-border/40 bg-background/60 text-sm sm:w-[200px]"
+          />
+          <Button
+            type="button"
+            size="sm"
+            onClick={addReminder}
+            disabled={!title.trim() || !renewalLocal}
+            className="h-9 gap-1.5"
+          >
+            <Plus className="h-4 w-4" />
+            Add
           </Button>
         </div>
-      </div>
 
-      <div className="rounded-lg border border-dashed border-border/80 bg-muted/20 p-4">
-        <p className="mb-3 text-xs text-muted-foreground">
-          <strong className="text-foreground">Phone:</strong> install this site to your
-          home screen (Share → Add to Home Screen / Install app) and allow
-          notifications. Alerts fire while the site is open; background push
-          when the app is fully closed needs a future server feature.
-        </p>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="rem-title">Title</Label>
-            <Input
-              id="rem-title"
-              placeholder="e.g. ChatGPT Plus"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="rem-when">Next renewal</Label>
-            <Input
-              id="rem-when"
-              type="datetime-local"
-              value={renewalLocal}
-              onChange={(e) => setRenewalLocal(e.target.value)}
-            />
-          </div>
-          <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="rem-note">Note (optional)</Label>
+        {/* Advanced (collapsed by default) */}
+        <button
+          type="button"
+          onClick={() => setShowAdvanced((v) => !v)}
+          className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ChevronDown
+            className={cn(
+              "h-3 w-3 transition-transform",
+              showAdvanced && "rotate-180",
+            )}
+          />
+          {showAdvanced ? "Hide" : "Add note · alert window"}
+        </button>
+
+        {showAdvanced && (
+          <div className="mt-3 space-y-3 border-t border-border/40 pt-3">
             <Input
               id="rem-note"
-              placeholder="Plan details, card, etc."
+              placeholder="Note (plan details, card last 4, etc.)"
               value={note}
               onChange={(e) => setNote(e.target.value)}
+              className="h-8 text-sm"
             />
+            <div>
+              <p className="mb-1.5 inline-flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                <Clock className="h-3 w-3" />
+                Alert me
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {QUICK_NOTIFY_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.hours}
+                    type="button"
+                    onClick={() => setNotifyHours(opt.hours)}
+                    className={cn(
+                      "rounded-md px-2 py-1 text-xs font-medium transition-colors",
+                      notifyHours === opt.hours
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground",
+                    )}
+                  >
+                    {opt.label} before
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="rem-hours">Notify before (hours)</Label>
-            <Input
-              id="rem-hours"
-              type="number"
-              min={0}
-              max={168}
-              value={notifyHours}
-              onChange={(e) => setNotifyHours(e.target.value)}
-            />
-          </div>
-          <div className="flex items-end">
-            <Button type="button" onClick={addReminder} className="w-full sm:w-auto">
-              <Plus className="mr-1.5 h-4 w-4" />
-              Add reminder
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <h3 className="text-sm font-medium text-muted-foreground">Upcoming</h3>
-        {sorted.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No reminders yet.</p>
-        ) : (
-          <ul className="space-y-2">
-            {sorted.map((r) => {
-              const ms = msUntilRenewal(r.renewalAt, now);
-              return (
-                <li
-                  key={r.id}
-                  className="flex flex-col gap-2 rounded-lg border bg-card px-3 py-3 sm:flex-row sm:items-center sm:justify-between"
-                >
-                  <div className="min-w-0">
-                    <p className="font-medium text-foreground">{r.title}</p>
-                    {r.note ? (
-                      <p className="text-xs text-muted-foreground">{r.note}</p>
-                    ) : null}
-                    <p className="text-xs text-muted-foreground">
-                      Renews{" "}
-                      {new Date(r.renewalAt).toLocaleString(undefined, {
-                        dateStyle: "medium",
-                        timeStyle: "short",
-                      })}
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-3">
-                    <div className="text-right">
-                      <p
-                        className={cn(
-                          "font-mono text-lg tabular-nums",
-                          ms <= 0 ? "text-destructive" : "text-foreground",
-                        )}
-                      >
-                        {formatCountdown(ms)}
-                      </p>
-                      <p className="text-[10px] text-muted-foreground">
-                        alert {r.notifyBeforeHours ?? 24}h before
-                      </p>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="shrink-0 text-destructive hover:text-destructive"
-                      title="Remove"
-                      onClick={() => remove(r.id)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
         )}
       </div>
+
+      {/* List */}
+      {sorted.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border/60 bg-muted/10 px-4 py-8 text-center">
+          <p className="text-sm text-muted-foreground">
+            No reminders yet — add your first above.
+          </p>
+        </div>
+      ) : (
+        <ul className="divide-y divide-border/40 overflow-hidden rounded-xl border border-border/50">
+          {sorted.map((r) => {
+            const ms = msUntilRenewal(r.renewalAt, now);
+            const overdue = ms <= 0;
+            const soon = !overdue && ms < 24 * 60 * 60 * 1000;
+            return (
+              <li
+                key={r.id}
+                className={cn(
+                  "group flex items-center gap-3 px-3 py-2.5 transition-colors hover:bg-muted/40",
+                  overdue && "bg-destructive/5",
+                )}
+              >
+                <div
+                  className={cn(
+                    "h-2 w-2 shrink-0 rounded-full",
+                    overdue
+                      ? "bg-destructive"
+                      : soon
+                        ? "bg-amber-500"
+                        : "bg-emerald-500",
+                  )}
+                  aria-hidden
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-foreground">
+                    {r.title}
+                  </p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {new Date(r.renewalAt).toLocaleString(undefined, {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    })}
+                    {r.note ? ` · ${r.note}` : ""}
+                  </p>
+                </div>
+                <span
+                  className={cn(
+                    "shrink-0 font-mono text-xs tabular-nums",
+                    overdue
+                      ? "text-destructive"
+                      : soon
+                        ? "text-amber-600 dark:text-amber-400"
+                        : "text-muted-foreground",
+                  )}
+                >
+                  {formatCountdown(ms)}
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+                  title="Remove"
+                  onClick={() => remove(r.id)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }

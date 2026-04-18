@@ -14,7 +14,12 @@ interface Props {
 /** ~45s autosave interval */
 const AUTOSAVE_INTERVAL_MS = 45_000;
 
-/** Strip focus/readonly from the session before saving so they're never persisted. */
+/**
+ * Strip focus mode from the session before persisting. `isReadonly` is NOT
+ * in `session` (it lives in the instance record inside `document.store`), so
+ * we handle it via a runtime side-effect listener in `handleMount` instead —
+ * see the call to `editor.sideEffects.registerAfterChangeHandler` below.
+ */
 function snapshotForPersist(editor: Editor) {
   const snap = getSnapshot(editor.store) as TLEditorSnapshot;
   const session = snap.session ?? { version: 1 as const };
@@ -79,6 +84,28 @@ export default function WhiteboardInner({ token, boardId }: Props) {
     // Always ensure the editor is interactive regardless of what the snapshot had
     editor.updateInstanceState({ isFocusMode: false, isReadonly: false });
 
+    /**
+     * Defensive: if anything (a stale instance record from a saved snapshot,
+     * an internal tldraw transition, a stray `setReadonly` call) flips
+     * `isReadonly` back to true after mount, immediately reset it. This is
+     * what was making the canvas appear "uneditable after a few seconds" —
+     * the loaded snapshot's instance record carried readonly=true and would
+     * eventually win over our one-shot `updateInstanceState` above.
+     */
+    const offReadonly = editor.sideEffects.registerAfterChangeHandler(
+      "instance",
+      (_prev, next) => {
+        if (disposed) return;
+        const inst = next as { isReadonly?: boolean };
+        if (inst.isReadonly === true) {
+          // Schedule on next tick so we don't recurse inside the change handler.
+          queueMicrotask(() => {
+            if (!disposed) editor.updateInstanceState({ isReadonly: false });
+          });
+        }
+      },
+    );
+
     // Interval autosave
     const interval = window.setInterval(() => {
       if (disposed) return;
@@ -94,6 +121,11 @@ export default function WhiteboardInner({ token, boardId }: Props) {
     return () => {
       disposed = true;
       editorRef.current = null;
+      try {
+        offReadonly?.();
+      } catch {
+        /* ignore */
+      }
       clearInterval(interval);
       void (async () => {
         try {

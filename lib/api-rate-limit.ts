@@ -58,6 +58,7 @@ export type RateLimitKind =
   | 'videos_analyze'
   | 'openai_test'
   | 'video_summary'
+  | 'prompts_analyze'
 
 const LIMITS: Record<RateLimitKind, { windowMs: number; max: number }[]> = {
   tools_analyze: [
@@ -100,6 +101,17 @@ const LIMITS: Record<RateLimitKind, { windowMs: number; max: number }[]> = {
     {
       windowMs: 3_600_000,
       max: envInt('RATE_LIMIT_VIDEO_SUMMARY_PER_HOUR', 80),
+    },
+  ],
+  // Prompt analyser — small token footprint per call (just classification).
+  prompts_analyze: [
+    {
+      windowMs: 60_000,
+      max: envInt('RATE_LIMIT_PROMPTS_ANALYZE_PER_MINUTE', 30),
+    },
+    {
+      windowMs: 3_600_000,
+      max: envInt('RATE_LIMIT_PROMPTS_ANALYZE_PER_HOUR', 200),
     },
   ],
 }

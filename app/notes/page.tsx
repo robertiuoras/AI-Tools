@@ -635,6 +635,148 @@ function applySavedOrder<T extends { id: string }>(
   });
 }
 
+/**
+ * Lightweight inline-code colorizer (no Prism / highlight.js dependency).
+ * Splits short inline-code snippets into colored tokens so things like
+ * `const x = "hi"` or `await fetch()` show a hint of syntax color in the
+ * read view. Editor-side code stays plain text — contentEditable + nested
+ * spans is too fragile.
+ */
+const INLINE_CODE_KEYWORDS = new Set([
+  // js/ts
+  "const",
+  "let",
+  "var",
+  "function",
+  "return",
+  "if",
+  "else",
+  "for",
+  "while",
+  "do",
+  "switch",
+  "case",
+  "break",
+  "continue",
+  "new",
+  "class",
+  "extends",
+  "super",
+  "this",
+  "import",
+  "export",
+  "from",
+  "as",
+  "default",
+  "async",
+  "await",
+  "yield",
+  "true",
+  "false",
+  "null",
+  "undefined",
+  "typeof",
+  "instanceof",
+  "in",
+  "of",
+  "throw",
+  "try",
+  "catch",
+  "finally",
+  // python
+  "def",
+  "lambda",
+  "pass",
+  "elif",
+  "None",
+  "True",
+  "False",
+  "and",
+  "or",
+  "not",
+  "is",
+  "with",
+  "yield",
+  "global",
+  "nonlocal",
+  // shell-ish
+  "echo",
+  "cd",
+  "ls",
+]);
+
+const INLINE_CODE_TOKEN_RE =
+  // Order matters: comments → strings → numbers → identifiers → punctuation
+  /(\/\/[^\n]*|#[^\n]*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)|(-?\b\d+(?:\.\d+)?\b)|([A-Za-z_$][A-Za-z0-9_$]*)|([{}()[\]<>=+\-*/%!?:;,.&|^~])/g;
+
+function renderColoredInlineCode(text: string): ReactNode[] {
+  // Skip colorization for very short snippets — looks noisy on `x` or `42`.
+  if (text.length < 3) return [text];
+  const out: ReactNode[] = [];
+  let lastIdx = 0;
+  let i = 0;
+  // Reset regex state for safety.
+  INLINE_CODE_TOKEN_RE.lastIndex = 0;
+  let m: RegExpExecArray | null = null;
+  while ((m = INLINE_CODE_TOKEN_RE.exec(text))) {
+    const start = m.index;
+    if (start > lastIdx) {
+      out.push(text.slice(lastIdx, start));
+    }
+    const [full, comment, str, num, ident, punct] = m;
+    if (comment) {
+      out.push(
+        <span key={`cc-c-${i++}`} className="text-emerald-700/80 dark:text-emerald-300/80 italic">
+          {comment}
+        </span>,
+      );
+    } else if (str) {
+      out.push(
+        <span key={`cc-s-${i++}`} className="text-amber-700 dark:text-amber-300">
+          {str}
+        </span>,
+      );
+    } else if (num) {
+      out.push(
+        <span key={`cc-n-${i++}`} className="text-cyan-700 dark:text-cyan-300">
+          {num}
+        </span>,
+      );
+    } else if (ident) {
+      if (INLINE_CODE_KEYWORDS.has(ident)) {
+        out.push(
+          <span key={`cc-k-${i++}`} className="text-fuchsia-700 dark:text-fuchsia-300 font-semibold">
+            {ident}
+          </span>,
+        );
+      } else {
+        // Function call hint: identifier directly followed by '('
+        const next = text[start + ident.length];
+        if (next === "(") {
+          out.push(
+            <span key={`cc-f-${i++}`} className="text-violet-700 dark:text-violet-300">
+              {ident}
+            </span>,
+          );
+        } else {
+          out.push(ident);
+        }
+      }
+    } else if (punct) {
+      out.push(
+        <span key={`cc-p-${i++}`} className="text-muted-foreground">
+          {punct}
+        </span>,
+      );
+    } else {
+      out.push(full);
+    }
+    lastIdx = start + full.length;
+  }
+  if (lastIdx < text.length) out.push(text.slice(lastIdx));
+  return out;
+}
+
 function renderInlineMarkdown(text: string, depth = 0): ReactNode {
   const src = migrateLegacyNoteMarkup(text);
   if (depth > 8) {
@@ -690,9 +832,9 @@ function renderInlineMarkdown(text: string, depth = 0): ReactNode {
       nodes.push(
         <code
           key={`c-${partIndex++}`}
-          className="rounded bg-muted px-1 py-0.5 text-[0.9em] font-mono"
+          className="rounded bg-muted/80 px-1 py-0.5 text-[0.9em] font-mono ring-1 ring-border/40"
         >
-          {codeText}
+          {renderColoredInlineCode(codeText)}
         </code>,
       );
     } else if (typeof colorHex === "string" && colorInner !== undefined) {
@@ -1557,7 +1699,17 @@ function NotesPageInner() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [selectedNoteId]);
 
-  /** Switch page: single notes fetch with abort if user switches again. */
+  /**
+   * In-memory cache of notes keyed by pageId. Switching between pages used to
+   * always show the loading spinner because we re-fetched `/api/notes` from
+   * scratch every time. With this cache, returning to a previously-visited
+   * page is instant — we hydrate from the cache and silently revalidate in
+   * the background. The cache is kept in sync by an effect that records the
+   * latest `notes` state for the active page on every change.
+   */
+  const notesByPageIdRef = useRef<Map<string, Note[]>>(new Map());
+
+  /** Switch page: hydrate from cache instantly, then revalidate. */
   useEffect(() => {
     if (!userId || !selectedPageId) return;
     if (skipNextNotesFetchForPageRef.current) {
@@ -1565,9 +1717,22 @@ function NotesPageInner() {
       return;
     }
 
+    const cached = notesByPageIdRef.current.get(selectedPageId);
+    const hasCache = Array.isArray(cached);
+    if (hasCache) {
+      // Instant render from cache, no loading flash. Background fetch below
+      // will refresh with the latest server state.
+      setNotes(cached!);
+      setSelectedNoteId((prev) => {
+        if (prev && cached!.some((n) => n.id === prev)) return prev;
+        return cached![0]?.id ?? null;
+      });
+    } else {
+      setNotesLoading(true);
+    }
+
     const ac = new AbortController();
     let alive = true;
-    setNotesLoading(true);
 
     (async () => {
       try {
@@ -1582,8 +1747,10 @@ function NotesPageInner() {
         });
         if (!alive) return;
         if (!res.ok) {
-          setNotes([]);
-          setSelectedNoteId(null);
+          if (!hasCache) {
+            setNotes([]);
+            setSelectedNoteId(null);
+          }
           return;
         }
         const data = (await res.json()) as Note[];
@@ -1600,7 +1767,7 @@ function NotesPageInner() {
         });
       } catch (e) {
         if ((e as Error).name === "AbortError") return;
-        if (alive) {
+        if (alive && !hasCache) {
           setNotes([]);
           setSelectedNoteId(null);
         }
@@ -1614,6 +1781,15 @@ function NotesPageInner() {
       ac.abort();
     };
   }, [selectedPageId, userId]);
+
+  // Keep the per-page cache in sync with whatever the editor has now. Any
+  // create/update/delete that mutates `notes` will automatically refresh the
+  // cache for the active page.
+  useEffect(() => {
+    if (selectedPageId) {
+      notesByPageIdRef.current.set(selectedPageId, notes);
+    }
+  }, [notes, selectedPageId]);
 
   useEffect(() => {
     setEditingPageId(null);
@@ -4032,7 +4208,19 @@ function NotesPageInner() {
                           setEditingPageId(null);
                         }}
                         onKeyDown={(e) => {
-                          if (e.key === "Escape") setEditingPageId(null);
+                          if (e.key === "Escape") {
+                            setEditingPageId(null);
+                          } else if (e.key === "Enter") {
+                            // Mirror the blur handler so Enter saves & closes
+                            // — avoids the "have to click outside" friction.
+                            e.preventDefault();
+                            const t =
+                              (e.currentTarget as HTMLInputElement).value
+                                .trim() || "Untitled Page";
+                            void updatePage(p.id, { title: t });
+                            setEditingPageId(null);
+                            (e.currentTarget as HTMLInputElement).blur();
+                          }
                         }}
                       />
                     ) : (
@@ -4318,7 +4506,21 @@ function NotesPageInner() {
                           setEditingNoteRowId(null);
                         }}
                         onKeyDown={(e) => {
-                          if (e.key === "Escape") setEditingNoteRowId(null);
+                          if (e.key === "Escape") {
+                            setEditingNoteRowId(null);
+                          } else if (e.key === "Enter") {
+                            e.preventDefault();
+                            const t =
+                              (e.currentTarget as HTMLInputElement).value
+                                .trim() || "Untitled Note";
+                            void updateNote(
+                              n.id,
+                              { title: t },
+                              { silent: true },
+                            );
+                            setEditingNoteRowId(null);
+                            (e.currentTarget as HTMLInputElement).blur();
+                          }
                         }}
                       />
                     ) : (
@@ -4515,7 +4717,21 @@ function NotesPageInner() {
                             setEditingMainTitle(false);
                           }}
                           onKeyDown={(e) => {
-                            if (e.key === "Escape") setEditingMainTitle(false);
+                            if (e.key === "Escape") {
+                              setEditingMainTitle(false);
+                            } else if (e.key === "Enter") {
+                              e.preventDefault();
+                              const t =
+                                (e.currentTarget as HTMLInputElement).value
+                                  .trim() || "Untitled Note";
+                              void updateNote(
+                                selectedNote.id,
+                                { title: t },
+                                { silent: true },
+                              );
+                              setEditingMainTitle(false);
+                              (e.currentTarget as HTMLInputElement).blur();
+                            }
                           }}
                         />
                         <Button
@@ -5663,6 +5879,18 @@ function NotesPageInner() {
                         <span className="text-[10px] text-muted-foreground tabular-nums">
                           {noteKbHighlightParen()}
                         </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => {
+                          setContextMenu((s) => ({ ...s, open: false }));
+                          runFormatCommand("insertUnorderedList");
+                        }}
+                      >
+                        <ListIcon className="h-3.5 w-3.5" />
+                        Bulleted list
                       </button>
                       <button
                         type="button"
