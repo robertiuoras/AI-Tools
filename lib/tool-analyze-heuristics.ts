@@ -144,6 +144,8 @@ export function detectAgencyFromUrlAndText(hostname: string, text: string): bool
  * Two-way refinement:
  *   - "freemium" → "paid" when there is no real ongoing free tier.
  *   - "paid"     → "freemium" when there IS a real free tier alongside paid plans.
+ *   - "paid"     → "freemium"/"free" when the product is open-source / npm /
+ *     pip / Docker / GitHub-distributed and usable without paying.
  *   - "freemium"/"paid" → "enterprise" when copy is purely "contact sales" / SOW.
  *   - "free"     → "freemium" when free is mentioned but paid plans clearly exist.
  *
@@ -182,8 +184,19 @@ export function refineRevenueModel(
     !hasFreeTier
   const enterpriseHints =
     /\b(custom\s+pricing|custom\s+quote|talk\s+to\s+sales|book\s+a\s+demo\s+for\s+pricing|annual\s+contract|sso\s+\+\s+saml)\b/.test(combined)
+
+  // Open-source / freely-installable signals.
+  // Many devtools (Remotion, Next.js, Supabase, etc.) sell paid plans for a
+  // service or "Pro" tier but the underlying library is `npx`/`npm`/`pip`/
+  // `docker`/`brew` installable for free. Those are freemium, not paid.
   const explicitOpenSource =
-    /\b(open[- ]source|mit\s+licen[cs]e|apache\s+2\.0|gpl\s*v?\d|self[- ]hosted)\b/.test(combined)
+    /\b(open[- ]source|mit\s+licen[cs]e|apache\s+2\.0|gpl\s*v?\d|bsd\s+licen[cs]e|isc\s+licen[cs]e|self[- ]hosted)\b/.test(combined) ||
+    /\b(npm\s+install|yarn\s+add|pnpm\s+add|npx\s+create-|pip\s+install|pipx\s+install|brew\s+install|docker\s+pull|docker\s+run|cargo\s+install|go\s+install|composer\s+require)\b/.test(combined) ||
+    /\bavailable\s+on\s+(github|npm|pypi|docker\s+hub|crates\.io)\b/.test(combined) ||
+    /\bgithub\.com\/[\w.-]+\/[\w.-]+/.test(combined) ||
+    /\b(npmjs\.com\/package|pypi\.org\/project)\//.test(combined) ||
+    /\b(?:free\s+(?:and|&)\s+open[- ]source|foss|community\s+edition|free\s+forever\s+for\s+(?:devs|developers))\b/.test(combined)
+
   const noPaidAtAll = !paidPlansExist && !/\bpricing\b/.test(combined)
 
   if (enterpriseOnly || (enterpriseHints && !hasFreeTier && !paidPlansExist)) {
@@ -198,15 +211,26 @@ export function refineRevenueModel(
     return "freemium"
   }
 
+  // Open-source override: if the project is freely installable, never call it "paid".
+  // If paid plans also exist (Pro / hosted / cloud) → freemium; otherwise → free.
+  if (explicitOpenSource) {
+    if (revenue === "paid") {
+      return paidPlansExist ? "freemium" : "free"
+    }
+    if (!revenue) {
+      return paidPlansExist ? "freemium" : "free"
+    }
+  }
+
   if (revenue === "freemium") {
     const paidOnlySignals =
       /\bpaid\s+only\b/.test(combined) ||
       /\bsubscription\s+only\b/.test(combined) ||
       /\bno\s+free\s+(tier|plan|version)\b/.test(combined) ||
       /\b(?:paid|premium)\s+plans?\s+only\b/.test(combined) ||
-      (paidPlansExist && !hasFreeTier && !trialOnly)
+      (paidPlansExist && !hasFreeTier && !trialOnly && !explicitOpenSource)
 
-    if (paidOnlySignals && !hasFreeTier) {
+    if (paidOnlySignals && !hasFreeTier && !explicitOpenSource) {
       return "paid"
     }
   }

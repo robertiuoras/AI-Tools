@@ -79,49 +79,52 @@ interface AnalysisResult {
 }
 
 /**
- * Try to fetch pricing page content
+ * Try to fetch pricing page content.
+ * Probes the common paths in PARALLEL with a tight per-request timeout and
+ * returns the first response that yields meaningful content. Falls back to ''
+ * if every probe fails or no path has enough text.
+ *
+ * Old implementation tried 6 paths in series with a 5s timeout each → up to
+ * 30s wasted on sites where every guess 404s. The parallel version caps the
+ * worst-case wait near a single timeout.
  */
 async function fetchPricingInfo(baseUrl: string): Promise<string> {
+  let urlObj: URL
   try {
-    const urlObj = new URL(baseUrl)
-    const pricingPaths = ['/pricing', '/plans', '/prices', '/subscribe', '/purchase', '/buy']
-    
-    for (const path of pricingPaths) {
-      const pricingUrl = `${urlObj.origin}${path}`
-      try {
-        console.log('🔍 [Pricing] Trying:', pricingUrl)
-        const response = await fetch(pricingUrl, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          },
-          signal: AbortSignal.timeout(5000), // 5 second timeout
-        })
-      
-      if (response.ok) {
-        const html = await response.text()
-        // Extract text content (remove HTML tags)
-        const text = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-          .replace(/<[^>]+>/g, ' ')
-          .replace(/\s+/g, ' ')
-          .toLowerCase()
-        
-        if (text.length > 100) {
-          // Limit pricing content to reduce tokens
-          return text.substring(0, 2000) // Reduced from unlimited to 2000 chars
-        }
-      }
-    } catch (error) {
-      // Continue to next path
-      console.log('⚠️ [Pricing] Failed to fetch:', pricingUrl, error instanceof Error ? error.message : String(error))
-      continue
-    }
-  }
+    urlObj = new URL(baseUrl)
   } catch (error) {
     console.error('❌ [Pricing] Error in fetchPricingInfo:', error)
+    return ''
   }
-  
-  return ''
+
+  const pricingPaths = ['/pricing', '/plans', '/prices', '/subscribe', '/purchase', '/buy']
+
+  const probe = async (path: string): Promise<string> => {
+    const pricingUrl = `${urlObj.origin}${path}`
+    const response = await fetch(pricingUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      },
+      signal: AbortSignal.timeout(4000),
+    })
+    if (!response.ok) throw new Error(`status ${response.status}`)
+    const html = await response.text()
+    const text = html
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .toLowerCase()
+    if (text.length <= 100) throw new Error('content too short')
+    console.log('✅ [Pricing] Hit:', pricingUrl, '(len', text.length, ')')
+    return text.substring(0, 2000)
+  }
+
+  try {
+    return await Promise.any(pricingPaths.map((p) => probe(p)))
+  } catch {
+    return ''
+  }
 }
 
 /**
@@ -159,6 +162,15 @@ async function scrapeWebsiteInfo(url: string): Promise<{
       }
     }
 
+    // Kick off pricing-page probes in parallel with the main HTML fetch.
+    // We already know the origin from `validUrl`, so we don't need to wait
+    // for the homepage to come back before guessing /pricing, /plans, etc.
+    // This typically saves 0.5–4s on the critical path of /api/tools/analyze.
+    const pricingContentPromise = fetchPricingInfo(validUrl.toString()).catch((e) => {
+      console.error('❌ [Pricing] Background probe failed:', e)
+      return ''
+    })
+
     const response = await fetch(validUrl.toString(), {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -168,7 +180,7 @@ async function scrapeWebsiteInfo(url: string): Promise<{
         'Connection': 'keep-alive',
         'Upgrade-Insecure-Requests': '1',
       },
-      signal: AbortSignal.timeout(15000), // 15 second timeout
+      signal: AbortSignal.timeout(10000),
     })
     
     if (!response.ok) {
@@ -300,9 +312,8 @@ async function scrapeWebsiteInfo(url: string): Promise<{
       }
     }
 
-    // Try to get pricing information
-    console.log('🔍 [Scrape] Fetching pricing info...')
-    const pricingContent = await fetchPricingInfo(validUrl.toString())
+    // Pricing probes were started in parallel above; just await the result here.
+    const pricingContent = await pricingContentPromise
     console.log('✅ [Scrape] Pricing content length:', pricingContent.length)
 
     const hasDownloadableAppHeuristic = detectDownloadableAppFromHtml(html)
@@ -438,6 +449,8 @@ Revenue (MUST be accurate):
 - null: Cannot determine
 
 Do NOT label as "freemium" when the product is effectively paid-only (e.g. pricing starts at $X/mo with no free plan, or "contact sales" for all plans without a free tier).
+
+Open-source / freely installable tools (npm, npx, pip, brew, docker, GitHub releases, MIT/Apache/GPL/BSD/ISC license, "free and open-source") are NEVER "paid". If a paid Pro/Cloud/Hosted tier also exists for that open-source project (e.g. Remotion, Supabase, n8n, Plausible, Cal.com), use "freemium". If there is no paid plan at all, use "free".
 
 Visits (search for numbers):
 - Look for: "X million visits/users", "X million monthly", "XM visits"

@@ -300,6 +300,10 @@ export default function AdminPage() {
   const toolAutoAddIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const toolAutoAddSessionRef = useRef(0)
   const pendingToolPostRef = useRef<Record<string, unknown> | null>(null)
+  /** USD estimate from the matching /api/tools/analyze response — surfaced in "Tool added" toast. */
+  const pendingToolAnalyzeCostRef = useRef<number>(0)
+  /** USD estimate from the matching /api/videos/analyze response — surfaced in "Video added" toast. */
+  const pendingVideoAnalyzeCostRef = useRef<number>(0)
 
   /** Stops the 5s countdown only; keeps pending POST payload until save or cancel. */
   const stopToolAutoAddCountdown = useCallback(() => {
@@ -313,6 +317,7 @@ export default function AdminPage() {
   const cancelToolAutoAdd = useCallback(() => {
     stopToolAutoAddCountdown()
     pendingToolPostRef.current = null
+    pendingToolAnalyzeCostRef.current = 0
   }, [stopToolAutoAddCountdown])
 
   const startToolAutoAddCountdownRef = useRef<() => void>(() => {})
@@ -1310,12 +1315,19 @@ export default function AdminPage() {
         throw new Error(data.message || data.error || data.details || 'Failed to save video')
       }
       const addedTitle = fd.title.trim()
+      const analyzeCostUsd = pendingVideoAnalyzeCostRef.current
+      pendingVideoAnalyzeCostRef.current = 0
       resetVideoForm()
       await fetchVideos()
+      const showCost = !editId
+      const costForToast =
+        analyzeCostUsd > 0 ? analyzeCostUsd : estimateUsdPerVideoAnalyzeCall()
       addToast({
         variant: 'success',
         title: editId ? 'Video updated' : 'Video added',
-        description: `"${addedTitle}" was saved.`,
+        description: showCost
+          ? `"${addedTitle}" was saved. ${openAiCostNote(costForToast)}`
+          : `"${addedTitle}" was saved.`,
       })
       return true
     } catch (err) {
@@ -1371,6 +1383,11 @@ export default function AdminPage() {
         })
         return
       }
+      pendingVideoAnalyzeCostRef.current =
+        typeof (data as { estimatedCostUsd?: unknown }).estimatedCostUsd === 'number' &&
+        Number.isFinite((data as { estimatedCostUsd: number }).estimatedCostUsd)
+          ? (data as { estimatedCostUsd: number }).estimatedCostUsd
+          : 0
       setVideoFormData((prev) => {
         const rawCats = Array.isArray(data.suggestedCategories)
           ? data.suggestedCategories
@@ -1734,6 +1751,11 @@ export default function AdminPage() {
       }
 
       pendingToolPostRef.current = payload
+      pendingToolAnalyzeCostRef.current =
+        typeof (data as { estimatedCostUsd?: unknown }).estimatedCostUsd === 'number' &&
+        Number.isFinite((data as { estimatedCostUsd: number }).estimatedCostUsd)
+          ? (data as { estimatedCostUsd: number }).estimatedCostUsd
+          : 0
       setQuickAddUrl('')
       const usedAi = Boolean((data as { _debug?: { usedOpenAI?: boolean } })._debug?.usedOpenAI)
       toolAutoAddSessionRef.current += 1
@@ -2060,7 +2082,9 @@ export default function AdminPage() {
     stopToolAutoAddCountdown()
     void (async () => {
       const payload = pendingToolPostRef.current
+      const analyzeCostUsd = pendingToolAnalyzeCostRef.current
       pendingToolPostRef.current = null
+      pendingToolAnalyzeCostRef.current = 0
       if (!payload) return
       setSubmitting(true)
       setIsProcessing(true)
@@ -2091,10 +2115,12 @@ export default function AdminPage() {
         }
         await fetchTools()
         resetForm()
+        const costForToast =
+          analyzeCostUsd > 0 ? analyzeCostUsd : estimateUsdPerToolAnalyzeCall()
         addToast({
           variant: 'success',
           title: 'Tool added',
-          description: `"${String(payload.name || 'Tool')}" was saved to the directory.`,
+          description: `"${String(payload.name || 'Tool')}" was saved to the directory. ${openAiCostNote(costForToast)}`,
         })
       } catch (error) {
         console.error('Error saving tool:', error)
