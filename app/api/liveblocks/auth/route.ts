@@ -41,11 +41,14 @@ export async function POST(request: NextRequest) {
       access.kind === "owner" ||
       (access.kind === "share" && access.permission === "edit");
 
-    // Lookup user metadata for the presence card (name + email + colour).
+    // Lookup user metadata for the presence card (name + email + colour
+    // + avatar). The name + avatar can be customized via the Profile
+    // settings dialog; we read the latest values here so any user
+    // joining a room sees the up-to-date identity.
     const admin = supabaseAdmin as any;
     const { data: userRow } = await admin
       .from("user")
-      .select("id, email, name")
+      .select("id, email, name, avatar_url")
       .eq("id", userId)
       .maybeSingle();
 
@@ -60,6 +63,7 @@ export async function POST(request: NextRequest) {
         name: displayName,
         email: userRow?.email ?? null,
         color: colour,
+        avatar: (userRow?.avatar_url as string | null | undefined) ?? undefined,
       },
     });
     session.allow(noteRoomId(noteId), canEdit ? session.FULL_ACCESS : session.READ_ACCESS);

@@ -6314,15 +6314,36 @@ function NotesPageInner() {
                       key={selectedNote.id}
                       noteId={selectedNote.id}
                       fallback={
+                        // Render the note's saved content immediately so
+                        // the user sees their note text the instant they
+                        // click it, instead of a blank "Loading editor…"
+                        // panel while the auth + Liveblocks handshake
+                        // happens in the background.
                         <div
                           className={cn(
-                            "flex w-full items-center justify-center rounded-xl border border-border/40 bg-muted/20 text-sm text-muted-foreground",
+                            "relative w-full overflow-y-auto rounded-xl border border-border/60 bg-card shadow-sm ring-1 ring-black/5 [overflow-wrap:anywhere]",
                             noteBodyFullscreen
                               ? "min-h-0 flex-1"
                               : "min-h-[420px] sm:min-h-[480px]",
                           )}
+                          aria-busy="true"
                         >
-                          Loading editor…
+                          {selectedNote.content ? (
+                            <div
+                              className="prose prose-sm sm:prose-base dark:prose-invert max-w-none px-3 py-4 collab-prose select-text"
+                              dangerouslySetInnerHTML={{
+                                __html: selectedNote.content,
+                              }}
+                            />
+                          ) : (
+                            <div className="flex h-full min-h-[200px] items-center justify-center px-3 py-4 text-sm text-muted-foreground">
+                              Opening note…
+                            </div>
+                          )}
+                          <div className="pointer-events-none absolute bottom-2 right-2 flex items-center gap-1.5 rounded-full border border-border/60 bg-background/80 px-2 py-0.5 text-[10px] font-medium text-muted-foreground shadow-sm backdrop-blur">
+                            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
+                            Connecting…
+                          </div>
                         </div>
                       }
                     >

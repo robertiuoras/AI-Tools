@@ -51,6 +51,7 @@ import * as Y from "yjs";
 import { LiveblocksYjsProvider } from "@liveblocks/yjs";
 import { useRoom, useOthers, useSelf } from "@liveblocks/react";
 import { useAuthSession } from "@/components/AuthSessionProvider";
+import { useUserProfile } from "@/components/UserProfileProvider";
 import { cn } from "@/lib/utils";
 
 /**
@@ -118,9 +119,18 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Prefer the locally-cached profile so renames show up instantly in the
+  // collaboration cursor / presence bar without waiting for the room to
+  // re-issue an auth token. Falls back to the server-provided session info.
+  const { profile } = useUserProfile();
   const userColour = (self?.info as any)?.color ?? "#6366f1";
   const userName =
-    (self?.info as any)?.name ?? (self?.info as any)?.email ?? "Anonymous";
+    profile?.name?.trim() ||
+    (self?.info as any)?.name ||
+    (self?.info as any)?.email ||
+    "Anonymous";
+  const userAvatar =
+    profile?.avatar_url ?? ((self?.info as any)?.avatar as string | null) ?? null;
 
   const editor = useEditor(
     {
@@ -396,6 +406,38 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
     };
   }, [flushSave]);
 
+  /*
+   * Preview overlay: while the editor is mounting OR the provider hasn't
+   * finished its first sync, the live editor surface is empty (the Y.Doc
+   * hasn't been populated yet). Showing a blank rectangle for ~300-1500ms
+   * is jarring, so we overlay the saved HTML on top of the editor and
+   * remove it the moment we see real content. This gives "instant content"
+   * perception without bypassing any of the seed/sync safety logic.
+   */
+  const [editorHasContent, setEditorHasContent] = useState(false);
+  useEffect(() => {
+    if (!editor) return;
+    const check = () => {
+      // ProseMirror's empty doc has size 2 (start/end tokens).
+      if (editor.state.doc.content.size > 2) setEditorHasContent(true);
+    };
+    check();
+    editor.on("update", check);
+    editor.on("create", check);
+    editor.on("transaction", check);
+    return () => {
+      editor.off("update", check);
+      editor.off("create", check);
+      editor.off("transaction", check);
+    };
+  }, [editor]);
+
+  const showLoadingPreview =
+    !!initialHtml &&
+    initialHtml.trim().length > 0 &&
+    !editorHasContent &&
+    (!editor || !providerSynced);
+
   return (
     <div className={cn("flex flex-col", className)}>
       <PresenceBar />
@@ -409,6 +451,22 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
         }}
       >
         <EditorContent editor={editor} className="flex-1" />
+        {showLoadingPreview ? (
+          <div
+            className="pointer-events-none absolute inset-0 z-10 overflow-y-auto rounded-xl bg-gradient-to-b from-background to-muted/10"
+            aria-busy="true"
+            aria-label="Loading note content"
+          >
+            <div
+              className="prose prose-sm sm:prose-base dark:prose-invert max-w-none px-3 py-4 collab-prose"
+              dangerouslySetInnerHTML={{ __html: initialHtml }}
+            />
+            <div className="pointer-events-none sticky bottom-2 ml-auto mr-2 flex w-fit items-center gap-1.5 rounded-full border border-border/60 bg-background/80 px-2 py-0.5 text-[10px] font-medium text-muted-foreground shadow-sm backdrop-blur">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
+              Connecting…
+            </div>
+          </div>
+        ) : null}
       </div>
       {!canEdit ? (
         <div className="mt-2 text-xs text-muted-foreground">
@@ -584,14 +642,28 @@ function firstWord(name: string): string {
 function PresenceBar() {
   const others = useOthers();
   const self = useSelf();
+  // Local profile is the source of truth for OUR avatar/name (the
+  // server-side presence info may be stale until a re-auth).
+  const { profile } = useUserProfile();
 
   const all = useMemo(() => {
-    const list: Array<{ id: string; name: string; color: string; isSelf: boolean }> = [];
+    const list: Array<{
+      id: string;
+      name: string;
+      color: string;
+      avatar: string | null;
+      isSelf: boolean;
+    }> = [];
     if (self) {
       list.push({
         id: String((self as any).connectionId ?? "self"),
-        name: (self.info as any)?.name ?? "You",
+        name:
+          profile?.name?.trim() ||
+          (self.info as any)?.name ||
+          "You",
         color: (self.info as any)?.color ?? "#6366f1",
+        avatar:
+          profile?.avatar_url ?? ((self.info as any)?.avatar as string | null) ?? null,
         isSelf: true,
       });
     }
@@ -600,11 +672,12 @@ function PresenceBar() {
         id: String(o.connectionId),
         name: (o.info as any)?.name ?? "Anonymous",
         color: (o.info as any)?.color ?? "#94a3b8",
+        avatar: ((o.info as any)?.avatar as string | null) ?? null,
         isSelf: false,
       });
     }
     return list;
-  }, [others, self]);
+  }, [others, self, profile?.name, profile?.avatar_url]);
 
   if (all.length === 0) return null;
 
@@ -615,10 +688,19 @@ function PresenceBar() {
           <div
             key={p.id}
             title={p.isSelf ? `${p.name} (you)` : p.name}
-            className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-background text-[11px] font-semibold text-white shadow-sm"
+            className="flex h-7 w-7 items-center justify-center overflow-hidden rounded-full border-2 border-background text-[11px] font-semibold text-white shadow-sm"
             style={{ backgroundColor: p.color }}
           >
-            {initials(p.name)}
+            {p.avatar ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={p.avatar}
+                alt=""
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              initials(p.name)
+            )}
           </div>
         ))}
         {all.length > 6 ? (

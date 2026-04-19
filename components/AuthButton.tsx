@@ -1,8 +1,14 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuthSession } from '@/components/AuthSessionProvider'
+import {
+  useUserProfile,
+  userInitials,
+  avatarColor,
+} from '@/components/UserProfileProvider'
+import { ProfileSettingsDialog } from '@/components/ProfileSettingsDialog'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -14,8 +20,17 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Loader2, LogIn, LogOut, User, Mail } from 'lucide-react'
+import {
+  Loader2,
+  LogIn,
+  LogOut,
+  User,
+  Mail,
+  Settings as SettingsIcon,
+  ChevronDown,
+} from 'lucide-react'
 import Link from 'next/link'
+import { cn } from '@/lib/utils'
 
 export function AuthButton() {
   const { user, isReady } = useAuthSession()
@@ -121,17 +136,7 @@ export function AuthButton() {
   }
 
   if (user) {
-    return (
-      <div className="flex items-center gap-2">
-        <span className="text-sm text-muted-foreground hidden sm:inline">
-          {user.email}
-        </span>
-        <Button variant="ghost" size="sm" onClick={handleLogout}>
-          <LogOut className="h-4 w-4 mr-2" />
-          Logout
-        </Button>
-      </div>
-    )
+    return <UserMenu onLogout={handleLogout} />
   }
 
   return (
@@ -329,6 +334,133 @@ export function AuthButton() {
         </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+/**
+ * Header user pill: avatar (or initials) + dropdown with settings + logout.
+ * Replaces the old "raw email + Logout button" so the header looks polished
+ * and editable. Updates the moment the profile changes (broadcast event).
+ */
+function UserMenu({ onLogout }: { onLogout: () => Promise<void> }) {
+  const { user } = useAuthSession()
+  const { profile } = useUserProfile()
+  const [open, setOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  // Click-away + Esc close.
+  useEffect(() => {
+    if (!open) return
+    const onPointer = (e: MouseEvent) => {
+      if (!ref.current) return
+      if (!ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onPointer)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onPointer)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const displayName =
+    profile?.name?.trim() ||
+    (user?.user_metadata as Record<string, string> | undefined)?.name?.trim() ||
+    user?.email?.split('@')[0] ||
+    'You'
+  const initials = userInitials(profile?.name, profile?.email ?? user?.email)
+  const bgColor = avatarColor(profile?.id ?? user?.id ?? user?.email)
+  const avatarUrl = profile?.avatar_url ?? null
+
+  return (
+    <>
+      <div ref={ref} className="relative">
+        <button
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          onClick={() => setOpen((s) => !s)}
+          title={displayName}
+          className={cn(
+            'group flex items-center gap-2 rounded-full border border-border/60 bg-background/60 py-1 pl-1 pr-2 text-sm font-medium text-foreground transition-colors hover:bg-muted',
+            open && 'bg-muted ring-1 ring-primary/30',
+          )}
+        >
+          <span
+            className="flex h-7 w-7 items-center justify-center overflow-hidden rounded-full text-[11px] font-semibold text-white shadow-sm"
+            style={{ backgroundColor: bgColor }}
+          >
+            {avatarUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={avatarUrl}
+                alt=""
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              <span aria-hidden>{initials}</span>
+            )}
+          </span>
+          <span className="hidden max-w-[140px] truncate text-xs sm:inline">
+            {displayName}
+          </span>
+          <ChevronDown
+            className={cn(
+              'h-3 w-3 text-muted-foreground transition-transform',
+              open && 'rotate-180',
+            )}
+            aria-hidden
+          />
+        </button>
+
+        {open ? (
+          <div
+            role="menu"
+            className="absolute right-0 top-full z-[140] mt-1.5 w-56 overflow-hidden rounded-xl border border-border/70 bg-popover/95 p-1 shadow-2xl ring-1 ring-black/5 backdrop-blur"
+          >
+            <div className="border-b border-border/60 px-3 py-2">
+              <p className="truncate text-xs font-semibold text-foreground">
+                {displayName}
+              </p>
+              <p className="truncate text-[11px] text-muted-foreground">
+                {profile?.email ?? user?.email}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false)
+                setSettingsOpen(true)
+              }}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-foreground/90 hover:bg-muted"
+            >
+              <SettingsIcon className="h-3.5 w-3.5 text-muted-foreground" />
+              Profile settings
+            </button>
+            <div className="my-1 h-px bg-border/60" role="separator" />
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false)
+                void onLogout()
+              }}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-foreground/90 hover:bg-muted"
+            >
+              <LogOut className="h-3.5 w-3.5 text-muted-foreground" />
+              Sign out
+            </button>
+          </div>
+        ) : null}
+      </div>
+      <ProfileSettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+      />
+    </>
   )
 }
 

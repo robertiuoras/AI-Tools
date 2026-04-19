@@ -12,6 +12,7 @@ import { AdminNavLink } from '@/components/AdminNavLink'
 import { NotificationsBell } from '@/components/NotificationsBell'
 import { ToolsCatalogProvider } from '@/components/ToolsCatalogProvider'
 import { AuthSessionProvider } from '@/components/AuthSessionProvider'
+import { UserProfileProvider } from '@/components/UserProfileProvider'
 
 const plusJakartaSans = Plus_Jakarta_Sans({
   subsets: ['latin'],
@@ -38,6 +39,7 @@ export default function RootLayout({
       <body className={plusJakartaSans.className} suppressHydrationWarning>
         <ToastProvider>
           <AuthSessionProvider>
+          <UserProfileProvider>
           <ToolsCatalogProvider>
             <div className="min-h-screen bg-background">
               <nav className="sticky top-0 z-40 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -56,6 +58,7 @@ export default function RootLayout({
               {children}
             </div>
           </ToolsCatalogProvider>
+          </UserProfileProvider>
           </AuthSessionProvider>
           <Analytics />
           <SpeedInsights />
