@@ -99,6 +99,33 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
             CollaborationCursor.configure({
               provider: providerRef.current,
               user: { name: userName, color: userColour },
+              /*
+               * Custom render: replaces the default heavy "sticky note"
+               * label with a minimal pill that floats just above the
+               * caret. The label fades out shortly after appearing so
+               * it doesn't permanently obstruct the text the remote
+               * user is editing — see the CSS rules below.
+               */
+              render: (user) => {
+                const safeName = String(user.name ?? "Anonymous");
+                const safeColour =
+                  typeof user.color === "string" && /^#[0-9a-f]{3,8}$/i.test(user.color)
+                    ? user.color
+                    : "#6366f1";
+
+                const cursor = document.createElement("span");
+                cursor.classList.add("collab-caret");
+                cursor.style.borderColor = safeColour;
+
+                const label = document.createElement("span");
+                label.classList.add("collab-caret-label");
+                label.style.backgroundColor = safeColour;
+                label.textContent = firstWord(safeName);
+                label.setAttribute("data-fullname", safeName);
+
+                cursor.appendChild(label);
+                return cursor;
+              },
             }),
           ]
         : [
@@ -329,7 +356,7 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
   return (
     <div className={className}>
       <PresenceBar />
-      <div className="rounded-md border border-border/40 bg-background/60 px-3 py-2">
+      <div className="collab-editor-shell rounded-md border border-border/40 bg-background/60 px-3 py-2">
         <EditorContent editor={editor} />
       </div>
       {!canEdit ? (
@@ -338,8 +365,74 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
           make changes.
         </div>
       ) : null}
+      {/*
+       * Cursor styles. Scoped via .collab-editor-shell so they can't leak
+       * into other ProseMirror instances on the page. The pill auto-fades
+       * a couple of seconds after the cursor stops moving — but reappears
+       * instantly on hover so you can always identify who's where.
+       */}
+      <style jsx global>{`
+        .collab-editor-shell .collab-caret {
+          position: relative;
+          display: inline-block;
+          margin-left: -1px;
+          margin-right: -1px;
+          border-left: 2px solid;
+          border-right: 0;
+          word-break: normal;
+          pointer-events: none;
+        }
+        .collab-editor-shell .collab-caret-label {
+          position: absolute;
+          top: -1.4em;
+          left: -2px;
+          padding: 1px 6px;
+          font-size: 10px;
+          font-weight: 600;
+          line-height: 1.3;
+          color: #fff;
+          border-radius: 9999px;
+          white-space: nowrap;
+          user-select: none;
+          pointer-events: auto;
+          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+          letter-spacing: 0.01em;
+          opacity: 0.95;
+          transform-origin: bottom left;
+          transition: opacity 220ms ease-out, transform 220ms ease-out;
+          animation: collab-caret-pop 220ms ease-out;
+        }
+        .collab-editor-shell .collab-caret-label::before {
+          content: "";
+          position: absolute;
+          left: 4px;
+          bottom: -3px;
+          width: 6px;
+          height: 6px;
+          background: inherit;
+          transform: rotate(45deg);
+          border-radius: 1px;
+        }
+        .collab-editor-shell .collab-caret:hover .collab-caret-label,
+        .collab-editor-shell .collab-caret-label:hover {
+          opacity: 1;
+          transform: scale(1.04);
+        }
+        @keyframes collab-caret-pop {
+          0%   { opacity: 0; transform: translateY(2px) scale(0.85); }
+          100% { opacity: 0.95; transform: translateY(0) scale(1); }
+        }
+      `}</style>
     </div>
   );
+}
+
+/** First word of a name, capped to ~14 chars so the pill stays compact. */
+function firstWord(name: string): string {
+  const trimmed = (name || "").trim();
+  if (!trimmed) return "Anon";
+  const first = trimmed.split(/\s+/)[0];
+  return first.length > 14 ? first.slice(0, 13) + "…" : first;
 }
 
 /**
