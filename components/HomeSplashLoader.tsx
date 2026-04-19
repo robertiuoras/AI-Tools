@@ -112,26 +112,17 @@ export function HomeSplashLoader({ loading }: HomeSplashLoaderProps) {
 
           <div className="flex flex-col items-center gap-8 text-center">
 
-            {/* Brand plate with a single, gentle halo ripple. We deliberately
-                dropped the dual orbit rings + satellite tracer that used to
-                live here — they read as busy/decorative. The premium look is
-                a single quiet pulse drawing the eye straight to the mark. */}
+            {/* Brand plate with a single, gentle halo ripple. The mark is a
+                self-contained gradient tile, so we no longer wrap it in an
+                additional gradient div — that used to clash with the icon
+                art. One quiet halo pulse draws the eye to the logo. */}
             <div className="relative flex h-24 w-24 items-center justify-center">
               {/* Outer halo — soft expanding ripple (CSS keyframe). */}
               <div
                 className="splash-halo-pulse pointer-events-none absolute h-20 w-20 rounded-2xl bg-indigo-500/15 blur-md dark:bg-indigo-400/15"
                 aria-hidden
               />
-              {/* Static inner ring — gives the plate a subtle frame without
-                  spinning. */}
-              <div
-                className="pointer-events-none absolute inset-1 rounded-[1.4rem] ring-1 ring-inset ring-white/10"
-                aria-hidden
-              />
-              {/* Icon plate — same BrandMark as the Hero for visual cohesion */}
-              <div className="relative flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 via-violet-500 to-purple-600 shadow-lg shadow-indigo-500/35 ring-1 ring-white/15">
-                <BrandMark size={40} tone="onDark" />
-              </div>
+              <BrandMark size={72} tone="onDark" />
             </div>
 
             {/* Title + cycling message — message styled like a status feed line */}

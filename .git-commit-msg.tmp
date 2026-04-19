@@ -1,0 +1,15 @@
+brand: replace stacked-tile mark with new gradient "A" app icon
+
+- New logo (Nano Banana / Gemini): squircle tile in the site's
+  indigo→violet→fuchsia gradient with a clean white "A" monogram and
+  the existing gold "live" accent dot baked in. Saved at
+  public/brand-logo.png and app/icon.png so Next auto-serves it as
+  favicon.
+- BrandMark rewritten to render the PNG via next/image while keeping
+  the existing prop API (size / tone / static / className), so every
+  call site (Hero, splash loader, etc.) keeps working untouched. Outer
+  fuchsia halo preserves the "live" pulse without animating the icon.
+- HomeSplashLoader: dropped the redundant gradient wrapper + inner
+  ring around the mark — the new icon is a self-contained tile, so
+  the wrapper was double-stacking gradients. Bumped splash mark to
+  72px and kept the soft halo ripple.
