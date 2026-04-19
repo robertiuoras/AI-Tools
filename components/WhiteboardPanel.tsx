@@ -10,9 +10,28 @@ import {
   X,
   Loader2,
   AlertTriangle,
+  Maximize2,
+  Minimize2,
+  Settings as SettingsIcon,
+  PanelLeft,
+  PanelRight,
+  PanelTop,
+  PanelBottom,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/toaster";
+
+/** Where the Excalidraw shape toolbar sits relative to the canvas. */
+export type ToolbarPosition = "top" | "bottom" | "left" | "right";
+
+const TOOLBAR_POSITION_STORAGE_KEY = "whiteboard:toolbarPosition";
+const FULLSCREEN_STORAGE_KEY = "whiteboard:fullscreen";
+
+function readToolbarPositionFromStorage(): ToolbarPosition {
+  if (typeof window === "undefined") return "top";
+  const v = window.localStorage.getItem(TOOLBAR_POSITION_STORAGE_KEY);
+  return v === "bottom" || v === "left" || v === "right" ? v : "top";
+}
 
 interface BoardMeta {
   id: string;
@@ -47,6 +66,69 @@ export function WhiteboardPanel({ token }: Props) {
   const [confirmDelete, setConfirmDelete] = useState<BoardMeta | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const { addToast } = useToast();
+
+  // ── Layout preferences (persisted) ──────────────────────────────────
+  // Fullscreen makes the whole panel cover the viewport (Miro-style).
+  // Toolbar position lets users put Excalidraw's shape toolbar where
+  // they prefer (top/bottom/left/right). Both persist in localStorage.
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [toolbarPosition, setToolbarPosition] = useState<ToolbarPosition>("top");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsRef = useRef<HTMLDivElement>(null);
+
+  // Hydrate prefs after mount (avoid SSR mismatch).
+  useEffect(() => {
+    setToolbarPosition(readToolbarPositionFromStorage());
+    if (typeof window !== "undefined") {
+      setIsFullscreen(
+        window.localStorage.getItem(FULLSCREEN_STORAGE_KEY) === "1",
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(TOOLBAR_POSITION_STORAGE_KEY, toolbarPosition);
+  }, [toolbarPosition]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(FULLSCREEN_STORAGE_KEY, isFullscreen ? "1" : "0");
+    // Lock body scroll while in fullscreen so the canvas can use 100dvh
+    // without the page scrolling underneath it.
+    if (isFullscreen) {
+      const prev = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+      return () => {
+        document.body.style.overflow = prev;
+      };
+    }
+  }, [isFullscreen]);
+
+  // Esc exits fullscreen (and closes the settings popover).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (settingsOpen) {
+        setSettingsOpen(false);
+      } else if (isFullscreen) {
+        setIsFullscreen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isFullscreen, settingsOpen]);
+
+  // Click-away for the settings popover.
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const onPointer = (e: MouseEvent) => {
+      if (!settingsRef.current) return;
+      if (!settingsRef.current.contains(e.target as Node)) setSettingsOpen(false);
+    };
+    document.addEventListener("mousedown", onPointer);
+    return () => document.removeEventListener("mousedown", onPointer);
+  }, [settingsOpen]);
 
   // Fetch boards once on mount.
   // token is guaranteed non-null here — the notes page only renders WhiteboardPanel
@@ -180,8 +262,20 @@ export function WhiteboardPanel({ token }: Props) {
   );
 
   return (
-    <div className="flex flex-col" style={{ height: "calc(100vh - 220px)", minHeight: 520 }}>
-      {/* Board tabs */}
+    <div
+      className={cn(
+        "flex flex-col",
+        isFullscreen
+          ? "fixed inset-0 z-[120] bg-background p-2 sm:p-3"
+          : "",
+      )}
+      style={
+        isFullscreen
+          ? { height: "100dvh", minHeight: "100dvh" }
+          : { height: "calc(100vh - 220px)", minHeight: 520 }
+      }
+    >
+      {/* Board tabs + layout controls */}
       <div className="flex items-center gap-1 overflow-x-auto border border-border rounded-t-xl bg-muted/30 px-2 py-1.5 shrink-0">
         {loading ? (
           <div className="flex h-8 items-center gap-2 px-2 text-xs text-muted-foreground">
@@ -263,6 +357,89 @@ export function WhiteboardPanel({ token }: Props) {
         >
           <Plus className="h-3.5 w-3.5" />
         </button>
+
+        {/* Right-aligned layout controls: settings popover + fullscreen toggle. */}
+        <div className="ml-auto flex shrink-0 items-center gap-1 pl-2">
+          <div className="relative" ref={settingsRef}>
+            <button
+              type="button"
+              title="Whiteboard settings"
+              aria-haspopup="menu"
+              aria-expanded={settingsOpen}
+              onClick={() => setSettingsOpen((s) => !s)}
+              className={cn(
+                "flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground",
+                settingsOpen &&
+                  "bg-background/80 text-foreground ring-1 ring-primary/30",
+              )}
+            >
+              <SettingsIcon className="h-3.5 w-3.5" />
+            </button>
+            {settingsOpen ? (
+              <div
+                role="menu"
+                className="absolute right-0 top-full z-[130] mt-1.5 w-60 overflow-hidden rounded-xl border border-border/70 bg-popover/95 shadow-2xl ring-1 ring-black/5 backdrop-blur"
+              >
+                <div className="border-b border-border/60 px-3 py-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Toolbar position
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground/80">
+                    Where Excalidraw&apos;s shape toolbar sits.
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-1 p-2">
+                  {(
+                    [
+                      { value: "top", label: "Top", icon: <PanelTop className="h-3.5 w-3.5" /> },
+                      { value: "bottom", label: "Bottom", icon: <PanelBottom className="h-3.5 w-3.5" /> },
+                      { value: "left", label: "Left", icon: <PanelLeft className="h-3.5 w-3.5" /> },
+                      { value: "right", label: "Right", icon: <PanelRight className="h-3.5 w-3.5" /> },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setToolbarPosition(opt.value)}
+                      className={cn(
+                        "flex items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-xs font-medium transition-colors",
+                        toolbarPosition === opt.value
+                          ? "border-primary/40 bg-primary/10 text-primary"
+                          : "border-border/60 text-foreground/80 hover:bg-muted hover:text-foreground",
+                      )}
+                    >
+                      {opt.icon}
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="border-t border-border/60 px-3 py-2 text-[11px] text-muted-foreground">
+                  Tip: press{" "}
+                  <kbd className="rounded border border-border bg-muted px-1 py-0.5 font-mono">
+                    Esc
+                  </kbd>{" "}
+                  to exit fullscreen.
+                </div>
+              </div>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            title={isFullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
+            aria-pressed={isFullscreen}
+            onClick={() => setIsFullscreen((v) => !v)}
+            className={cn(
+              "flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground",
+              isFullscreen && "bg-background/80 text-foreground ring-1 ring-primary/30",
+            )}
+          >
+            {isFullscreen ? (
+              <Minimize2 className="h-3.5 w-3.5" />
+            ) : (
+              <Maximize2 className="h-3.5 w-3.5" />
+            )}
+          </button>
+        </div>
       </div>
 
       {/*
@@ -271,9 +448,20 @@ export function WhiteboardPanel({ token }: Props) {
         which makes the UI appear blank when interacting.
         Use relative+flex-1 so the absolutely-positioned canvas fills the space.
       */}
-      <div className="relative flex-1 border-x border-b border-border rounded-b-xl" style={{ minHeight: 0 }}>
+      <div
+        className={cn(
+          "relative flex-1 border-x border-b border-border",
+          isFullscreen ? "rounded-b-xl" : "rounded-b-xl",
+        )}
+        style={{ minHeight: 0 }}
+      >
         {activeBoardId ? (
-          <WhiteboardCanvas key={activeBoardId} token={token} boardId={activeBoardId} />
+          <WhiteboardCanvas
+            key={activeBoardId}
+            token={token}
+            boardId={activeBoardId}
+            toolbarPosition={toolbarPosition}
+          />
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading…

@@ -5,9 +5,13 @@ import { Excalidraw } from "@excalidraw/excalidraw";
 import "@excalidraw/excalidraw/index.css";
 import { Loader2 } from "lucide-react";
 
+export type ToolbarPosition = "top" | "bottom" | "left" | "right";
+
 interface Props {
   token: string;
   boardId: string;
+  /** Where the Excalidraw shape toolbar sits. Defaults to "top". */
+  toolbarPosition?: ToolbarPosition;
 }
 
 const AUTOSAVE_INTERVAL_MS = 30_000;
@@ -68,7 +72,11 @@ async function postSave(token: string, boardId: string, snapshot: PersistedSnaps
   if (!res.ok) console.warn("[whiteboard] Save failed:", res.status);
 }
 
-export default function WhiteboardInner({ token, boardId }: Props) {
+export default function WhiteboardInner({
+  token,
+  boardId,
+  toolbarPosition = "top",
+}: Props) {
   const tokenRef = useRef(token);
   const boardIdRef = useRef(boardId);
   tokenRef.current = token;
@@ -192,10 +200,18 @@ export default function WhiteboardInner({ token, boardId }: Props) {
   }
 
   return (
-    <div className="excalidraw-host h-full w-full" style={{ position: "absolute", inset: 0 }}>
+    <div
+      className="excalidraw-host h-full w-full"
+      data-toolbar-position={toolbarPosition}
+      style={{ position: "absolute", inset: 0 }}
+    >
       {/* Excalidraw renders its own toolbar/menus inside this container.
           We size it absolutely so it fills the panel; no parent overflow:hidden
-          should be applied at the panel level (would clip the popovers). */}
+          should be applied at the panel level (would clip the popovers).
+
+          The data-toolbar-position attribute drives the CSS overrides below
+          which reposition the main shape toolbar (.App-toolbar) so users
+          can put it on any edge of the canvas — Miro-style preference. */}
       <Excalidraw
         initialData={initialData as any}
         onChange={handleChange as any}
@@ -207,6 +223,63 @@ export default function WhiteboardInner({ token, boardId }: Props) {
           },
         }}
       />
+      <style jsx global>{`
+        /* ────────────────────────────────────────────────────────────────
+           Excalidraw shape-toolbar repositioning.
+           Excalidraw's main shape toolbar lives inside .App-toolbar wrapped
+           in .App-toolbar-content. By default it's docked top-center. We
+           override its outer container (.layer-ui__wrapper__top-right's
+           sibling = .App-menu_top center column) to move the toolbar to a
+           different edge.
+
+           We deliberately scope these to .excalidraw-host[data-toolbar-position=…]
+           so they can't leak across the page if multiple Excalidraw
+           instances ever coexist.
+           ──────────────────────────────────────────────────────────────── */
+
+        /* BOTTOM */
+        .excalidraw-host[data-toolbar-position="bottom"] .App-toolbar {
+          position: fixed;
+          left: 50%;
+          bottom: 16px;
+          top: auto;
+          transform: translateX(-50%);
+          z-index: 5;
+        }
+        /* Hide the default top-center slot when we've moved it. */
+        .excalidraw-host[data-toolbar-position="bottom"] .App-menu_top
+          > .Stack.Stack_horizontal:has(.App-toolbar) {
+          visibility: hidden;
+        }
+
+        /* LEFT — vertical orientation. */
+        .excalidraw-host[data-toolbar-position="left"] .App-toolbar,
+        .excalidraw-host[data-toolbar-position="right"] .App-toolbar {
+          position: fixed;
+          top: 50%;
+          transform: translateY(-50%);
+          flex-direction: column;
+          z-index: 5;
+        }
+        .excalidraw-host[data-toolbar-position="left"] .App-toolbar {
+          left: 16px;
+          right: auto;
+        }
+        .excalidraw-host[data-toolbar-position="right"] .App-toolbar {
+          right: 16px;
+          left: auto;
+        }
+        .excalidraw-host[data-toolbar-position="left"] .App-toolbar .App-toolbar-content,
+        .excalidraw-host[data-toolbar-position="right"] .App-toolbar .App-toolbar-content {
+          flex-direction: column;
+        }
+        .excalidraw-host[data-toolbar-position="left"] .App-menu_top
+          > .Stack.Stack_horizontal:has(.App-toolbar),
+        .excalidraw-host[data-toolbar-position="right"] .App-menu_top
+          > .Stack.Stack_horizontal:has(.App-toolbar) {
+          visibility: hidden;
+        }
+      `}</style>
     </div>
   );
 }
