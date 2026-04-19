@@ -385,23 +385,6 @@
     radial-gradient(circle at 1px 1px, hsl(var(--foreground) / 0.14) 1px, transparent 1.6px);
 }
 
-/* Splash icon: counter-rotating dashed orbit ring. */
-@keyframes orbit-spin-rev {
-  to { transform: rotate(-360deg); }
-}
-.orbit-spin-rev {
-  animation: orbit-spin-rev 14s linear infinite;
-}
-
-/* Splash icon: tiny satellite dot tracing the orbit ring. */
-@keyframes orbit-satellite {
-  to { transform: rotate(360deg) translate(0, 0); }
-}
-.orbit-satellite {
-  animation: orbit-satellite 4.2s linear infinite;
-  transform-origin: center;
-}
-
 /* ────────────────────────────────────────────────────────────────────────────
    Hero: dot-grid texture (light/dark) — ties Hero visually to the splash and
    pulls the page away from generic AI-SaaS gradients.
@@ -415,21 +398,35 @@
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
-   Brand mark: orbital tracers (used in Hero + Splash for visual cohesion).
+   Brand mark: single accent-dot pulse. Replaces the old orbital tracer
+   animations with one quiet, premium "live" signal — a halo that gently
+   ripples out from the gold corner dot. No spinning rings.
    ──────────────────────────────────────────────────────────────────────────── */
-@keyframes brand-orbit-cw {
-  to { transform: rotate(360deg); }
+@keyframes brand-accent-halo {
+  0%   { transform: scale(0.85); opacity: 0.85; }
+  70%  { transform: scale(1.6);  opacity: 0; }
+  100% { transform: scale(0.85); opacity: 0; }
 }
-@keyframes brand-orbit-ccw {
-  to { transform: rotate(-360deg); }
+.brand-accent-halo {
+  transform-origin: center;
+  transform-box: fill-box;
+  animation: brand-accent-halo 2.8s ease-out infinite;
 }
-@keyframes brand-pulse-core {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.18); opacity: 0.92; }
+
+/* ────────────────────────────────────────────────────────────────────────────
+   Splash icon: soft halo pulse around the brand plate. A single gentle
+   ripple replaces the previous double orbit ring + satellite dot — cleaner
+   silhouette, premium SaaS feel.
+   ──────────────────────────────────────────────────────────────────────────── */
+@keyframes splash-halo-pulse {
+  0%   { transform: scale(1);   opacity: 0.5; }
+  70%  { transform: scale(1.6); opacity: 0; }
+  100% { transform: scale(1);   opacity: 0; }
 }
-.brand-orbit-cw  { animation: brand-orbit-cw  9s linear infinite; transform-origin: center; }
-.brand-orbit-ccw { animation: brand-orbit-ccw 13s linear infinite; transform-origin: center; }
-.brand-pulse-core { animation: brand-pulse-core 2.4s ease-in-out infinite; transform-origin: center; }
+.splash-halo-pulse {
+  animation: splash-halo-pulse 2.6s ease-out infinite;
+  transform-origin: center;
+}
 
 /* ────────────────────────────────────────────────────────────────────────────
    RecentToolsTicker: seamless horizontal marquee, pauses on hover.
@@ -533,11 +530,8 @@
   .live-dot-core,
   .conic-spinner,
   .pill-rise,
-  .orbit-spin-rev,
-  .orbit-satellite,
-  .brand-orbit-cw,
-  .brand-orbit-ccw,
-  .brand-pulse-core,
+  .brand-accent-halo,
+  .splash-halo-pulse,
   .ticker-track,
   .tool-trace::before {
     animation: none !important;

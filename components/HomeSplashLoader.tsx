@@ -112,30 +112,20 @@ export function HomeSplashLoader({ loading }: HomeSplashLoaderProps) {
 
           <div className="flex flex-col items-center gap-8 text-center">
 
-            {/* Icon with twin orbit rings, pulse halo, and a satellite tracer dot */}
+            {/* Brand plate with a single, gentle halo ripple. We deliberately
+                dropped the dual orbit rings + satellite tracer that used to
+                live here — they read as busy/decorative. The premium look is
+                a single quiet pulse drawing the eye straight to the mark. */}
             <div className="relative flex h-24 w-24 items-center justify-center">
-              {/* Outer dashed orbit (clockwise, slow) */}
+              {/* Outer halo — soft expanding ripple (CSS keyframe). */}
               <div
-                className="absolute inset-0 animate-spin rounded-full border border-dashed border-indigo-400/45 dark:border-indigo-400/35"
-                style={{ animationDuration: "11s" }}
+                className="splash-halo-pulse pointer-events-none absolute h-20 w-20 rounded-2xl bg-indigo-500/15 blur-md dark:bg-indigo-400/15"
                 aria-hidden
               />
-              {/* Inner solid hairline orbit (counter-clockwise, slower) — adds a sense of mechanism */}
+              {/* Static inner ring — gives the plate a subtle frame without
+                  spinning. */}
               <div
-                className="orbit-spin-rev absolute inset-[10%] rounded-full border border-violet-400/35 dark:border-violet-300/30"
-                aria-hidden
-              />
-              {/* Satellite tracer dot — a single dot riding the outer orbit */}
-              <div
-                className="orbit-satellite absolute inset-0"
-                aria-hidden
-              >
-                <span className="absolute left-1/2 top-0 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-indigo-400 shadow-[0_0_8px_rgba(129,140,248,0.95)]" />
-              </div>
-              {/* Soft expanding halo */}
-              <div
-                className="absolute h-16 w-16 animate-ping rounded-full bg-indigo-500/12 dark:bg-indigo-400/10"
-                style={{ animationDuration: "2.4s" }}
+                className="pointer-events-none absolute inset-1 rounded-[1.4rem] ring-1 ring-inset ring-white/10"
                 aria-hidden
               />
               {/* Icon plate — same BrandMark as the Hero for visual cohesion */}

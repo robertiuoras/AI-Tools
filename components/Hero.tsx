@@ -2,8 +2,10 @@
 
 import { motion } from 'framer-motion'
 import Image from 'next/image'
+import { ArrowUpRight } from 'lucide-react'
 
 import { BrandMark } from '@/components/BrandMark'
+import { CountUp } from '@/components/CountUp'
 import { RecentToolsTicker } from '@/components/RecentToolsTicker'
 import type { Tool } from '@/lib/supabase'
 
@@ -101,9 +103,11 @@ export function Hero({ tools = [], toolsAddedTodayCount = 0 }: HeroProps) {
                 <>
                   <span aria-hidden className="hidden h-1 w-1 rounded-full bg-white/30 sm:inline-block" />
                   <span className="inline-flex items-center gap-1.5 text-white/75">
-                    <span className="tabular-nums font-semibold text-white">
-                      {totalTools.toLocaleString()}
-                    </span>
+                    <CountUp
+                      value={totalTools}
+                      duration={1400}
+                      className="tabular-nums font-semibold text-white"
+                    />
                     tools tracked
                   </span>
                 </>
@@ -121,10 +125,15 @@ export function Hero({ tools = [], toolsAddedTodayCount = 0 }: HeroProps) {
             className="lg:col-span-5"
             aria-label="Live catalog status"
           >
-            <div className="relative overflow-hidden rounded-2xl border border-white/15 bg-white/[0.06] p-5 shadow-[0_20px_60px_-20px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:p-6">
+            <div className="group relative overflow-hidden rounded-2xl border border-white/15 bg-gradient-to-br from-white/[0.09] via-white/[0.05] to-white/[0.03] p-5 shadow-[0_20px_60px_-20px_rgba(0,0,0,0.45)] backdrop-blur-xl transition-transform duration-300 ease-out will-change-transform sm:p-6 hover:-translate-y-0.5">
               {/* Subtle inner top highlight */}
               <div
                 className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/40 to-transparent"
+                aria-hidden
+              />
+              {/* Soft corner glow that lifts the card and reads as "premium". */}
+              <div
+                className="pointer-events-none absolute -right-16 -top-16 h-40 w-40 rounded-full bg-fuchsia-400/20 blur-3xl"
                 aria-hidden
               />
 
@@ -142,29 +151,44 @@ export function Hero({ tools = [], toolsAddedTodayCount = 0 }: HeroProps) {
                 </span>
               </div>
 
-              {/* Stats row */}
-              <div className="mt-5 grid grid-cols-2 gap-4">
-                <div>
+              {/* Stats row — both numbers count up on first paint so the card
+                  feels alive without the visitor having to do anything. The
+                  subtle white divider between the two columns adds structure. */}
+              <div className="mt-5 grid grid-cols-2 gap-4 divide-x divide-white/10">
+                <div className="pr-4">
                   <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-white/55">
                     Tracked
                   </div>
                   <div className="mt-1 flex items-baseline gap-1.5">
-                    <span className="text-3xl font-semibold tabular-nums text-white sm:text-4xl">
-                      {totalTools > 0 ? totalTools.toLocaleString() : '—'}
-                    </span>
+                    <CountUp
+                      value={totalTools}
+                      duration={1500}
+                      className="text-3xl font-semibold tabular-nums text-white sm:text-4xl"
+                    />
                     <span className="text-xs font-medium text-white/55">tools</span>
                   </div>
                 </div>
-                <div>
-                  <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-white/55">
-                    Last 24h
+                <div className="pl-4">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-white/55">
+                      Last 24h
+                    </span>
+                    {toolsAddedTodayCount > 0 ? (
+                      <span
+                        aria-hidden
+                        className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-400/20 text-emerald-200"
+                      >
+                        <ArrowUpRight className="h-2.5 w-2.5" strokeWidth={2.5} />
+                      </span>
+                    ) : null}
                   </div>
                   <div className="mt-1 flex items-baseline gap-1.5">
-                    <span className="text-3xl font-semibold tabular-nums text-white sm:text-4xl">
-                      {toolsAddedTodayCount > 0
-                        ? `+${toolsAddedTodayCount}`
-                        : '—'}
-                    </span>
+                    <CountUp
+                      value={toolsAddedTodayCount}
+                      duration={1100}
+                      prefix="+"
+                      className="text-3xl font-semibold tabular-nums text-white sm:text-4xl"
+                    />
                     <span className="text-xs font-medium text-white/55">added</span>
                   </div>
                 </div>
