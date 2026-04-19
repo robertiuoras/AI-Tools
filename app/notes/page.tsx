@@ -1482,11 +1482,16 @@ function NotesPageInner() {
     };
   }, [selectedNoteId, token, isSharedNoteSelected, notes]);
 
-  /** True when the note is collaborative — either shared with me or shared by me. */
-  const useCollaborativeEditor = useMemo(
-    () => isSharedNoteSelected || selectedOwnedShareCount > 0,
-    [isSharedNoteSelected, selectedOwnedShareCount],
-  );
+  /**
+   * The Tiptap-based editor is the canonical editor for every note now —
+   * shared or solo. Solo notes still spin up a single-user Liveblocks room
+   * so the same toolbar, right-click menu, prose styles, and autosave
+   * pipeline are used everywhere (no jarring "design change" between read
+   * and edit mode, no two competing toolbars). The room cost is trivial
+   * (1 connection per active tab) and presence cleanly upgrades the
+   * moment the note is shared.
+   */
+  const useCollaborativeEditor = true;
 
   /** Whether the current user can write to the note (edit-permission share or owner). */
   const canEditSelectedNote = useMemo(() => {
@@ -5450,7 +5455,13 @@ function NotesPageInner() {
                           )}
                         </Button>
 
-                        {!isEditing && (
+                        {/* Find-in-note targeted the legacy contenteditable.
+                            With every note now on the Tiptap collab editor
+                            (which doesn't expose the same DOM surface),
+                            we hide this button to avoid a non-functional
+                            control. Toolbar's own search/replace can come
+                            later if needed. */}
+                        {!useCollaborativeEditor && !isEditing && (
                           <Button
                             type="button"
                             size="sm"
@@ -6289,17 +6300,29 @@ function NotesPageInner() {
                   </div>
                   {useCollaborativeEditor ? (
                     /*
-                     * Realtime collaborative editor (Tiptap + Yjs over
-                     * Liveblocks). Used whenever the note is shared in
-                     * either direction. Always "live" — there's no
-                     * separate read/edit mode because remote edits
-                     * stream in continuously.
+                     * Tiptap editor — used for every note. Each note gets
+                     * its own Liveblocks room so the same toolbar, prose
+                     * styles, and right-click menu apply everywhere. When
+                     * the note is shared, presence + live cursors light
+                     * up automatically with no UI change.
+                     *
+                     * key={selectedNote.id} forces a fresh Y.Doc + Tiptap
+                     * instance on every note switch — sharing the same
+                     * editor across notes would mix their content.
                      */
                     <LiveblocksRoomProvider
+                      key={selectedNote.id}
                       noteId={selectedNote.id}
                       fallback={
-                        <div className="rounded-lg bg-muted/30 px-3 py-6 text-center text-sm text-muted-foreground">
-                          Connecting collaborative session…
+                        <div
+                          className={cn(
+                            "flex w-full items-center justify-center rounded-xl border border-border/40 bg-muted/20 text-sm text-muted-foreground",
+                            noteBodyFullscreen
+                              ? "min-h-0 flex-1"
+                              : "min-h-[420px] sm:min-h-[480px]",
+                          )}
+                        >
+                          Loading editor…
                         </div>
                       }
                     >
@@ -6307,12 +6330,16 @@ function NotesPageInner() {
                         noteId={selectedNote.id}
                         initialHtml={selectedNote.content || ""}
                         canEdit={canEditSelectedNote}
-                        placeholder="Start typing… others will see your edits live."
+                        placeholder={
+                          isSharedNoteSelected || selectedOwnedShareCount > 0
+                            ? "Start typing… others will see your edits live."
+                            : "Start writing your note…"
+                        }
                         className={cn(
-                          "note-html-scroll w-full min-w-0 max-w-full flex-1 overflow-x-hidden overflow-y-auto rounded-lg bg-muted/30 px-3 py-2 text-sm text-foreground [overflow-wrap:anywhere]",
+                          "w-full min-w-0 max-w-full flex-1 [overflow-wrap:anywhere]",
                           noteBodyFullscreen
-                            ? "min-h-0 flex-1 max-h-none sm:min-h-0"
-                            : "min-h-[200px] max-h-[min(65vh,520px)] sm:min-h-[240px] sm:max-h-[min(70vh,560px)]",
+                            ? "min-h-0 flex-1"
+                            : "min-h-[420px] sm:min-h-[480px]",
                         )}
                       />
                     </LiveblocksRoomProvider>

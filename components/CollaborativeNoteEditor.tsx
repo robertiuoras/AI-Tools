@@ -51,6 +51,7 @@ import * as Y from "yjs";
 import { LiveblocksYjsProvider } from "@liveblocks/yjs";
 import { useRoom, useOthers, useSelf } from "@liveblocks/react";
 import { useAuthSession } from "@/components/AuthSessionProvider";
+import { cn } from "@/lib/utils";
 
 /**
  * Real-time collaborative editor for shared notes.
@@ -181,7 +182,7 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
       editorProps: {
         attributes: {
           class:
-            "prose prose-sm sm:prose-base dark:prose-invert max-w-none focus:outline-none min-h-[300px] px-2 py-3 collab-prose",
+            "prose prose-sm sm:prose-base dark:prose-invert max-w-none focus:outline-none min-h-[380px] sm:min-h-[440px] px-3 py-4 collab-prose",
         },
       },
     },
@@ -396,18 +397,18 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
   }, [flushSave]);
 
   return (
-    <div className={className}>
+    <div className={cn("flex flex-col", className)}>
       <PresenceBar />
       {canEdit && editor ? <EditorToolbar editor={editor} /> : null}
       <div
-        className="collab-editor-shell relative rounded-xl border border-border/50 bg-gradient-to-b from-background to-muted/10 shadow-sm focus-within:border-primary/40 focus-within:shadow-md"
+        className="collab-editor-shell relative flex flex-1 flex-col overflow-y-auto rounded-xl border border-border/50 bg-gradient-to-b from-background to-muted/10 shadow-sm focus-within:border-primary/40 focus-within:shadow-md"
         onContextMenu={(e) => {
           if (!canEdit || !editor) return;
           e.preventDefault();
           setCtxMenu({ x: e.clientX, y: e.clientY });
         }}
       >
-        <EditorContent editor={editor} />
+        <EditorContent editor={editor} className="flex-1" />
       </div>
       {!canEdit ? (
         <div className="mt-2 text-xs text-muted-foreground">
