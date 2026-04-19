@@ -1553,6 +1553,62 @@ function NotesPageInner() {
     void refreshSharedNotes();
   }, [userId, refreshSharedNotes]);
 
+  /*
+   * Live-refresh "Shared with me" so a recipient never has to manually
+   * reload after they're shared a new note. Three triggers:
+   *
+   *   1. NotificationsBell broadcasts an "ai-tools:new-notifications"
+   *      window event whenever a fresh notification arrives. We refetch
+   *      shared notes (and the owned-notes list, which carries
+   *      shareCount) when the broadcast contains a note-related type.
+   *   2. Tab regains focus → refetch (catches notifications missed while
+   *      the tab was unloaded / the user was away).
+   *   3. Visibility flips back to visible → same.
+   */
+  useEffect(() => {
+    if (!userId) return;
+    const NOTE_NOTIFICATION_TYPES = new Set([
+      "note_shared",
+      "note_share_permission_changed",
+      "note_share_revoked",
+    ]);
+    const onBroadcast = (e: Event) => {
+      const detail = (e as CustomEvent<{ types?: string[] }>).detail;
+      const types = Array.isArray(detail?.types) ? detail!.types! : [];
+      if (types.length === 0 || types.some((t) => NOTE_NOTIFICATION_TYPES.has(t))) {
+        void refreshSharedNotes();
+        // Also refresh the page's owned-notes list so the share-count
+        // indicator on owner-side notes stays in sync after revocations.
+        if (selectedPageId && accessTokenRef.current) {
+          void fetch(`/api/notes?pageId=${encodeURIComponent(selectedPageId)}`, {
+            headers: { Authorization: `Bearer ${accessTokenRef.current}` },
+          })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data) => {
+              if (Array.isArray(data)) setNotes(data);
+            })
+            .catch(() => {});
+        }
+      }
+    };
+    let lastFocusFetch = 0;
+    const onFocusOrVisible = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      const now = Date.now();
+      if (now - lastFocusFetch < 5000) return;
+      lastFocusFetch = now;
+      void refreshSharedNotes();
+    };
+    window.addEventListener("ai-tools:new-notifications", onBroadcast);
+    window.addEventListener("focus", onFocusOrVisible);
+    document.addEventListener("visibilitychange", onFocusOrVisible);
+    return () => {
+      window.removeEventListener("ai-tools:new-notifications", onBroadcast);
+      window.removeEventListener("focus", onFocusOrVisible);
+      document.removeEventListener("visibilitychange", onFocusOrVisible);
+    };
+  }, [userId, refreshSharedNotes, selectedPageId]);
+
   useEffect(() => {
     setNoteBodyFullscreen(false);
   }, [selectedNoteId]);

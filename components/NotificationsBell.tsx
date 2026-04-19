@@ -122,6 +122,24 @@ export function NotificationsBell() {
               duration: 7000,
             });
           }
+          // Broadcast on the window so other pages (notes page, etc.) can
+          // refresh their data immediately instead of waiting for the user
+          // to manually reload. Detail.types lets listeners filter to the
+          // notifications they care about (e.g. only "note_shared").
+          if (typeof window !== "undefined") {
+            try {
+              window.dispatchEvent(
+                new CustomEvent("ai-tools:new-notifications", {
+                  detail: {
+                    items: fresh,
+                    types: Array.from(new Set(fresh.map((n) => n.type))),
+                  },
+                }),
+              );
+            } catch {
+              /* CustomEvent constructor failure should never block UI */
+            }
+          }
         }
         firstLoadRef.current = false;
       } finally {
