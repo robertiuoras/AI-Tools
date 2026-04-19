@@ -653,7 +653,7 @@ function HomePageContent() {
                     aria-busy
                   >
                     {Array.from({ length: 8 }).map((_, i) => (
-                      <ToolCardGridSkeleton key={`sk-${i}`} />
+                      <ToolCardGridSkeleton key={`sk-${i}`} index={i} />
                     ))}
                   </div>
                 ) : (
@@ -664,7 +664,7 @@ function HomePageContent() {
                     aria-busy
                   >
                     {Array.from({ length: 8 }).map((_, i) => (
-                      <ToolCardListSkeleton key={`sk-${i}`} />
+                      <ToolCardListSkeleton key={`sk-${i}`} index={i} />
                     ))}
                   </div>
                 )

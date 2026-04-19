@@ -1,12 +1,32 @@
 /**
  * Structured skeleton placeholders for ToolCard (grid and list layouts).
- * Mirrors the real card's inner layout so the UI doesn't jump when content arrives.
+ * Mirrors the real card's inner layout so the UI doesn't jump when content
+ * arrives, and uses a staggered fade-in (`skeleton-card-enter`) so the
+ * loading state feels like content streaming in rather than a single
+ * bulk paint.
  */
 
-export function ToolCardGridSkeleton() {
+import type { CSSProperties } from "react";
+
+type SkeletonProps = {
+  /**
+   * Card position in the loading grid. Drives the stagger delay so the
+   * first row paints in instantly and following rows ripple in. Wraps
+   * around every 8 cards to keep the visible delay short even on long
+   * grids.
+   */
+  index?: number;
+};
+
+function staggerStyle(index: number): CSSProperties {
+  return { ["--i" as string]: index % 8 } as CSSProperties;
+}
+
+export function ToolCardGridSkeleton({ index = 0 }: SkeletonProps = {}) {
   return (
     <div
-      className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border/50 bg-card"
+      className="skeleton-card-enter flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border/50 bg-card"
+      style={staggerStyle(index)}
       aria-hidden
     >
       {/* Logo + title + badge */}
@@ -41,10 +61,11 @@ export function ToolCardGridSkeleton() {
   );
 }
 
-export function ToolCardListSkeleton() {
+export function ToolCardListSkeleton({ index = 0 }: SkeletonProps = {}) {
   return (
     <div
-      className="flex items-center gap-4 rounded-lg border border-border/50 bg-card px-4 py-3"
+      className="skeleton-card-enter flex items-center gap-4 rounded-lg border border-border/50 bg-card px-4 py-3"
+      style={staggerStyle(index)}
       aria-hidden
     >
       {/* Logo */}

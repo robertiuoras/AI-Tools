@@ -281,24 +281,63 @@
   animation: notes-loading-bar 1.6s ease-in-out infinite;
 }
 
-/* Skeleton shimmer — wave sweeps left→right across skeleton items */
+/* Skeleton shimmer — a soft, wide gradient sweeps left→right across
+   skeleton items. Tuned for a calm, premium feel:
+   • Wider sheen + gentle highlight tint matching brand violet,
+   • Material-style cubic-bezier so the sweep eases in and out smoothly,
+   • Subtle opacity breathing layered on top via .skeleton-wave::after
+     gives perceived depth without the "racing stripe" feel of a hard
+     linear shimmer. */
 @keyframes skeleton-wave {
   0% {
-    background-position: 200% 0;
+    background-position: 150% 0;
   }
   100% {
-    background-position: -200% 0;
+    background-position: -150% 0;
+  }
+}
+@keyframes skeleton-breath {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
   }
 }
 .skeleton-wave {
+  position: relative;
+  overflow: hidden;
   background: linear-gradient(
     90deg,
     hsl(var(--muted)) 0%,
-    hsl(var(--muted-foreground) / 0.12) 50%,
+    hsl(var(--muted)) 38%,
+    hsl(252 80% 70% / 0.18) 50%,
+    hsl(var(--muted)) 62%,
     hsl(var(--muted)) 100%
   );
-  background-size: 200% 100%;
-  animation: skeleton-wave 1.6s ease-in-out infinite;
+  background-size: 220% 100%;
+  animation: skeleton-wave 2s cubic-bezier(0.4, 0, 0.2, 1) infinite,
+    skeleton-breath 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* Staggered fade-in for skeleton cards — gives the perception of
+   content streaming in, not a single bulk paint. Cards opt in via the
+   `.skeleton-card-enter` class and an inline `--i` index variable. */
+@keyframes skeleton-card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.skeleton-card-enter {
+  animation: skeleton-card-enter 380ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: calc(var(--i, 0) * 55ms);
+  will-change: opacity, transform;
 }
 
 /* Progress bar shimmer sweep */
@@ -524,6 +563,7 @@
   .home-splash-blob-slow,
   .notes-loading-bar,
   .skeleton-wave,
+  .skeleton-card-enter,
   .progress-shimmer::after,
   .sync-shimmer-text,
   .live-dot-halo,

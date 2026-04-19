@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Loader2,
   Camera,
@@ -73,7 +74,18 @@ export function ProfileSettingsDialog({ open, onClose }: Props) {
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [removingAvatar, setRemovingAvatar] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [mounted, setMounted] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Track mount so we can render through a portal on the client only.
+  // Portalling to <body> is critical: the global <nav> uses `backdrop-blur`,
+  // which makes it a containing block for `position: fixed` descendants —
+  // any dialog rendered inside the nav would be trapped behind the hero /
+  // fullscreen note view despite its high z-index. Escaping to <body>
+  // restores the expected stacking behaviour everywhere on the site.
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Hydrate the form whenever the dialog opens or the profile changes.
   useEffect(() => {
@@ -276,7 +288,10 @@ export function ProfileSettingsDialog({ open, onClose }: Props) {
   const accent = resolveAccentColor(cursorColor, profile?.id ?? profile?.email);
   const busy = saving || uploadingAvatar || removingAvatar;
 
-  return (
+  // Defer to client-mount before portalling so SSR markup matches.
+  if (!mounted) return null;
+
+  const dialogNode = (
     <div
       role="dialog"
       aria-modal="true"
@@ -611,4 +626,6 @@ export function ProfileSettingsDialog({ open, onClose }: Props) {
       </div>
     </div>
   );
+
+  return createPortal(dialogNode, document.body);
 }
