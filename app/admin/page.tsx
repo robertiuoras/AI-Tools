@@ -21,8 +21,8 @@ import {
   type BulkRefreshProgressState,
 } from '@/components/admin/BulkRefreshProgressDialog'
 import {
-  BULK_REFRESH_DELAY_MS_TOOL,
   BULK_REFRESH_DELAY_MS_VIDEO,
+  BULK_REFRESH_TOOL_CONCURRENCY,
   estimateUsdPerToolAnalyzeCall,
   estimateUsdPerVideoAnalyzeCall,
   estimateUsdToolAnalyzeCalls,
@@ -30,6 +30,7 @@ import {
   formatUsdEstimate,
   MAX_BULK_CONSECUTIVE_FAILURES,
   MAX_BULK_REFRESH_ITEMS,
+  MAX_BULK_REFRESH_ITEMS_TOOL,
   openAiCostNote,
   videoAnalyzeCostHint,
 } from '@/lib/admin-openai-cost'
@@ -804,7 +805,7 @@ export default function AdminPage() {
             )
           : finalizeToolCategoriesList(toolCategoryList(tool))
 
-      const payload = {
+      const payload: Record<string, unknown> = {
         name: tool.name,
         description:
           typeof analyzeData.description === 'string' &&
@@ -825,7 +826,10 @@ export default function AdminPage() {
             ? analyzeData.revenue
             : tool.revenue || null,
         rating: tool.rating ?? null,
-        estimatedVisits: tool.estimatedVisits ?? null,
+        // Legacy field — analyze now returns null on purpose. Persisting null
+        // here clears any leftover hallucinated "~7.5M/mo" so the card flips
+        // to the new popularity tier badge once the popularity columns land.
+        estimatedVisits: null,
         isAgency: booleanFromAnalyzeField(
           analyzeData.isAgency,
           toolIsAgency(tool),
@@ -834,6 +838,26 @@ export default function AdminPage() {
           analyzeData.hasDownloadableApp,
           toolHasDownloadableApp(tool),
         ),
+      }
+
+      // Forward the fresh popularity snapshot (Tranco/GitHub/age/Wiki/claims)
+      // exactly the way the "add new tool" path does. Without this, refresh
+      // would scrape + re-rank but never persist the new tier/score, leaving
+      // every card stuck on whatever it had on first add.
+      const pop = analyzeData?.popularity as Record<string, unknown> | null | undefined
+      if (pop && typeof pop === 'object') {
+        if (typeof pop.trancoRank === 'number') payload.trancoRank = pop.trancoRank
+        if (typeof pop.githubRepo === 'string') payload.githubRepo = pop.githubRepo
+        if (typeof pop.githubStars === 'number') payload.githubStars = pop.githubStars
+        if (typeof pop.domainAgeYears === 'number')
+          payload.domainAgeYears = pop.domainAgeYears
+        if (typeof pop.wikipediaPageTitle === 'string')
+          payload.wikipediaPageTitle = pop.wikipediaPageTitle
+        if (typeof pop.wikipediaPageviews90d === 'number')
+          payload.wikipediaPageviews90d = pop.wikipediaPageviews90d
+        if (typeof pop.score === 'number') payload.popularityScore = pop.score
+        if (typeof pop.tier === 'string') payload.popularityTier = pop.tier
+        payload.popularitySignals = pop
       }
 
       const updateRes = await fetch(`/api/tools/${tool.id}`, {
@@ -1141,16 +1165,23 @@ export default function AdminPage() {
       tools.length === 0
     )
       return
-    const list = tools.slice(0, MAX_BULK_REFRESH_ITEMS)
+    // Tools cap is 1000 — high enough to backfill the entire directory after
+    // schema or resolver changes, without forcing the operator to babysit
+    // multiple runs. Videos still use the smaller default cap.
+    const list = tools.slice(0, MAX_BULK_REFRESH_ITEMS_TOOL)
     const truncated = tools.length > list.length
     const estMax = estimateUsdToolAnalyzeCalls(list.length)
+    const concurrency = Math.max(
+      1,
+      Math.min(BULK_REFRESH_TOOL_CONCURRENCY, list.length),
+    )
     const confirmMsg = [
-      `Re-analyze up to ${list.length} tool(s)? Same as each row’s refresh (logo, description, categories, agency, app flags).`,
+      `Re-analyze up to ${list.length} tool(s)? Each tool is fully re-processed exactly like a fresh add: scrape, logo resolver, OpenAI categories/agency/app flags, and popularity signals (Tranco / GitHub / domain age / Wikipedia / hard claims).`,
       truncated
-        ? `Only the first ${MAX_BULK_REFRESH_ITEMS} are processed (safety limit).`
+        ? `Only the first ${MAX_BULK_REFRESH_ITEMS_TOOL} are processed (safety limit).`
         : null,
-      `Rough max OpenAI cost if every call succeeds: ${formatUsdEstimate(estMax)}.`,
-      'This may take several minutes.',
+      `Running ${concurrency} in parallel. Rough max OpenAI cost if every call succeeds: ${formatUsdEstimate(estMax)}.`,
+      'This may take a while for large directories. You can stop at any time from the progress dialog.',
     ]
       .filter(Boolean)
       .join('\n')
@@ -1167,65 +1198,88 @@ export default function AdminPage() {
       failed: 0,
       startedAt,
     })
+
+    // Shared mutable counters captured by the worker closures. We avoid
+    // React state inside the hot loop to keep the pool from re-rendering
+    // dozens of times per second; we snapshot into setToolBulkRefreshProgress
+    // after each completion which is plenty for a smooth progress bar.
     let ok = 0
     let fail = 0
     let totalCostUsd = 0
-    let consecutiveFailures = 0
-    try {
-      for (let i = 0; i < list.length; i++) {
-        if (toolBulkStopRef.current) {
-          break
-        }
+    let nextIndex = 0
+    let inFlight = 0
+    let lastStartedTitle = list[0]?.name ?? ''
+    // Sliding "recent results" window. Stops the run when the most recent
+    // MAX_BULK_CONSECUTIVE_FAILURES entries are *all* failures — the parallel
+    // analogue of the old strict "consecutive failures" guard, which doesn't
+    // map cleanly when multiple requests are in flight at once.
+    const recent: Array<'ok' | 'fail'> = []
+    let stoppedDueToFailures = false
+
+    const pushProgress = () => {
+      setToolBulkRefreshProgress({
+        total: list.length,
+        currentIndex: Math.min(list.length, ok + fail + Math.max(inFlight, 1)),
+        currentTitle: lastStartedTitle,
+        completed: ok + fail,
+        succeeded: ok,
+        failed: fail,
+        startedAt,
+        costUsd: totalCostUsd,
+        stopRequested: toolBulkStopRef.current,
+      })
+    }
+
+    const runWorker = async () => {
+      while (true) {
+        if (toolBulkStopRef.current || stoppedDueToFailures) return
+        const i = nextIndex++
+        if (i >= list.length) return
         const tool = list[i]
-        setReanalyzingToolId(tool.id)
-        setToolBulkRefreshProgress({
-          total: list.length,
-          currentIndex: i + 1,
-          currentTitle: tool.name,
-          completed: i,
-          succeeded: ok,
-          failed: fail,
-          startedAt,
-          costUsd: totalCostUsd,
-          stopRequested: toolBulkStopRef.current,
-        })
-        const { ok: success, costUsd } = await reanalyzeToolCore(tool, {
-          silent: true,
-        })
-        if (success) {
-          ok++
-          consecutiveFailures = 0
-          totalCostUsd += costUsd > 0 ? costUsd : estimateUsdPerToolAnalyzeCall()
-        } else {
-          fail++
-          consecutiveFailures++
-          if (consecutiveFailures >= MAX_BULK_CONSECUTIVE_FAILURES) {
-            addToast({
-              variant: 'warning',
-              title: 'Bulk refresh stopped',
-              description: `${MAX_BULK_CONSECUTIVE_FAILURES} failures in a row. Check API keys, quotas, and network, then run again.`,
-            })
-            break
+        lastStartedTitle = tool.name
+        inFlight++
+        pushProgress()
+        try {
+          const { ok: success, costUsd } = await reanalyzeToolCore(tool, {
+            silent: true,
+          })
+          if (success) {
+            ok++
+            totalCostUsd +=
+              costUsd > 0 ? costUsd : estimateUsdPerToolAnalyzeCall()
+            recent.push('ok')
+          } else {
+            fail++
+            recent.push('fail')
           }
+        } catch {
+          // reanalyzeToolCore already swallows its own errors and returns
+          // { ok: false }, but defend against future regressions so one bad
+          // tool can't kill the entire pool.
+          fail++
+          recent.push('fail')
+        } finally {
+          inFlight--
         }
-        setToolBulkRefreshProgress({
-          total: list.length,
-          currentIndex: i + 1,
-          currentTitle: tool.name,
-          completed: i + 1,
-          succeeded: ok,
-          failed: fail,
-          startedAt,
-          costUsd: totalCostUsd,
-          stopRequested: toolBulkStopRef.current,
-        })
-        if (toolBulkStopRef.current) {
-          break
+
+        if (recent.length > MAX_BULK_CONSECUTIVE_FAILURES) recent.shift()
+        if (
+          recent.length === MAX_BULK_CONSECUTIVE_FAILURES &&
+          recent.every((r) => r === 'fail')
+        ) {
+          stoppedDueToFailures = true
+          addToast({
+            variant: 'warning',
+            title: 'Bulk refresh stopped',
+            description: `${MAX_BULK_CONSECUTIVE_FAILURES} failures in a row. Check API keys, quotas, and network, then run again.`,
+          })
         }
-        if (i < list.length - 1) {
-          await new Promise((r) => setTimeout(r, BULK_REFRESH_DELAY_MS_TOOL))
-        }
+        pushProgress()
       }
+    }
+
+    try {
+      await Promise.all(Array.from({ length: concurrency }, () => runWorker()))
     } finally {
       setReanalyzingToolId(null)
       setRefreshingAllTools(false)

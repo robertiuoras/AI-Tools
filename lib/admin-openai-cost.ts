@@ -5,12 +5,27 @@
 export const GPT_4O_MINI_USD_PER_INPUT_1M = 0.15
 export const GPT_4O_MINI_USD_PER_OUTPUT_1M = 0.6
 
-/** Max items per "refresh all" run (safety + cost control). */
+/** Max items per "refresh all" run (safety + cost control). Videos still
+ *  use this conservative cap because their analyze step is heavier. */
 export const MAX_BULK_REFRESH_ITEMS = 50
 
-/** Pause between bulk items to reduce rate-limit / burst issues. */
+/** Tools "refresh all" cap. Tool re-analyze is cheaper than video and the
+ *  admin needs to be able to backfill the entire directory after schema or
+ *  resolver changes (logo + popularity signals), so we allow up to 1000 in a
+ *  single run. The bulk loop processes tools in parallel with a small worker
+ *  pool, stops on a streak of failures, and remains stoppable from the UI. */
+export const MAX_BULK_REFRESH_ITEMS_TOOL = 1000
+
+/** Pause between bulk items to reduce rate-limit / burst issues. Only used
+ *  for the serial video bulk loop; the tool loop is parallel and self-paces
+ *  via its concurrency cap. */
 export const BULK_REFRESH_DELAY_MS_VIDEO = 850
 export const BULK_REFRESH_DELAY_MS_TOOL = 1200
+
+/** Concurrency for the parallel tool bulk-refresh worker pool. Sized so the
+ *  effective request rate (~workers / avg latency) stays well under the
+ *  tools_analyze per-minute rate limit. */
+export const BULK_REFRESH_TOOL_CONCURRENCY = 4
 
 /** Stop bulk run after this many failures in a row (likely systemic issue). */
 export const MAX_BULK_CONSECUTIVE_FAILURES = 8

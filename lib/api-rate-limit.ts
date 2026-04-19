@@ -67,11 +67,11 @@ const LIMITS: Record<RateLimitKind, { windowMs: number; max: number }[]> = {
   tools_analyze: [
     {
       windowMs: 60_000,
-      max: envInt('RATE_LIMIT_TOOLS_ANALYZE_PER_MINUTE', 45),
+      max: envInt('RATE_LIMIT_TOOLS_ANALYZE_PER_MINUTE', 120),
     },
     {
       windowMs: 3_600_000,
-      max: envInt('RATE_LIMIT_TOOLS_ANALYZE_PER_HOUR', 400),
+      max: envInt('RATE_LIMIT_TOOLS_ANALYZE_PER_HOUR', 2_000),
     },
   ],
   videos_analyze: [
