@@ -2,8 +2,17 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Plus, Trash2, Pencil, Check, X, Loader2 } from "lucide-react";
+import {
+  Plus,
+  Trash2,
+  Pencil,
+  Check,
+  X,
+  Loader2,
+  AlertTriangle,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useToast } from "@/components/ui/toaster";
 
 interface BoardMeta {
   id: string;
@@ -34,6 +43,10 @@ export function WhiteboardPanel({ token }: Props) {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameVal, setRenameVal] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
+  // Two-step delete: clicking trash sets this; modal confirms.
+  const [confirmDelete, setConfirmDelete] = useState<BoardMeta | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const { addToast } = useToast();
 
   // Fetch boards once on mount.
   // token is guaranteed non-null here — the notes page only renders WhiteboardPanel
@@ -98,17 +111,73 @@ export function WhiteboardPanel({ token }: Props) {
     });
   }, [renamingId, renameVal, token]);
 
-  const deleteBoard = useCallback(async (boardId: string) => {
-    if (boards.length <= 1) return;
-    const next = boards.filter((b) => b.id !== boardId);
-    setBoards(next);
-    if (activeBoardId === boardId) setActiveBoardId(next[0]?.id ?? null);
-    await fetch("/api/whiteboard", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ action: "delete", boardId }),
-    });
-  }, [boards, activeBoardId, token]);
+  /**
+   * Delete is server-authoritative: we wait for the API to respond, then
+   * sync local state from the returned list. This avoids two classic bugs:
+   *   1. Optimistic delete + silent API failure → board "comes back" on
+   *      next reload because we never noticed the failure.
+   *   2. Race with the active board's autosave on unmount → server
+   *      could resurrect the board if we trusted local state alone.
+   */
+  const deleteBoard = useCallback(
+    async (boardId: string) => {
+      if (deletingId) return;
+      setDeletingId(boardId);
+      try {
+        const res = await fetch("/api/whiteboard", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ action: "delete", boardId }),
+        });
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          throw new Error(text || `Server returned ${res.status}`);
+        }
+        const data = (await res.json()) as { ok: true; boards?: BoardMeta[] };
+        // Prefer the server's authoritative list; fall back to a refetch.
+        let next: BoardMeta[] | null = Array.isArray(data.boards) ? data.boards : null;
+        if (!next) {
+          const r = await fetch("/api/whiteboard", {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (r.ok) {
+            const d = (await r.json()) as { boards: BoardMeta[] };
+            next = d.boards ?? [];
+          }
+        }
+        if (next) {
+          setBoards(next);
+          if (activeBoardId === boardId) {
+            setActiveBoardId(next[0]?.id ?? null);
+          } else if (!next.some((b) => b.id === activeBoardId)) {
+            setActiveBoardId(next[0]?.id ?? null);
+          }
+        }
+        addToast({
+          title: "Board deleted",
+          variant: "success",
+          duration: 2500,
+        });
+      } catch (err) {
+        addToast({
+          title: "Couldn't delete board",
+          description:
+            err instanceof Error
+              ? err.message
+              : "Please try again in a moment.",
+          variant: "error",
+          duration: 6000,
+        });
+      } finally {
+        setDeletingId(null);
+        setConfirmDelete(null);
+      }
+    },
+    [token, activeBoardId, deletingId, addToast],
+  );
 
   return (
     <div className="flex flex-col" style={{ height: "calc(100vh - 220px)", minHeight: 520 }}>
@@ -172,9 +241,9 @@ export function WhiteboardPanel({ token }: Props) {
                         title="Delete board"
                         onClick={(e) => {
                           e.stopPropagation();
-                          void deleteBoard(board.id);
+                          setConfirmDelete(board);
                         }}
-                        className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-red-500/10 hover:text-red-500"
+                        className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-500"
                       >
                         <Trash2 className="h-3 w-3" />
                       </button>
@@ -210,6 +279,102 @@ export function WhiteboardPanel({ token }: Props) {
             <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading…
           </div>
         )}
+      </div>
+
+      {confirmDelete ? (
+        <DeleteBoardConfirm
+          board={confirmDelete}
+          deleting={deletingId === confirmDelete.id}
+          onCancel={() => {
+            if (deletingId) return;
+            setConfirmDelete(null);
+          }}
+          onConfirm={() => void deleteBoard(confirmDelete.id)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Two-step delete confirmation modal. Esc / backdrop click cancels (when
+ * not actively deleting); the confirm button shows a spinner while the
+ * API call is in flight so the user can't double-fire it.
+ */
+function DeleteBoardConfirm({
+  board,
+  deleting,
+  onCancel,
+  onConfirm,
+}: {
+  board: BoardMeta;
+  deleting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !deleting) onCancel();
+      if (e.key === "Enter" && !deleting) onConfirm();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [deleting, onCancel, onConfirm]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="delete-board-title"
+      className="fixed inset-0 z-[150] flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && !deleting) onCancel();
+      }}
+    >
+      <div className="w-full max-w-sm overflow-hidden rounded-xl border border-border bg-popover shadow-2xl ring-1 ring-black/10">
+        <div className="flex items-start gap-3 p-4">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-500/10 text-red-500">
+            <AlertTriangle className="h-5 w-5" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h3 id="delete-board-title" className="text-sm font-semibold text-foreground">
+              Delete this whiteboard?
+            </h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">“{board.name}”</span>{" "}
+              will be permanently removed, including all of its drawings. This
+              can&apos;t be undone.
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2 border-t border-border bg-muted/30 px-4 py-2.5">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={deleting}
+            className="inline-flex h-8 items-center rounded-md px-3 text-xs font-medium text-foreground/80 hover:bg-muted hover:text-foreground disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={deleting}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-red-500 px-3 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            {deleting ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Deleting…
+              </>
+            ) : (
+              <>
+                <Trash2 className="h-3.5 w-3.5" />
+                Delete board
+              </>
+            )}
+          </button>
+        </div>
       </div>
     </div>
   );

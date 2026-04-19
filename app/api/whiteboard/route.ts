@@ -45,18 +45,47 @@ export interface BoardMeta {
   updatedAt: string;
 }
 
-async function loadBoardsMeta(userId: string): Promise<BoardMeta[]> {
+/**
+ * Loads the boards metadata file.
+ *
+ * Returns:
+ *   - { ok: true, boards }            — file exists and parsed cleanly (or genuinely missing → empty list)
+ *   - { ok: false, error }            — read/parse failure we should NOT silently treat as "no boards"
+ *
+ * This distinction matters for delete: if the read transiently fails and we
+ * treated it as "no boards", we'd then write an empty/seeded list back and
+ * permanently lose every other board the user owns.
+ */
+async function loadBoardsMetaSafe(
+  userId: string,
+): Promise<{ ok: true; boards: BoardMeta[] } | { ok: false; error: string }> {
   const admin = supabaseAdmin as any;
   try {
     const { data, error } = await admin.storage
       .from(WHITEBOARD_BUCKET)
       .download(`${userId}/__boards__.json`);
-    if (error || !data) return [];
+    if (error) {
+      const msg = String((error as { message?: string })?.message ?? error ?? "");
+      // Supabase storage returns one of these when the object simply
+      // doesn't exist yet (first-time user). Treat as empty list.
+      if (/not\s*found|no such|object not found|404/i.test(msg)) {
+        return { ok: true, boards: [] };
+      }
+      return { ok: false, error: msg || "load failed" };
+    }
+    if (!data) return { ok: true, boards: [] };
     const text = await (data as Blob).text();
-    return JSON.parse(text) as BoardMeta[];
-  } catch {
-    return [];
+    const parsed = JSON.parse(text) as BoardMeta[];
+    return { ok: true, boards: Array.isArray(parsed) ? parsed : [] };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
+}
+
+/** Back-compat helper for callers that don't need to react to read failures. */
+async function loadBoardsMeta(userId: string): Promise<BoardMeta[]> {
+  const r = await loadBoardsMetaSafe(userId);
+  return r.ok ? r.boards : [];
 }
 
 async function saveBoardsMeta(userId: string, boards: BoardMeta[]) {
@@ -202,16 +231,45 @@ export async function POST(request: NextRequest) {
 
     if (body.action === "delete") {
       if (!body.boardId) return NextResponse.json({ error: "boardId required" }, { status: 400 });
-      let boards = await loadBoardsMeta(userId);
-      boards = boards.filter((b) => b.id !== body.boardId);
-      // Must keep at least one board
-      if (boards.length === 0) {
-        boards = [{ id: "default", name: "Untitled Board", updatedAt: new Date().toISOString() }];
+
+      // Load with explicit error handling. If the meta file failed to load
+      // for any reason other than "not found", abort — otherwise we'd save
+      // a wiped/seeded list and permanently destroy the user's other
+      // boards. The client can retry.
+      const loaded = await loadBoardsMetaSafe(userId);
+      if (!loaded.ok) {
+        return NextResponse.json(
+          { error: `Could not read boards metadata: ${loaded.error}` },
+          { status: 503 },
+        );
       }
-      await saveBoardsMeta(userId, boards);
-      // Delete the snapshot file (ignore error if not found)
-      await admin.storage.from(WHITEBOARD_BUCKET).remove([`${userId}/${body.boardId}.json`]);
-      return NextResponse.json({ ok: true });
+
+      const before = loaded.boards;
+      // Tolerate the synthetic "default" board: GET returns it virtually
+      // when no metadata exists, so the user can hit "delete" on a board
+      // that was never persisted. Treat that as a successful no-op.
+      if (before.length > 0 && !before.some((b) => b.id === body.boardId)) {
+        // Board already gone — make sure any orphan snapshot file is also removed.
+        await admin.storage
+          .from(WHITEBOARD_BUCKET)
+          .remove([`${userId}/${body.boardId}.json`]);
+        return NextResponse.json({ ok: true, boards: before });
+      }
+
+      let next = before.filter((b) => b.id !== body.boardId);
+      // Must keep at least one board so the UI always has something to show.
+      if (next.length === 0) {
+        next = [
+          { id: "default", name: "Untitled Board", updatedAt: new Date().toISOString() },
+        ];
+      }
+      await saveBoardsMeta(userId, next);
+      // Delete the snapshot file (ignore error if not found).
+      await admin.storage
+        .from(WHITEBOARD_BUCKET)
+        .remove([`${userId}/${body.boardId}.json`]);
+      // Return the new list so the client can sync without a second round-trip.
+      return NextResponse.json({ ok: true, boards: next });
     }
 
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
