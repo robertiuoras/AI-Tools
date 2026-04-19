@@ -106,6 +106,25 @@ export function ProfileSettingsDialog({ open, onClose }: Props) {
     return () => document.removeEventListener("keydown", onKey);
   }, [open, onClose, saving, uploadingAvatar, removingAvatar]);
 
+  // IMPORTANT: every hook MUST be called before the `if (!open) return null`
+  // bail-out below. React's hook-count rule treats the early return as a
+  // change in hook count when `open` flips from false → true, which
+  // throws "Rendered more hooks than during the previous render" and
+  // crashes the whole page (this is what was causing "Application error:
+  // a client-side exception" the moment a user clicked Profile settings).
+  const dirty = useMemo(() => {
+    const n = name.trim();
+    const b = bio.trim();
+    const c = cursorColor.trim();
+    return (
+      n !== (profile?.name ?? "") ||
+      b !== (profile?.bio ?? "") ||
+      (c || null) !== (profile?.cursor_color ?? null) ||
+      themePref !== ((profile?.theme_pref as ThemePref) ?? "system") ||
+      emailOptIn !== (profile?.email_notifications ?? true)
+    );
+  }, [name, bio, cursorColor, themePref, emailOptIn, profile]);
+
   if (!open) return null;
 
   const broadcast = (next: UserProfile) => {
@@ -120,19 +139,6 @@ export function ProfileSettingsDialog({ open, onClose }: Props) {
       }
     }
   };
-
-  const dirty = useMemo(() => {
-    const n = name.trim();
-    const b = bio.trim();
-    const c = cursorColor.trim();
-    return (
-      n !== (profile?.name ?? "") ||
-      b !== (profile?.bio ?? "") ||
-      (c || null) !== (profile?.cursor_color ?? null) ||
-      themePref !== ((profile?.theme_pref as ThemePref) ?? "system") ||
-      emailOptIn !== (profile?.email_notifications ?? true)
-    );
-  }, [name, bio, cursorColor, themePref, emailOptIn, profile]);
 
   const saveAll = async () => {
     if (!accessToken) return;

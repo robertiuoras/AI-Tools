@@ -79,11 +79,26 @@ export async function POST(request: NextRequest) {
     // settings dialog; we read the latest values here so any user
     // joining a room sees the up-to-date identity.
     const admin = supabaseAdmin as any;
-    const { data: userRow } = await admin
+    // Try the extended select first (post-migration). If the
+    // preferences columns aren't there yet, retry with the base
+    // columns so users who haven't run
+    // supabase-migration-user-preferences.sql can still join rooms.
+    let { data: userRow, error: userErr } = await admin
       .from("user")
       .select("id, email, name, avatar_url, cursor_color, bio")
       .eq("id", userId)
       .maybeSingle();
+    if (
+      userErr &&
+      (userErr.code === "42703" ||
+        /column .* does not exist/i.test(userErr.message ?? ""))
+    ) {
+      ({ data: userRow } = await admin
+        .from("user")
+        .select("id, email, name, avatar_url")
+        .eq("id", userId)
+        .maybeSingle());
+    }
 
     const displayName =
       (userRow?.name as string | undefined)?.trim() ||

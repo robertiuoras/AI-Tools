@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/toaster";
 import { WhiteboardRoomMount } from "@/components/WhiteboardRoomMount";
 import { WhiteboardShareDialog } from "@/components/WhiteboardShareDialog";
+import { markBoardDeleted } from "@/lib/whiteboard-deleted-ids";
 
 /** Where the Excalidraw shape toolbar sits relative to the canvas. */
 export type ToolbarPosition = "top" | "bottom" | "left" | "right";
@@ -340,6 +341,13 @@ export function WhiteboardPanel({ token }: Props) {
     async (boardId: string) => {
       if (deletingId) return;
       setDeletingId(boardId);
+
+      // Tell WhiteboardInner to short-circuit any trailing autosave for
+      // this board. Done BEFORE the optimistic state change so the
+      // upcoming unmount-flush can't race the DELETE call on the
+      // server and resurrect the board entry. (See
+      // lib/whiteboard-deleted-ids.ts for the rationale.)
+      markBoardDeleted(boardId);
 
       // Optimistic local removal so the user sees the board disappear
       // immediately. We sync with the server's authoritative list once

@@ -32,6 +32,24 @@ async function getUserId(request: NextRequest): Promise<string | null> {
   return data.user?.id ?? null;
 }
 
+// Postgres "undefined column" error code returned by PostgREST when a
+// column referenced in `select` doesn't exist (i.e. the user hasn't
+// applied the new preferences migration yet). We use this to fall back
+// to the base columns so the dialog still loads on partially-migrated
+// installs.
+const PG_UNDEFINED_COLUMN = "42703";
+
+const BASE_COLUMNS = "id, email, name, avatar_url, role";
+const EXTENDED_COLUMNS =
+  "id, email, name, avatar_url, role, bio, cursor_color, theme_pref, email_notifications";
+
+function isUndefinedColumn(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { code?: string; message?: string };
+  if (e.code === PG_UNDEFINED_COLUMN) return true;
+  return /column .* does not exist/i.test(e.message ?? "");
+}
+
 export async function GET(request: NextRequest) {
   try {
     const userId = await getUserId(request);
@@ -39,13 +57,23 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     const admin = supabaseAdmin as any;
-    const { data, error } = await admin
+
+    // Try the extended select first (post-migration). If the new
+    // columns aren't there yet, retry with the base set so the page
+    // doesn't break for users who haven't run
+    // supabase-migration-user-preferences.sql yet.
+    let { data, error } = await admin
       .from("user")
-      .select(
-        "id, email, name, avatar_url, role, bio, cursor_color, theme_pref, email_notifications",
-      )
+      .select(EXTENDED_COLUMNS)
       .eq("id", userId)
       .maybeSingle();
+    if (error && isUndefinedColumn(error)) {
+      ({ data, error } = await admin
+        .from("user")
+        .select(BASE_COLUMNS)
+        .eq("id", userId)
+        .maybeSingle());
+    }
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
@@ -130,14 +158,43 @@ export async function PATCH(request: NextRequest) {
     }
 
     const admin = supabaseAdmin as any;
-    const { data, error } = await admin
+
+    // Same migration-tolerance as GET: if any of the new preference
+    // columns don't exist yet, retry with only the base columns so
+    // partially-migrated installs can still update their name/avatar.
+    let attemptUpdates = updates;
+    let { data, error } = await admin
       .from("user")
-      .update(updates)
+      .update(attemptUpdates)
       .eq("id", userId)
-      .select(
-        "id, email, name, avatar_url, role, bio, cursor_color, theme_pref, email_notifications",
-      )
+      .select(EXTENDED_COLUMNS)
       .single();
+    if (error && isUndefinedColumn(error)) {
+      const allowed = new Set([
+        "name",
+        "avatar_url",
+        "email",
+        "role",
+      ]);
+      attemptUpdates = Object.fromEntries(
+        Object.entries(updates).filter(([k]) => allowed.has(k)),
+      );
+      if (Object.keys(attemptUpdates).length === 0) {
+        return NextResponse.json(
+          {
+            error:
+              "Profile customisations require the user-preferences migration. Run supabase-migration-user-preferences.sql in Supabase SQL editor.",
+          },
+          { status: 503 },
+        );
+      }
+      ({ data, error } = await admin
+        .from("user")
+        .update(attemptUpdates)
+        .eq("id", userId)
+        .select(BASE_COLUMNS)
+        .single());
+    }
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }

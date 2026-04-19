@@ -273,7 +273,27 @@ export async function POST(request: NextRequest) {
         .upload(path, bytes, { contentType: "application/json", upsert: true });
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-      const updated = boards.map((b) =>
+      // RACE GUARD: a delete call can land between our initial existence
+      // check and the meta write below. Re-load meta one more time and
+      // confirm the board is still present. If it's been deleted in the
+      // meantime, drop the orphan snapshot we just uploaded and tell the
+      // client the board is gone — DON'T re-insert it into the meta.
+      // This is the fix for "I deleted Untitled but it comes back after
+      // reload": the trailing flush on unmount of the deleted board was
+      // racing the delete and resurrecting the entry in __boards__.json.
+      const fresh = await loadBoardsMeta(resolvedOwnerId);
+      const stillExists = fresh.some((b) => b.id === body.boardId);
+      if (!stillExists) {
+        await admin.storage
+          .from(WHITEBOARD_BUCKET)
+          .remove([path]);
+        return NextResponse.json(
+          { ok: false, gone: true, error: "Board was deleted during save" },
+          { status: 410 },
+        );
+      }
+
+      const updated = fresh.map((b) =>
         b.id === body.boardId ? { ...b, updatedAt: new Date().toISOString() } : b
       );
       await saveBoardsMeta(resolvedOwnerId, updated);

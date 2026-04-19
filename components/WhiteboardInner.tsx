@@ -11,6 +11,7 @@ import {
   useUpdateMyPresence,
 } from "@liveblocks/react";
 import { useUserProfile } from "@/components/UserProfileProvider";
+import { isBoardMarkedDeleted } from "@/lib/whiteboard-deleted-ids";
 
 export type ToolbarPosition = "top" | "bottom" | "left" | "right";
 
@@ -33,6 +34,10 @@ const AUTOSAVE_INTERVAL_MS = 30_000;
 const AUTOSAVE_DEBOUNCE_MS = 1_500;
 const SCENE_BROADCAST_DEBOUNCE_MS = 75;
 const POINTER_THROTTLE_MS = 60;
+
+// `isBoardMarkedDeleted` lives in lib/whiteboard-deleted-ids.ts so the
+// marker set can be imported by WhiteboardPanel without dragging
+// Excalidraw's window-touching bundle into the panel's tree.
 
 type ExcalidrawElement = Readonly<{ id: string; [k: string]: unknown }>;
 type ExcalidrawAppState = { [k: string]: unknown };
@@ -259,7 +264,15 @@ export default function WhiteboardInner({
   // ── Local debounced save (Supabase storage) ─────────────────────
   const flush = useCallback(async () => {
     if (!latestRef.current || !dirtyRef.current) return;
-    if (isViewOnly || goneRef.current) {
+    // Skip if view-only, server already said gone, or the user has
+    // initiated a delete for this board (set by WhiteboardPanel before
+    // unmount). The delete-set check is what closes the race window
+    // that used to resurrect "Untitled" after deletion.
+    if (
+      isViewOnly ||
+      goneRef.current ||
+      isBoardMarkedDeleted(boardIdRef.current)
+    ) {
       dirtyRef.current = false;
       return;
     }
@@ -285,7 +298,8 @@ export default function WhiteboardInner({
         latestRef.current &&
         dirtyRef.current &&
         !isViewOnly &&
-        !goneRef.current
+        !goneRef.current &&
+        !isBoardMarkedDeleted(boardIdRef.current)
       ) {
         try {
           const blob = new Blob(
