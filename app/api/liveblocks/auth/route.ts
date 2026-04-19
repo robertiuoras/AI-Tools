@@ -1,15 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { getUserId, resolveNoteAccess } from "@/lib/notes-auth";
-import { liveblocks, noteRoomId, isLiveblocksConfigured } from "@/lib/liveblocks";
+import { resolveWhiteboardAccess } from "@/lib/whiteboard-auth";
+import {
+  liveblocks,
+  noteRoomId,
+  whiteboardRoomId,
+  isLiveblocksConfigured,
+} from "@/lib/liveblocks";
 
 /**
  * POST /api/liveblocks/auth
- * Body: { room: "note:<noteId>" }
+ * Body: { room: "note:<noteId>" | "whiteboard:<boardId>" }
  *
- * Issues a Liveblocks access token scoped to the requested note room,
- * but ONLY if the Supabase-authenticated user is the owner OR has an
- * accepted share for that note. The token grants:
+ * Issues a Liveblocks access token scoped to the requested room, but
+ * ONLY if the Supabase-authenticated user is the owner OR has an
+ * accepted share for that resource. The token grants:
  *   - "FULL" (read + write) when access is owner or share+edit
  *   - "READ" when access is share+view
  */
@@ -27,19 +33,46 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json().catch(() => ({}));
     const room = typeof body?.room === "string" ? body.room : "";
-    if (!room.startsWith("note:")) {
+
+    let resourceRoomId: string;
+    let canEdit: boolean;
+
+    if (room.startsWith("note:")) {
+      const noteId = room.slice("note:".length);
+      if (!noteId) {
+        return NextResponse.json({ error: "Invalid room" }, { status: 400 });
+      }
+      const access = await resolveNoteAccess(userId, noteId);
+      if (access.kind === "none") {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+      canEdit =
+        access.kind === "owner" ||
+        (access.kind === "share" && access.permission === "edit");
+      resourceRoomId = noteRoomId(noteId);
+    } else if (room.startsWith("whiteboard:")) {
+      const boardId = room.slice("whiteboard:".length);
+      if (!boardId) {
+        return NextResponse.json({ error: "Invalid room" }, { status: 400 });
+      }
+      // ownerHint comes from the client when joining a board they don't
+      // own, to short-circuit the lookup. Optional — resolve still works
+      // without it.
+      const ownerHintId =
+        typeof body?.ownerId === "string" && body.ownerId.length > 0
+          ? body.ownerId
+          : null;
+      const access = await resolveWhiteboardAccess(userId, boardId, ownerHintId);
+      if (access.kind === "none") {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+      canEdit =
+        access.kind === "owner" ||
+        (access.kind === "share" && access.permission === "edit");
+      resourceRoomId = whiteboardRoomId(boardId);
+    } else {
       return NextResponse.json({ error: "Invalid room" }, { status: 400 });
     }
-    const noteId = room.slice("note:".length);
-    if (!noteId) return NextResponse.json({ error: "Invalid room" }, { status: 400 });
-
-    const access = await resolveNoteAccess(userId, noteId);
-    if (access.kind === "none") {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
-    const canEdit =
-      access.kind === "owner" ||
-      (access.kind === "share" && access.permission === "edit");
 
     // Lookup user metadata for the presence card (name + email + colour
     // + avatar). The name + avatar can be customized via the Profile
@@ -66,7 +99,7 @@ export async function POST(request: NextRequest) {
         avatar: (userRow?.avatar_url as string | null | undefined) ?? undefined,
       },
     });
-    session.allow(noteRoomId(noteId), canEdit ? session.FULL_ACCESS : session.READ_ACCESS);
+    session.allow(resourceRoomId, canEdit ? session.FULL_ACCESS : session.READ_ACCESS);
 
     const { status, body: tokenBody } = await session.authorize();
     return new NextResponse(tokenBody, {

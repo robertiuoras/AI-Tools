@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { supabaseAdmin } from "@/lib/supabase";
+import { resolveWhiteboardAccess } from "@/lib/whiteboard-auth";
 
 const WHITEBOARD_BUCKET = "user-whiteboard";
 
@@ -100,8 +101,14 @@ async function saveBoardsMeta(userId: string, boards: BoardMeta[]) {
 }
 
 /**
- * GET /api/whiteboard              → list all boards for user
- * GET /api/whiteboard?boardId=xxx  → load snapshot for that board
+ * GET /api/whiteboard                              → list all boards for user
+ * GET /api/whiteboard?boardId=xxx                  → load snapshot (own board)
+ * GET /api/whiteboard?boardId=xxx&ownerId=yyy      → load snapshot for a board
+ *                                                    shared with you (the
+ *                                                    ownerId is the storage
+ *                                                    folder owner; resolve
+ *                                                    via whiteboard_share
+ *                                                    to check permission).
  */
 export async function GET(request: NextRequest) {
   try {
@@ -109,6 +116,7 @@ export async function GET(request: NextRequest) {
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const boardId = request.nextUrl.searchParams.get("boardId");
+    const ownerHintParam = request.nextUrl.searchParams.get("ownerId");
 
     if (!boardId) {
       // List boards
@@ -125,18 +133,54 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ boards });
     }
 
-    // Load specific board snapshot
+    // Resolve which folder to read from. For your own board the storage
+    // path is `${userId}/${boardId}.json`; for a board shared with you
+    // it's `${ownerId}/${boardId}.json` and we must verify the share
+    // before serving.
+    const access = await resolveWhiteboardAccess(
+      userId,
+      boardId,
+      ownerHintParam ?? userId,
+    );
+    if (access.kind === "none") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
     const admin = supabaseAdmin as any;
-    const path = `${userId}/${boardId}.json`;
+    const path = `${access.ownerId}/${boardId}.json`;
     const { data, error } = await admin.storage.from(WHITEBOARD_BUCKET).download(path);
 
     if (error || !data) {
-      return NextResponse.json({ snapshot: null });
+      return NextResponse.json({
+        snapshot: null,
+        access: {
+          kind: access.kind,
+          ownerId: access.ownerId,
+          permission:
+            access.kind === "owner"
+              ? "edit"
+              : access.kind === "share"
+                ? access.permission
+                : "view",
+        },
+      });
     }
 
     const text = await (data as Blob).text();
     const snapshot = JSON.parse(text);
-    return NextResponse.json({ snapshot });
+    return NextResponse.json({
+      snapshot,
+      access: {
+        kind: access.kind,
+        ownerId: access.ownerId,
+        permission:
+          access.kind === "owner"
+            ? "edit"
+            : access.kind === "share"
+              ? access.permission
+              : "view",
+      },
+    });
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }
@@ -162,31 +206,74 @@ export async function POST(request: NextRequest) {
       boardId?: string;
       name?: string;
       snapshot?: unknown;
+      // Optional — when saving a board that's been shared WITH you, the
+      // client passes the owner's id so we write to the right storage
+      // folder. We re-verify the share on every write.
+      ownerId?: string;
     };
 
     if (body.action === "save") {
       if (!body.boardId || !body.snapshot) {
         return NextResponse.json({ error: "boardId and snapshot required" }, { status: 400 });
       }
-      const path = `${userId}/${body.boardId}.json`;
+
+      // Resolve where to write. If ownerId === userId, fast path: own board.
+      // If ownerId is someone else, must have an edit share. If no ownerId
+      // given, fall back to "own" semantics (back-compat with older clients).
+      const ownerHint = body.ownerId ?? userId;
+      const isOwnBoard = ownerHint === userId;
+
+      let resolvedOwnerId = userId;
+      let resolvedPermission: "view" | "edit" = "edit";
+
+      if (!isOwnBoard) {
+        const access = await resolveWhiteboardAccess(
+          userId,
+          body.boardId,
+          ownerHint,
+        );
+        if (access.kind === "none") {
+          return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+        }
+        resolvedOwnerId = access.ownerId;
+        resolvedPermission =
+          access.kind === "owner"
+            ? "edit"
+            : access.kind === "share"
+              ? access.permission
+              : "view";
+        if (resolvedPermission !== "edit") {
+          return NextResponse.json(
+            { error: "View-only access" },
+            { status: 403 },
+          );
+        }
+      }
+
+      const path = `${resolvedOwnerId}/${body.boardId}.json`;
       const bytes = new TextEncoder().encode(JSON.stringify(body.snapshot));
       const { error } = await admin.storage
         .from(WHITEBOARD_BUCKET)
         .upload(path, bytes, { contentType: "application/json", upsert: true });
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-      // Update updatedAt in boards meta IF this board still exists in meta.
-      // Critical: do NOT re-add a missing board here. WhiteboardInner fires
-      // one last autosave on unmount, which races with delete and would
-      // otherwise resurrect a board the user just removed. The "create"
-      // action is the only thing that should add a board to meta.
-      const boards = await loadBoardsMeta(userId);
+      // Update updatedAt in the OWNER's boards meta IF the board still
+      // exists. Critical: do NOT re-add a missing board here. WhiteboardInner
+      // fires one last autosave on unmount, which races with delete and
+      // would otherwise resurrect a board the user just removed. The
+      // "create" action is the only thing that should add a board to meta.
+      const boards = await loadBoardsMeta(resolvedOwnerId);
       const exists = boards.some((b) => b.id === body.boardId);
       if (!exists) {
         // Board was deleted (or is the virtual "default" that hasn't been
-        // persisted yet). For "default", seed it; otherwise no-op so we
-        // don't resurrect a deleted board.
-        if (body.boardId === "default" && boards.length === 0) {
+        // persisted yet). For "default", seed it on the OWNER's account
+        // only if they're the requester; otherwise no-op so we don't
+        // resurrect a deleted board.
+        if (
+          isOwnBoard &&
+          body.boardId === "default" &&
+          boards.length === 0
+        ) {
           await saveBoardsMeta(userId, [
             { id: "default", name: "Untitled Board", updatedAt: new Date().toISOString() },
           ]);
@@ -196,7 +283,7 @@ export async function POST(request: NextRequest) {
       const updated = boards.map((b) =>
         b.id === body.boardId ? { ...b, updatedAt: new Date().toISOString() } : b
       );
-      await saveBoardsMeta(userId, updated);
+      await saveBoardsMeta(resolvedOwnerId, updated);
       return NextResponse.json({ ok: true });
     }
 

@@ -9,7 +9,10 @@ import { supabaseAdmin } from "@/lib/supabase";
 export type NotificationType =
   | "note_shared"
   | "note_unshared"
-  | "note_share_permission_changed";
+  | "note_share_permission_changed"
+  | "whiteboard_shared"
+  | "whiteboard_unshared"
+  | "whiteboard_share_permission_changed";
 
 export interface CreateNotificationParams {
   userId: string;

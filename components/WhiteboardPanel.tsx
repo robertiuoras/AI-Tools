@@ -17,9 +17,14 @@ import {
   PanelRight,
   PanelTop,
   PanelBottom,
+  Share2,
+  Users,
+  Eye,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/toaster";
+import { WhiteboardRoomMount } from "@/components/WhiteboardRoomMount";
+import { WhiteboardShareDialog } from "@/components/WhiteboardShareDialog";
 
 /** Where the Excalidraw shape toolbar sits relative to the canvas. */
 export type ToolbarPosition = "top" | "bottom" | "left" | "right";
@@ -39,6 +44,37 @@ interface BoardMeta {
   updatedAt: string;
 }
 
+interface SharedBoardMeta {
+  shareId: string;
+  boardId: string;
+  ownerId: string;
+  boardName: string;
+  permission: "view" | "edit";
+  createdAt: string;
+  updatedAt: string;
+  owner: {
+    id: string;
+    email: string;
+    name: string | null;
+    avatar_url: string | null;
+  } | null;
+}
+
+/**
+ * Discriminated state for which board the canvas is currently showing.
+ * Using a tagged union (instead of two parallel ids) makes it impossible
+ * to forget the ownerId/permission when rendering a shared board.
+ */
+type ActiveBoard =
+  | { kind: "own"; boardId: string }
+  | {
+      kind: "shared";
+      boardId: string;
+      ownerId: string;
+      permission: "view" | "edit";
+      ownerName: string;
+    };
+
 const WhiteboardCanvas = dynamic(() => import("./WhiteboardInner"), {
   ssr: false,
   loading: () => (
@@ -57,7 +93,8 @@ interface Props {
 
 export function WhiteboardPanel({ token }: Props) {
   const [boards, setBoards] = useState<BoardMeta[]>([]);
-  const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
+  const [sharedBoards, setSharedBoards] = useState<SharedBoardMeta[]>([]);
+  const [active, setActive] = useState<ActiveBoard | null>(null);
   const [loading, setLoading] = useState(true);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameVal, setRenameVal] = useState("");
@@ -65,6 +102,10 @@ export function WhiteboardPanel({ token }: Props) {
   // Two-step delete: clicking trash sets this; modal confirms.
   const [confirmDelete, setConfirmDelete] = useState<BoardMeta | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // Share dialog: tracks which OWNED board is being shared.
+  const [shareDialogBoard, setShareDialogBoard] = useState<BoardMeta | null>(
+    null,
+  );
   const { addToast } = useToast();
 
   // ── Layout preferences (persisted) ──────────────────────────────────
@@ -130,24 +171,50 @@ export function WhiteboardPanel({ token }: Props) {
     return () => document.removeEventListener("mousedown", onPointer);
   }, [settingsOpen]);
 
-  // Fetch boards once on mount.
-  // token is guaranteed non-null here — the notes page only renders WhiteboardPanel
-  // when token is truthy. We use [] deps so a token refresh (TOKEN_REFRESHED from
-  // Supabase) doesn't re-run this effect and cause unnecessary re-renders.
+  // Fetch own + shared boards once on mount, plus a refresh helper that
+  // can be called from the share dialog and notification listeners.
+  // token is guaranteed non-null here — the notes page only renders
+  // WhiteboardPanel when token is truthy. We use [] deps so a token
+  // refresh (TOKEN_REFRESHED from Supabase) doesn't re-run this effect.
+  const refreshSharedBoards = useCallback(async () => {
+    try {
+      const res = await fetch("/api/whiteboard/shared", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as { boards: SharedBoardMeta[] };
+      setSharedBoards(data.boards ?? []);
+    } catch {
+      /* non-fatal */
+    }
+  }, [token]);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/whiteboard", {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (res.ok) {
-          const data = (await res.json()) as { boards: BoardMeta[] };
+        const [ownRes, sharedRes] = await Promise.all([
+          fetch("/api/whiteboard", {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+          fetch("/api/whiteboard/shared", {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+        ]);
+        if (cancelled) return;
+
+        if (ownRes.ok) {
+          const data = (await ownRes.json()) as { boards: BoardMeta[] };
           const list = data.boards ?? [];
-          if (!cancelled) {
-            setBoards(list);
-            if (list.length > 0) setActiveBoardId(list[0].id);
+          setBoards(list);
+          if (list.length > 0) {
+            setActive({ kind: "own", boardId: list[0].id });
           }
+        }
+        if (sharedRes.ok) {
+          const data = (await sharedRes.json()) as { boards: SharedBoardMeta[] };
+          setSharedBoards(data.boards ?? []);
         }
       } catch {/* */}
       finally { if (!cancelled) setLoading(false); }
@@ -155,6 +222,54 @@ export function WhiteboardPanel({ token }: Props) {
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // intentionally empty — token is stable at mount time
+
+  // Auto-refresh shared boards list when a notification arrives so a
+  // newly-shared board appears without the user manually reloading.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onNew = (e: Event) => {
+      const detail = (e as CustomEvent<{ types?: string[] }>).detail;
+      const types = detail?.types ?? [];
+      const relevant = types.some((t) =>
+        t === "whiteboard_shared" ||
+        t === "whiteboard_unshared" ||
+        t === "whiteboard_share_permission_changed",
+      );
+      if (relevant || types.length === 0) {
+        void refreshSharedBoards();
+      }
+    };
+    window.addEventListener("ai-tools:new-notifications", onNew);
+    return () => {
+      window.removeEventListener("ai-tools:new-notifications", onNew);
+    };
+  }, [refreshSharedBoards]);
+
+  // Deep-link: when the current URL contains ?board=...&owner=... select
+  // the corresponding shared board automatically (used by share emails).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!sharedBoards.length) return;
+    const params = new URLSearchParams(window.location.search);
+    const boardId = params.get("board");
+    const ownerId = params.get("owner");
+    if (!boardId || !ownerId) return;
+    const match = sharedBoards.find(
+      (b) => b.boardId === boardId && b.ownerId === ownerId,
+    );
+    if (match) {
+      setActive({
+        kind: "shared",
+        boardId: match.boardId,
+        ownerId: match.ownerId,
+        permission: match.permission,
+        ownerName:
+          match.owner?.name?.trim() ||
+          match.owner?.email?.split("@")[0] ||
+          "Owner",
+      });
+    }
+  }, [sharedBoards]);
 
   useEffect(() => {
     if (renamingId && renameInputRef.current) {
@@ -172,7 +287,7 @@ export function WhiteboardPanel({ token }: Props) {
     if (res.ok) {
       const data = (await res.json()) as { board: BoardMeta };
       setBoards((prev) => [...prev, data.board]);
-      setActiveBoardId(data.board.id);
+      setActive({ kind: "own", boardId: data.board.id });
     }
   }, [token]);
 
@@ -232,10 +347,11 @@ export function WhiteboardPanel({ token }: Props) {
         }
         if (next) {
           setBoards(next);
-          if (activeBoardId === boardId) {
-            setActiveBoardId(next[0]?.id ?? null);
-          } else if (!next.some((b) => b.id === activeBoardId)) {
-            setActiveBoardId(next[0]?.id ?? null);
+          const activeOwnId =
+            active?.kind === "own" ? active.boardId : null;
+          if (activeOwnId === boardId || (activeOwnId && !next.some((b) => b.id === activeOwnId))) {
+            const nextFirst = next[0]?.id;
+            setActive(nextFirst ? { kind: "own", boardId: nextFirst } : null);
           }
         }
         addToast({
@@ -258,7 +374,7 @@ export function WhiteboardPanel({ token }: Props) {
         setConfirmDelete(null);
       }
     },
-    [token, activeBoardId, deletingId, addToast],
+    [token, active, deletingId, addToast],
   );
 
   return (
@@ -287,11 +403,14 @@ export function WhiteboardPanel({ token }: Props) {
               key={board.id}
               className={cn(
                 "flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-sm transition-all",
-                activeBoardId === board.id
+                active?.kind === "own" && active.boardId === board.id
                   ? "border-primary/40 bg-background text-foreground shadow-sm"
                   : "border-transparent text-muted-foreground hover:bg-background/60 hover:text-foreground cursor-pointer",
               )}
-              onClick={() => activeBoardId !== board.id && setActiveBoardId(board.id)}
+              onClick={() => {
+                if (active?.kind === "own" && active.boardId === board.id) return;
+                setActive({ kind: "own", boardId: board.id });
+              }}
             >
               {renamingId === board.id ? (
                 <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
@@ -319,10 +438,21 @@ export function WhiteboardPanel({ token }: Props) {
                   <div className="flex items-center gap-0.5 shrink-0">
                     <button
                       type="button"
+                      title="Share board"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShareDialogBoard(board);
+                      }}
+                      className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-primary/10 hover:text-primary"
+                    >
+                      <Share2 className="h-3 w-3" />
+                    </button>
+                    <button
+                      type="button"
                       title="Rename board"
                       onClick={(e) => {
                         e.stopPropagation();
-                        setActiveBoardId(board.id);
+                        setActive({ kind: "own", boardId: board.id });
                         startRename(board);
                       }}
                       className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -357,6 +487,61 @@ export function WhiteboardPanel({ token }: Props) {
         >
           <Plus className="h-3.5 w-3.5" />
         </button>
+
+        {/* ── Shared with me ─────────────────────────────────────── */}
+        {sharedBoards.length > 0 ? (
+          <>
+            <div
+              className="mx-2 h-5 w-px shrink-0 bg-border/70"
+              aria-hidden
+            />
+            <div className="flex shrink-0 items-center gap-1 pr-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <Users className="h-3 w-3" /> Shared
+            </div>
+            {sharedBoards.map((sb) => {
+              const isActive =
+                active?.kind === "shared" &&
+                active.boardId === sb.boardId &&
+                active.ownerId === sb.ownerId;
+              const ownerLabel =
+                sb.owner?.name?.trim() ||
+                sb.owner?.email?.split("@")[0] ||
+                "Owner";
+              return (
+                <div
+                  key={sb.shareId}
+                  title={`From ${ownerLabel} · ${sb.permission === "edit" ? "Can edit" : "View only"}`}
+                  onClick={() => {
+                    if (isActive) return;
+                    setActive({
+                      kind: "shared",
+                      boardId: sb.boardId,
+                      ownerId: sb.ownerId,
+                      permission: sb.permission,
+                      ownerName: ownerLabel,
+                    });
+                  }}
+                  className={cn(
+                    "flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-sm transition-all cursor-pointer",
+                    isActive
+                      ? "border-primary/40 bg-background text-foreground shadow-sm"
+                      : "border-transparent text-muted-foreground hover:bg-background/60 hover:text-foreground",
+                  )}
+                >
+                  {sb.permission === "view" ? (
+                    <Eye className="h-3 w-3 text-muted-foreground" />
+                  ) : (
+                    <Users className="h-3 w-3 text-primary" />
+                  )}
+                  <span className="max-w-[140px] truncate">{sb.boardName}</span>
+                  <span className="text-[10px] text-muted-foreground/80">
+                    · {ownerLabel}
+                  </span>
+                </div>
+              );
+            })}
+          </>
+        ) : null}
 
         {/* Right-aligned layout controls: settings popover + fullscreen toggle. */}
         <div className="ml-auto flex shrink-0 items-center gap-1 pl-2">
@@ -455,13 +640,26 @@ export function WhiteboardPanel({ token }: Props) {
         )}
         style={{ minHeight: 0 }}
       >
-        {activeBoardId ? (
-          <WhiteboardCanvas
-            key={activeBoardId}
-            token={token}
-            boardId={activeBoardId}
-            toolbarPosition={toolbarPosition}
-          />
+        {active ? (
+          // Mount a Liveblocks room scoped to this board so any number of
+          // participants can join in real time. The room is keyed by
+          // boardId so switching boards remounts the provider with a
+          // fresh room (avoids leaking presence/state across boards).
+          <WhiteboardRoomMount
+            key={`${active.boardId}:${active.kind === "shared" ? active.ownerId : "self"}`}
+            boardId={active.boardId}
+            ownerId={active.kind === "shared" ? active.ownerId : null}
+          >
+            <WhiteboardCanvas
+              token={token}
+              boardId={active.boardId}
+              toolbarPosition={toolbarPosition}
+              ownerId={active.kind === "shared" ? active.ownerId : null}
+              permission={
+                active.kind === "shared" ? active.permission : "edit"
+              }
+            />
+          </WhiteboardRoomMount>
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading…
@@ -478,6 +676,15 @@ export function WhiteboardPanel({ token }: Props) {
             setConfirmDelete(null);
           }}
           onConfirm={() => void deleteBoard(confirmDelete.id)}
+        />
+      ) : null}
+
+      {shareDialogBoard ? (
+        <WhiteboardShareDialog
+          open
+          onClose={() => setShareDialogBoard(null)}
+          boardId={shareDialogBoard.id}
+          boardName={shareDialogBoard.name}
         />
       ) : null}
     </div>

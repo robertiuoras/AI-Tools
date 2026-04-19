@@ -27,3 +27,8 @@ export function isLiveblocksConfigured(): boolean {
 export function noteRoomId(noteId: string): string {
   return `note:${noteId}`;
 }
+
+/** Stable room id for a given whiteboard. Keep in sync with the client. */
+export function whiteboardRoomId(boardId: string): string {
+  return `whiteboard:${boardId}`;
+}
