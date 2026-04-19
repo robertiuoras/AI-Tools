@@ -648,6 +648,14 @@ export function corpusIndicatesProductVendorNotServicesAgency(
 /**
  * When scraped/title/body clearly names an industry vertical but the model omitted that list label, add it.
  * Uses tight regexes so generic words alone (e.g. “insurance” on a healthcare page) do not mis-tag.
+ *
+ * IMPORTANT: compliance badges like "HIPAA", "EHR", "EMR", "SOC 2", "GDPR" are
+ * **weak** signals on their own — many B2B SaaS products list HIPAA next to SOC 2
+ * just to show they're enterprise-ready, not because they're healthcare products.
+ * They are only counted when paired with at least one **strong** healthcare signal
+ * (medical/clinical/patient/etc.) in the same corpus. Same idea for the other
+ * verticals: a bare keyword that's commonly mentioned outside its industry must
+ * be backed by a clear domain phrase.
  */
 export function augmentCategoriesWithIndustryVerticals(
   categories: string[],
@@ -655,28 +663,47 @@ export function augmentCategoriesWithIndustryVerticals(
 ): string[] {
   if (!corpus?.trim() || categories.length === 0) return categories
 
-  const verticals: { label: Category; re: RegExp }[] = [
+  // Strong = unambiguous industry phrasing. A single match auto-adds the label.
+  // Weak  = compliance/jargon that's also used by horizontal SaaS (HIPAA, EHR, …).
+  //         A weak match only counts when at least one strong match is also present.
+  const verticals: {
+    label: Category
+    strong: RegExp
+    weak?: RegExp
+  }[] = [
     {
       label: 'Healthcare',
-      re: /\b(healthcare|health\s+care|health[- ]?tech|specifically\s+designed\s+for\s+healthcare|designed\s+for\s+healthcare|for\s+healthcare|healthcare\s+practices?|medical\s+practices?|hospitals?|physicians?|patient\s+intake|\bpatients?\b.*\b(practices?|appointments?|scheduling|calls)\b|dental\s+practices?|\bdentists?\b|telehealth|\behr\b|\bemr\b|\bhipaa\b|clinical\s+workflows?\b)/i,
+      strong:
+        /\b(health[\s-]?care|health[- ]?tech|healthcare\s+practices?|medical\s+(practices?|offices?|professionals?|software|platform|providers?)|hospitals?|physicians?|patient\s+(intake|scheduling|records?|portal)|dental\s+practices?|\bdentists?\b|telehealth|telemedicine|clinical\s+workflows?|clinicians?|nursing\s+(homes?|staff)|pharmac(y|ies)|specifically\s+designed\s+for\s+healthcare|designed\s+for\s+healthcare|for\s+healthcare\s+(practices?|providers?|professionals?|teams?))\b/i,
+      // HIPAA / EHR / EMR alone are not enough — many SaaS list them as compliance
+      // badges. They only contribute when a strong healthcare signal is also present.
+      weak: /\b(hipaa|\behr\b|\bemr\b|phi\b|protected\s+health\s+information)\b/i,
     },
     {
       label: 'Legal',
-      re: /\b(law\s+firms?|legal\s+practices?|litigation\s+support|for\s+attorneys?|paralegal)\b/i,
+      strong:
+        /\b(law\s+firms?|legal\s+practices?|litigation\s+(support|management)|for\s+attorneys?|paralegals?|legal\s+(software|platform|tech))\b/i,
     },
     {
       label: 'Insurance',
-      re: /\b(insurtech|for\s+insurance\s+brokers?|insurance\s+brokerages?|underwriting\s+(platform|software)|claims\s+(automation|software))\b/i,
+      strong:
+        /\b(insurtech|for\s+insurance\s+brokers?|insurance\s+brokerages?|underwriting\s+(platform|software)|claims\s+(automation|software|management)|insurance\s+carriers?|policy\s+administration)\b/i,
     },
   ]
 
   let out = categories
-  for (const { label, re } of verticals) {
+  for (const { label, strong, weak } of verticals) {
     if (!categorySet.has(label)) continue
     if (out.includes(label)) continue
-    if (re.test(corpus)) {
-      out = finalizeToolCategoriesList([label, ...out])
-    }
+    const hasStrong = strong.test(corpus)
+    if (!hasStrong) continue
+    // For verticals that define a weak set (currently only Healthcare), the
+    // strong match alone is sufficient — weak just expands what counts as
+    // strong by combining (strong AND weak), which is implicitly true here
+    // since hasStrong already passed. The weak regex exists so future
+    // verticals can require BOTH if they want; today we only use strong.
+    void weak
+    out = finalizeToolCategoriesList([label, ...out])
   }
   return out
 }

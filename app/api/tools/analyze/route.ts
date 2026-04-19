@@ -513,11 +513,14 @@ ${categories.map((c) => `- "${c}"`).join('\n')}
 
 **Custom categories** (optional): You may add **at most one** custom label per tool, and only when **no list label** is a reasonable fit for that slot. Prefer **1–2 list labels** + optional **one** broad custom (e.g. "Real Estate", "E-commerce") — not three customs, not hyper-niche one-offs (avoid long or ultra-specific phrases). Title Case, 2–4 words, max 40 characters. **Reuse the same custom wording** when the niche matches so site filters stay consistent. Map near-synonyms to the list first; do not duplicate a list concept as a custom string.
 
-Industry verticals (required when copy is explicit): If the title, description, or page text **clearly** names a sector, you **must** include the matching list label — do not omit it for generic labels only.
-- Examples: “for healthcare practices”, “designed for healthcare”, “medical offices”, “patient intake”, “HIPAA”, dentists → include **"Healthcare"**.
+Industry verticals (required when copy is explicit): If the title, description, or page text **clearly** names a sector as the product's primary audience or domain, include the matching list label.
+- Examples: “for healthcare practices”, “designed for healthcare”, “medical offices”, “patient intake”, dentists, EHR/EMR platform, telehealth → include **"Healthcare"**.
 - Insurance brokers, carriers, claims platforms → **"Insurance"** (when that is the industry sold to, not a passing word like “insurance inquiries” on a healthcare product).
 - Law firms, attorneys → **"Legal"**.
-Pair the vertical with function labels (**AI Agents**, **Voice & Audio**, **Customer Support**, **SaaS**, etc.) up to ${MAX_TOOL_CATEGORIES} total.
+
+**Compliance / certification badges are NOT vertical signals.** Words like "HIPAA", "SOC 2", "GDPR", "PCI", "ISO 27001", or "FedRAMP" appearing on a Trust/Security/About page mean the product is enterprise-compliant, NOT that it's a healthcare/finance/government product. Horizontal SaaS (collaboration tools, CRMs, dev tools, etc.) routinely list HIPAA next to SOC 2 to signal they can be safely used by healthcare customers — that does **not** make the product itself a healthcare tool. Only assign **"Healthcare"** when the page's *primary positioning, product description, target audience, or use cases* are about medicine/clinical/patient/dental/etc.
+
+Pair the vertical (when it actually applies) with function labels (**AI Agents**, **Voice & Audio**, **Customer Support**, **SaaS**, etc.) up to ${MAX_TOOL_CATEGORIES} total.
 
 Category quality — **how they sell** matters as much as **what** they sell:
 - **Self-serve product vendor** (SaaS, builders, platforms): **Log in** + **Sign up**, pricing/plans, free tier, APIs/integrations — use **SaaS**, **Design**, **Marketing**, etc. Set **isAgency** to **false** (that pattern is software, not a services agency).
@@ -569,7 +572,7 @@ Rules:
           {
             role: 'system',
             content:
-              `Analyze AI tools. Return valid JSON only. Use 1–${MAX_TOOL_CATEGORIES} categories per tool (never put "Agencies" in categories — set isAgency instead). Prefer canonical list labels; add at most one broad custom label when the list has no good fit — customs show in public filters, so keep wording reusable, not hyper-niche. When copy names an industry, include that list vertical (Healthcare, Insurance, Legal, …) with functional categories. isAgency true only when the vendor IS a services or implementation firm; false for SaaS/products including those marketed “for agencies” or “agencies & businesses” (that is ICP, not company type). News + Education when appropriate. Avoid unnecessary Other.`,
+              `Analyze AI tools. Return valid JSON only. Use 1–${MAX_TOOL_CATEGORIES} categories per tool (never put "Agencies" in categories — set isAgency instead). Prefer canonical list labels; add at most one broad custom label when the list has no good fit — customs show in public filters, so keep wording reusable, not hyper-niche. When copy explicitly positions the product around an industry (its primary audience or domain), include that list vertical (Healthcare, Insurance, Legal, …) alongside functional categories. **Never assign an industry vertical based on compliance badges alone** — words like HIPAA, SOC 2, GDPR, PCI, ISO 27001 are enterprise-trust signals that horizontal SaaS routinely lists, and do not indicate the product is in that industry. isAgency true only when the vendor IS a services or implementation firm; false for SaaS/products including those marketed “for agencies” or “agencies & businesses” (that is ICP, not company type). News + Education when appropriate. Avoid unnecessary Other.`,
           },
           { role: 'user', content: prompt },
         ],
