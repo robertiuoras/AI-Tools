@@ -234,82 +234,128 @@ async function scrapeWebsiteInfo(url: string): Promise<{
       .substring(0, 3000) // Reduced from 5000 to 3000 chars for token optimization
       .toLowerCase()
 
-    // Try to find logo/favicon with multiple fallback methods
+    // Find logo/favicon. Strategy:
+    //  1. Parse <link rel="icon|apple-touch-icon|mask-icon" ...> from the HTML
+    //     (handles attribute order, multi-value rels, sizes hint).
+    //  2. Try og:image / twitter:image (often a high-res brand asset).
+    //  3. HEAD-probe a list of common favicon paths (/favicon.ico, /favicon.png,
+    //     /apple-touch-icon.png, /icon.png — covers Next.js / Astro defaults).
+    //  4. Look for an <img> with "logo" in its class/id/alt.
+    //  5. Last-resort fallback: Google's S2 favicon service. This is what
+    //     fixes the "Remotion has a favicon but we couldn't find it" case —
+    //     Google's index already has a 128px PNG for any indexed domain.
     let logoUrl: string | null = null
     const urlObj = new URL(url)
-    
-    // Method 1: Try favicon link tags (multiple variations)
-    const faviconPatterns = [
-      /<link[^>]*rel=["'](?:icon|shortcut icon|apple-touch-icon|apple-touch-icon-precomposed)["'][^>]*href=["']([^"']+)["']/i,
-      /<link[^>]*href=["']([^"']+)["'][^>]*rel=["'](?:icon|shortcut icon|apple-touch-icon)["']/i,
-    ]
-    
-    for (const pattern of faviconPatterns) {
-      const match = html.match(pattern)
-      if (match) {
-        const logoPath = match[1]
-        try {
-          logoUrl = logoPath.startsWith('http') 
-            ? logoPath 
-            : new URL(logoPath, url).toString()
-          // Verify it's a valid URL
-          if (logoUrl) break
-        } catch (e) {
-          continue
-        }
+    const origin = urlObj.origin
+    const candidatesFromLinks: string[] = []
+
+    // ── Method 1: every <link rel="...icon..."> tag, regardless of attr order ─
+    const linkTagRe = /<link\b[^>]*>/gi
+    for (const tag of html.match(linkTagRe) ?? []) {
+      const relMatch = tag.match(/\brel\s*=\s*["']([^"']+)["']/i)
+      const hrefMatch = tag.match(/\bhref\s*=\s*["']([^"']+)["']/i)
+      if (!relMatch || !hrefMatch) continue
+      const rel = relMatch[1].toLowerCase()
+      if (
+        rel.includes('icon') ||
+        rel === 'apple-touch-icon-precomposed' ||
+        rel === 'mask-icon' ||
+        rel === 'fluid-icon'
+      ) {
+        candidatesFromLinks.push(hrefMatch[1])
       }
     }
-    
-    // Method 2: Try og:image (often higher quality)
+    // Prefer apple-touch-icon (180px) > sized icon > anything else.
+    candidatesFromLinks.sort((a, b) => {
+      const score = (s: string) =>
+        /apple-touch-icon/i.test(s) ? 3 : /\b(192|256|512|180|144|128)\b/.test(s) ? 2 : 1
+      return score(b) - score(a)
+    })
+    for (const href of candidatesFromLinks) {
+      try {
+        const candidate = href.startsWith('http')
+          ? href
+          : new URL(href, origin).toString()
+        if (candidate) {
+          logoUrl = candidate
+          break
+        }
+      } catch { /* try next */ }
+    }
+
+    // ── Method 2: og:image / twitter:image ──────────────────────────────────
     if (!logoUrl) {
-      const ogImageMatch = html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i)
-      if (ogImageMatch) {
-        try {
-          logoUrl = ogImageMatch[1]
-        } catch (e) {
-          // Continue to next method
+      const ogPatterns = [
+        /<meta[^>]*property=["']og:image(?::secure_url)?["'][^>]*content=["']([^"']+)["']/i,
+        /<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:image(?::secure_url)?["']/i,
+        /<meta[^>]*name=["']twitter:image(?::src)?["'][^>]*content=["']([^"']+)["']/i,
+      ]
+      for (const pattern of ogPatterns) {
+        const m = html.match(pattern)
+        if (m) {
+          try {
+            logoUrl = m[1].startsWith('http') ? m[1] : new URL(m[1], origin).toString()
+            if (logoUrl) break
+          } catch { /* try next */ }
         }
       }
     }
-    
-    // Method 3: Try common favicon paths
+
+    // ── Method 3: HEAD-probe well-known favicon paths in parallel ───────────
+    // We previously just constructed a URL string without verifying it
+    // existed, which often led to broken-image cards. HEAD with a 2.5s
+    // timeout gives us a real signal at trivial cost.
     if (!logoUrl) {
       const commonPaths = [
-        '/favicon.ico',
+        '/apple-touch-icon.png',
         '/favicon.png',
+        '/favicon.svg',
+        '/favicon.ico',
+        '/icon.png',
+        '/icon.svg',
         '/logo.png',
         '/logo.svg',
-        '/apple-touch-icon.png',
-        '/images/logo.png',
-        '/assets/logo.png',
-        '/static/logo.png',
       ]
-      
-      for (const path of commonPaths) {
+      const probes = commonPaths.map(async (path) => {
+        const u = new URL(path, origin).toString()
         try {
-          const testUrl = new URL(path, url).toString()
-          // We'll let the frontend handle 404s, but construct valid URLs
-          logoUrl = testUrl
-          break
-        } catch (e) {
-          continue
-        }
-      }
+          const r = await fetch(u, {
+            method: 'HEAD',
+            signal: AbortSignal.timeout(2500),
+            redirect: 'follow',
+          })
+          if (r.ok && (r.headers.get('content-type') ?? '').startsWith('image')) {
+            return u
+          }
+        } catch { /* ignore */ }
+        return null
+      })
+      const results = await Promise.all(probes)
+      logoUrl = results.find((x): x is string => x !== null) ?? null
     }
-    
-    // Method 4: Try to find logo in common class/id patterns
+
+    // ── Method 4: <img> with "logo" in class/id/alt ─────────────────────────
     if (!logoUrl) {
-      const logoImgMatch = html.match(/<img[^>]*(?:class|id)=["'][^"']*logo[^"']*["'][^>]*src=["']([^"']+)["']/i)
+      const logoImgMatch =
+        html.match(/<img[^>]*(?:class|id|alt)=["'][^"']*logo[^"']*["'][^>]*src=["']([^"']+)["']/i) ||
+        html.match(/<img[^>]*src=["']([^"']+)["'][^>]*(?:class|id|alt)=["'][^"']*logo[^"']*["']/i)
       if (logoImgMatch) {
         try {
           const logoPath = logoImgMatch[1]
-          logoUrl = logoPath.startsWith('http') 
-            ? logoPath 
-            : new URL(logoPath, url).toString()
-        } catch (e) {
-          // Continue
-        }
+          logoUrl = logoPath.startsWith('http')
+            ? logoPath
+            : new URL(logoPath, origin).toString()
+        } catch { /* continue */ }
       }
+    }
+
+    // ── Method 5: Google S2 favicon service — guaranteed last-resort ────────
+    // Returns a high-quality PNG for any indexed domain (which is essentially
+    // every commercial site). This is what "fixes Remotion" — even when the
+    // page's own <link rel="icon"> is dynamically injected and not in the
+    // initial HTML, Google has already crawled and cached it.
+    if (!logoUrl) {
+      logoUrl = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(urlObj.hostname)}&sz=128`
     }
 
     // Pricing probes were started in parallel above; just await the result here.

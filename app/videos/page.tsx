@@ -546,49 +546,12 @@ function VideosPageContent() {
           </div>
         )}
 
-        {/* Creators horizontal strip */}
-        {viewMode === "videos" && creators.length > 0 && (
-          <div className="space-y-4">
-            <h2 className="text-lg font-semibold flex items-center gap-2">
-              <Users className="h-5 w-5 text-rose-500" /> Creators
-            </h2>
-            <div className="flex gap-3 overflow-x-auto pb-2 -mx-1 px-1">
-              <button type="button" onClick={() => setSelectedYoutuber(null)}
-                className={cn("flex-shrink-0 rounded-xl border-2 px-4 py-3 text-left transition-all",
-                  selectedYoutuber === null ? "border-rose-500 bg-rose-500/10 text-foreground" : "border-border bg-muted/30 hover:bg-muted/50 text-muted-foreground hover:text-foreground")}
-              >
-                <span className="font-medium">All creators</span>
-              </button>
-              {creators.map((c) => {
-                const primarySource = c.tiktokCount > c.youtubeCount ? "tiktok" : "youtube";
-                const subsLabel = formatSubs(c.subscriberCount);
-                return (
-                  <button key={c.name} type="button" onClick={() => setSelectedYoutuber((prev) => (prev === c.name ? null : c.name))}
-                    className={cn("flex-shrink-0 rounded-xl border-2 px-4 py-3 text-left min-w-[140px] transition-all",
-                      selectedYoutuber === c.name ? "border-rose-500 bg-rose-500/10 text-foreground" : "border-border bg-muted/30 hover:bg-muted/50 text-muted-foreground hover:text-foreground")}
-                  >
-                    <div className="flex items-center gap-3">
-                      <CreatorAvatar name={c.name} src={c.channelThumbnailUrl} size="sm" />
-                      <div className="min-w-0">
-                        <p className="font-medium truncate">{c.name}</p>
-                        {subsLabel && (
-                          <p className="text-xs text-muted-foreground">
-                            {subsLabel} {primarySource === "tiktok" ? "followers" : "subscribers"} · {(c.channelVideoCount ?? c.count).toLocaleString()} video{(c.channelVideoCount ?? c.count) !== 1 ? "s" : ""}
-                          </p>
-                        )}
-                        <p className="text-[11px] text-muted-foreground/80 mt-0.5">
-                          <span className="inline-flex items-center rounded-full bg-muted px-1.5 py-0.5">
-                            {primarySource === "tiktok" ? "TikTok creator" : "YouTube creator"}
-                          </span>
-                        </p>
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
+        {/* Creators horizontal strip is intentionally NOT rendered on the
+            Videos tab — Creators has its own dedicated top-nav tab, and
+            duplicating the strip here was confusing. If a user wants to
+            filter videos by a single creator they can do so from the
+            Creators tab (clicking a creator card jumps back to /videos with
+            that creator pre-selected via setSelectedYoutuber). */}
 
         {/* Full Creators view */}
         {viewMode === "creators" && (

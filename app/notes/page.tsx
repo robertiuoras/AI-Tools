@@ -1413,10 +1413,18 @@ function NotesPageInner() {
     [flashCopied],
   );
 
-  const selectedNote = useMemo(
-    () => notes.find((n) => n.id === selectedNoteId) ?? null,
-    [notes, selectedNoteId],
-  );
+  const selectedNote = useMemo(() => {
+    if (!selectedNoteId) return null;
+    // Owned notes (loaded for the current page) take precedence, but shared
+    // notes live in `sharedNotes` and never appear in the page's `notes`
+    // array — without this fallback, clicking "Shared with me" entries
+    // sets selectedNoteId but the editor would render nothing because
+    // it couldn't resolve the row.
+    const owned = notes.find((n) => n.id === selectedNoteId);
+    if (owned) return owned;
+    const shared = sharedNotes.find((s) => s.note.id === selectedNoteId);
+    return shared?.note ?? null;
+  }, [notes, sharedNotes, selectedNoteId]);
 
   const allNotesSearchResults = useMemo(() => {
     const q = searchAllNotesQuery.trim().toLowerCase();
