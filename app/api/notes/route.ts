@@ -42,7 +42,29 @@ export async function GET(request: NextRequest) {
     const { data, error } = await query;
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    return NextResponse.json(Array.isArray(data) ? data : []);
+    const notes = Array.isArray(data) ? data : [];
+
+    // Bulk-fetch share counts for all returned notes so the UI can show a
+    // "Shared" indicator without N extra round-trips. One row per share is
+    // enough — we group client-side. Anything > 0 means the note is shared.
+    if (notes.length > 0) {
+      const ids = notes.map((n: any) => n.id);
+      const { data: shareRows } = await admin
+        .from("note_share")
+        .select("noteId, sharedWithId, permission")
+        .eq("ownerId", userId)
+        .in("noteId", ids);
+      const counts = new Map<string, number>();
+      for (const r of (shareRows ?? []) as Array<{ noteId: string }>) {
+        counts.set(r.noteId, (counts.get(r.noteId) ?? 0) + 1);
+      }
+      for (const n of notes) {
+        n.shareCount = counts.get(n.id) ?? 0;
+        n.isShared = (n.shareCount ?? 0) > 0;
+      }
+    }
+
+    return NextResponse.json(notes);
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
   }

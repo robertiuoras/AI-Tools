@@ -3,6 +3,41 @@ import { supabaseAdmin } from "@/lib/supabase";
 import { getUserId, resolveNoteAccess } from "@/lib/notes-auth";
 import { snapshotNoteVersion } from "@/lib/note-versions";
 
+/**
+ * GET /api/notes/:id — fetch a single note (owner OR shared recipient).
+ * Used by the version-history revert modal to render the "currently in
+ * your note" pane next to the version preview.
+ */
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    const userId = await getUserId(request);
+    if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const { id } = await params;
+
+    const access = await resolveNoteAccess(userId, id);
+    if (access.kind === "none") {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    const admin = supabaseAdmin as any;
+    const { data, error } = await admin
+      .from("note")
+      .select("*")
+      .eq("id", id)
+      .single();
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json(data);
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : String(e) },
+      { status: 500 },
+    );
+  }
+}
+
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }

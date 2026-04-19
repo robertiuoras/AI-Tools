@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase";
 import { getUserId, resolveNoteAccess } from "@/lib/notes-auth";
 import { createNotification } from "@/lib/notifications";
 import { sendEmail, escapeHtml } from "@/lib/email";
+import { snapshotNoteVersion } from "@/lib/note-versions";
 
 /**
  * GET  /api/notes/:id/shares — list all shares for a note (owner only).
@@ -125,6 +126,31 @@ export async function POST(
         .single();
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
       row = data;
+    }
+
+    // Snapshot the note as it stands the moment it becomes shared. This
+    // gives the owner an immutable "pre-share baseline" they can revert
+    // to if collaboration ever produces an unexpected state. Done only
+    // for genuinely new shares (not permission-only updates) so we don't
+    // spam the version list. Best-effort — failures don't block the share.
+    if (!existing?.id) {
+      try {
+        const { data: noteRow } = await admin
+          .from("note")
+          .select("title, content")
+          .eq("id", id)
+          .single();
+        if (noteRow) {
+          await snapshotNoteVersion({
+            noteId: id,
+            authorId: userId,
+            title: noteRow.title ?? "Untitled Note",
+            content: noteRow.content ?? "",
+          });
+        }
+      } catch (err) {
+        console.error("[shares] pre-share snapshot failed", err);
+      }
     }
 
     // Side-effects: in-app notification + email. Both are best-effort —

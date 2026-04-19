@@ -140,6 +140,10 @@ export interface Note {
   favorite: boolean;
   createdAt: string;
   updatedAt: string;
+  /** Set by GET /api/notes — number of users this owned note is shared with. */
+  shareCount?: number;
+  /** Convenience flag: shareCount > 0. Owner-side view of "is this collaborative?" */
+  isShared?: boolean;
 }
 
 export type NoteSharePermission = "view" | "edit";

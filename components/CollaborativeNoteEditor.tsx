@@ -121,39 +121,149 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
     [isProviderReady, canEdit, userColour, userName],
   );
 
-  // Seed empty Y.Doc with initial HTML on first sync. Other clients arriving
-  // later will receive this state through Yjs and skip the seed.
+  /*
+   * Seed the empty Y.Doc with the existing note HTML on first sync.
+   *
+   * SAFETY MODEL — content is irreplaceable, so we go to extra lengths:
+   *
+   * 1. We wait for the Liveblocks Yjs provider to finish syncing with the
+   *    server before deciding anything. Without this the doc looks "empty"
+   *    for a few hundred ms even when other clients have populated it,
+   *    which would cause us to seed on top of existing content.
+   *
+   * 2. We use a Y.Map flag (`__meta.seeded`) to deterministically pick
+   *    exactly ONE seeder across all concurrent clients. The first client
+   *    to claim the flag inside a Yjs transaction also writes the seed;
+   *    any other client racing it sees the flag set and bails out. Yjs
+   *    guarantees one of the concurrent writes wins and all clients
+   *    converge on the same boolean.
+   *
+   * 3. After seeding we mark `hasRealContentRef` so the save guard below
+   *    knows real content exists in this session.
+   */
   const seededRef = useRef(false);
+  /**
+   * Set to true the moment we've ever observed non-empty content in the
+   * editor (either via seed, remote sync, or local typing). Drives the
+   * never-save-empty guard in flushSave.
+   */
+  const hasRealContentRef = useRef(false);
+  /** Resolves to true once the provider's first sync round-trip completes. */
+  const [providerSynced, setProviderSynced] = useState(false);
+
   useEffect(() => {
-    if (!editor || !providerRef.current) return;
     const provider = providerRef.current;
-    const trySeed = () => {
-      if (seededRef.current) return;
-      seededRef.current = true;
-      // ProseMirror counts an "empty" doc as one with a single empty paragraph
-      // (size 2). Anything larger means another client already populated it.
+    if (!provider) return;
+    if ((provider as any).synced) {
+      setProviderSynced(true);
+      return;
+    }
+    const onSync = () => setProviderSynced(true);
+    (provider as any).on?.("sync", onSync);
+    return () => {
+      (provider as any).off?.("sync", onSync);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!editor || !providerSynced) return;
+    if (seededRef.current) return;
+
+    const meta = ydoc.getMap("__meta");
+
+    // Decide who seeds inside a single Yjs transaction. The check + flag
+    // are atomic from the doc's perspective; Yjs deterministically picks
+    // one winner across concurrent transactions and replays the others.
+    let shouldSeed = false;
+    ydoc.transact(() => {
+      if (meta.get("seeded") === true) return;
       const isEmpty = editor.state.doc.content.size <= 2;
       if (isEmpty && initialHtml && initialHtml.trim().length > 0) {
-        editor.commands.setContent(initialHtml, false);
+        meta.set("seeded", true);
+        shouldSeed = true;
+      } else {
+        // Either there's content already (we joined a populated room) or
+        // there genuinely is nothing to seed. Either way, mark seeded so
+        // future re-evaluations skip this branch.
+        meta.set("seeded", true);
       }
-    };
-    if ((provider as any).synced) {
-      trySeed();
-    } else {
-      const onSync = () => trySeed();
-      (provider as any).on?.("sync", onSync);
-      return () => (provider as any).off?.("sync", onSync);
+    });
+
+    seededRef.current = true;
+
+    if (shouldSeed) {
+      // setContent runs its own ProseMirror transaction; defer one tick so
+      // we're not nesting transactions.
+      queueMicrotask(() => {
+        if (!editor.isDestroyed) {
+          editor.commands.setContent(initialHtml, false);
+          hasRealContentRef.current = true;
+        }
+      });
+    } else if (editor.state.doc.content.size > 2) {
+      // Joined a populated room — we already have real content via sync.
+      hasRealContentRef.current = true;
     }
-  }, [editor, initialHtml]);
+  }, [editor, initialHtml, providerSynced, ydoc]);
+
+  // Track whether we've ever observed real content. Combined with the
+  // never-save-empty guard, this is the seatbelt that prevents accidental
+  // wipes from save-during-startup races.
+  useEffect(() => {
+    if (!editor) return;
+    const onAnyUpdate = () => {
+      if (editor.state.doc.content.size > 2) hasRealContentRef.current = true;
+    };
+    editor.on("update", onAnyUpdate);
+    editor.on("create", onAnyUpdate);
+    return () => {
+      editor.off("update", onAnyUpdate);
+      editor.off("create", onAnyUpdate);
+    };
+  }, [editor]);
 
   // Debounced save back to Supabase on LOCAL edits only.
   const saveTimer = useRef<number | null>(null);
   const saveAbort = useRef<AbortController | null>(null);
   const lastSavedHtmlRef = useRef<string>(initialHtml);
+  const initialHtmlRef = useRef<string>(initialHtml);
+  initialHtmlRef.current = initialHtml;
 
   const flushSave = useCallback(async () => {
     if (!editor || !canEdit) return;
     const html = editor.getHTML();
+
+    /*
+     * NEVER-SAVE-EMPTY GUARD.
+     *
+     * ProseMirror serialises an empty doc to "<p></p>". If we're about
+     * to save that and we have ANY reason to suspect the editor hasn't
+     * actually been populated this session, we refuse the save instead
+     * of overwriting whatever's in Supabase. Conditions for refusal:
+     *   (a) The current HTML looks empty.
+     *   (b) The note had real initial content (so empty here is suspicious).
+     *   (c) We have not yet observed real content in this session
+     *       (no successful seed, no remote sync, no typing).
+     *   (d) The provider never finished syncing (extra paranoia for
+     *       offline / network-failure scenarios — better to drop the
+     *       save than risk a wipe).
+     *
+     * If (b) is false (the note legitimately starts empty), we allow the
+     * save — clearing your own empty note remains supported.
+     */
+    const isEmptyHtml = html.trim() === "" || html.trim() === "<p></p>";
+    const initialHadContent = (initialHtmlRef.current ?? "").trim().length > 0;
+    if (
+      isEmptyHtml &&
+      initialHadContent &&
+      (!hasRealContentRef.current || !providerSynced)
+    ) {
+      console.warn(
+        "[collab] refusing to save empty doc on top of existing content (startup race?)",
+      );
+      return;
+    }
+
     if (html === lastSavedHtmlRef.current) return;
     lastSavedHtmlRef.current = html;
 
@@ -177,7 +287,7 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
         console.error("[collab] save failed", err);
       }
     }
-  }, [accessToken, canEdit, editor, noteId, onSaved]);
+  }, [accessToken, canEdit, editor, noteId, onSaved, providerSynced]);
 
   useEffect(() => {
     if (!editor) return;

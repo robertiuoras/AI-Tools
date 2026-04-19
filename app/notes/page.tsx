@@ -1441,16 +1441,29 @@ function NotesPageInner() {
   }, [notes, sharedNotes, selectedNoteId]);
 
   /**
-   * When the user opens an OWNED note, fetch its share count once. Anything
+   * When the user opens an OWNED note, resolve its share count. Anything
    * > 0 means we should mount the realtime collaborative editor instead of
    * the legacy custom one. (For shared-with-me notes, the recipient always
-   * gets the collab editor regardless.) The fetch is fire-and-forget and
-   * silently degrades to 0 on error.
+   * gets the collab editor regardless.)
+   *
+   * We seed the value from the note row itself when GET /api/notes already
+   * provided `shareCount` (avoids an extra round-trip and prevents the
+   * UI from flickering through a 0 → N transition). If the field isn't
+   * present yet (legacy cached payload), we fall back to a per-note fetch.
    */
   useEffect(() => {
-    setSelectedOwnedShareCount(0);
     setVersionHistoryOpen(false);
-    if (!selectedNoteId || !token || isSharedNoteSelected) return;
+    if (!selectedNoteId || isSharedNoteSelected) {
+      setSelectedOwnedShareCount(0);
+      return;
+    }
+    const fromNote = notes.find((n) => n.id === selectedNoteId);
+    if (fromNote && typeof fromNote.shareCount === "number") {
+      setSelectedOwnedShareCount(fromNote.shareCount);
+      return;
+    }
+    setSelectedOwnedShareCount(0);
+    if (!token) return;
     let cancelled = false;
     (async () => {
       try {
@@ -1467,7 +1480,7 @@ function NotesPageInner() {
     return () => {
       cancelled = true;
     };
-  }, [selectedNoteId, token, isSharedNoteSelected]);
+  }, [selectedNoteId, token, isSharedNoteSelected, notes]);
 
   /** True when the note is collaborative — either shared with me or shared by me. */
   const useCollaborativeEditor = useMemo(
@@ -4925,6 +4938,16 @@ function NotesPageInner() {
                         ) : null}
                       </button>
                     )}
+                    {n.isShared && editingNoteRowId !== n.id && (
+                      <span
+                        className="inline-flex h-5 shrink-0 items-center gap-0.5 rounded-full bg-emerald-500/15 px-1.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400"
+                        title={`Shared with ${n.shareCount} ${n.shareCount === 1 ? "person" : "people"}`}
+                        aria-label={`Shared with ${n.shareCount} ${n.shareCount === 1 ? "person" : "people"}`}
+                      >
+                        <Users className="h-3 w-3" />
+                        {n.shareCount}
+                      </span>
+                    )}
                     {n.favorite && editingNoteRowId !== n.id && (
                       <Star
                         className="h-3.5 w-3.5 shrink-0 fill-yellow-400 text-yellow-400"
@@ -5249,6 +5272,31 @@ function NotesPageInner() {
                         editedNowMs,
                       )}
                     </span>
+                    {!isSharedNoteSelected && selectedOwnedShareCount > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setShareDialog({
+                            noteId: selectedNote.id,
+                            noteTitle: selectedNote.title,
+                          })
+                        }
+                        className="ml-2 inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-medium text-emerald-600 hover:bg-emerald-500/25 dark:text-emerald-400"
+                        title="Manage who this note is shared with"
+                      >
+                        <Users className="h-3 w-3" />
+                        Shared with {selectedOwnedShareCount}
+                      </button>
+                    ) : null}
+                    {isSharedNoteSelected ? (
+                      <span
+                        className="ml-2 inline-flex items-center gap-1 rounded-full bg-blue-500/15 px-2 py-0.5 text-[11px] font-medium text-blue-600 dark:text-blue-400"
+                        title="This note was shared with you"
+                      >
+                        <Users className="h-3 w-3" />
+                        Shared with you
+                      </span>
+                    ) : null}
                     {useCollaborativeEditor ? (
                       <button
                         type="button"
