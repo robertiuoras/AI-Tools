@@ -9,6 +9,7 @@ import { AuthButton } from '@/components/AuthButton'
 import { ToastProvider } from '@/components/ui/toaster'
 import { NavLinks } from '@/components/NavLinks'
 import { AdminNavLink } from '@/components/AdminNavLink'
+import { NotificationsBell } from '@/components/NotificationsBell'
 import { ToolsCatalogProvider } from '@/components/ToolsCatalogProvider'
 import { AuthSessionProvider } from '@/components/AuthSessionProvider'
 
@@ -46,6 +47,7 @@ export default function RootLayout({
                   </Suspense>
                   <div className="flex items-center gap-4">
                     <AdminNavLink />
+                    <NotificationsBell />
                     <AuthButton />
                     <ThemeToggle />
                   </div>
