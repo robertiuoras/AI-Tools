@@ -18,6 +18,12 @@ type CountUpProps = {
   /** Tailwind classes for the rendered span. */
   className?: string
   /**
+   * Optional className applied only to the placeholder span. Useful when
+   * `className` uses `bg-clip-text text-transparent` for a gradient
+   * number — the placeholder ("—") would otherwise render invisibly.
+   */
+  placeholderClassName?: string
+  /**
    * Re-run the animation every time `value` changes? Defaults to true so a
    * polled stat (e.g. "tools added today") flips up smoothly when the
    * number bumps. Set false to lock to a one-shot intro animation.
@@ -41,6 +47,7 @@ export function CountUp({
   locale,
   placeholder = '—',
   className,
+  placeholderClassName,
   animateOnChange = true,
 }: CountUpProps) {
   const target = Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0
@@ -99,7 +106,9 @@ export function CountUp({
   }, [target, duration, animateOnChange])
 
   if (!Number.isFinite(value) || value <= 0) {
-    return <span className={className}>{placeholder}</span>
+    return (
+      <span className={placeholderClassName ?? className}>{placeholder}</span>
+    )
   }
 
   // Round to int for whole-number stats — no jittery decimals during the ramp.

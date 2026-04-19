@@ -2,7 +2,7 @@
 
 import { motion } from 'framer-motion'
 import Image from 'next/image'
-import { ArrowUpRight } from 'lucide-react'
+import { ArrowUpRight, Layers, TrendingUp } from 'lucide-react'
 
 import { BrandMark } from '@/components/BrandMark'
 import { CountUp } from '@/components/CountUp'
@@ -151,45 +151,82 @@ export function Hero({ tools = [], toolsAddedTodayCount = 0 }: HeroProps) {
                 </span>
               </div>
 
-              {/* Stats row — both numbers count up on first paint so the card
-                  feels alive without the visitor having to do anything. The
-                  subtle white divider between the two columns adds structure. */}
-              <div className="mt-5 grid grid-cols-2 gap-4 divide-x divide-white/10">
-                <div className="pr-4">
-                  <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-white/55">
-                    Tracked
+              {/* Stats row — each stat is its own tinted tile with a gradient
+                  number, so the eye lands on them as the focal point of the
+                  card. Tracked is amber/gold (premium / valuable), Last 24h
+                  is emerald (positive momentum / fresh). Both numbers count
+                  up on first paint via the CountUp component. */}
+              <div className="mt-5 grid grid-cols-2 gap-3">
+                {/* ── Tracked tile ───────────────────────────────────────── */}
+                <div className="group/stat relative overflow-hidden rounded-xl border border-white/10 bg-gradient-to-br from-amber-300/12 via-white/[0.04] to-transparent p-3.5 ring-1 ring-inset ring-white/5 transition-colors hover:border-amber-200/25">
+                  <div
+                    className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-amber-200/45 to-transparent"
+                    aria-hidden
+                  />
+                  <div
+                    className="pointer-events-none absolute -right-8 -top-8 h-20 w-20 rounded-full bg-amber-300/20 blur-2xl"
+                    aria-hidden
+                  />
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className="inline-flex h-4 w-4 items-center justify-center rounded-md bg-amber-300/15 text-amber-200"
+                      aria-hidden
+                    >
+                      <Layers className="h-2.5 w-2.5" strokeWidth={2.5} />
+                    </span>
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-100/85">
+                      Tracked
+                    </span>
                   </div>
-                  <div className="mt-1 flex items-baseline gap-1.5">
+                  <div className="mt-1.5 flex items-baseline gap-1.5">
                     <CountUp
                       value={totalTools}
                       duration={1500}
-                      className="text-3xl font-semibold tabular-nums text-white sm:text-4xl"
+                      className="bg-gradient-to-br from-white via-amber-50 to-amber-200 bg-clip-text text-3xl font-bold tabular-nums tracking-tight text-transparent drop-shadow-[0_1px_8px_rgba(252,211,77,0.25)] sm:text-4xl"
+                      placeholderClassName="text-3xl font-bold tabular-nums tracking-tight text-white/40 sm:text-4xl"
                     />
-                    <span className="text-xs font-medium text-white/55">tools</span>
+                    <span className="text-xs font-medium text-white/60">tools</span>
                   </div>
                 </div>
-                <div className="pl-4">
+
+                {/* ── Last 24h tile ──────────────────────────────────────── */}
+                <div className="group/stat relative overflow-hidden rounded-xl border border-white/10 bg-gradient-to-br from-emerald-300/12 via-white/[0.04] to-transparent p-3.5 ring-1 ring-inset ring-white/5 transition-colors hover:border-emerald-200/30">
+                  <div
+                    className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-200/50 to-transparent"
+                    aria-hidden
+                  />
+                  <div
+                    className="pointer-events-none absolute -right-8 -top-8 h-20 w-20 rounded-full bg-emerald-300/20 blur-2xl"
+                    aria-hidden
+                  />
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-white/55">
+                    <span
+                      className="inline-flex h-4 w-4 items-center justify-center rounded-md bg-emerald-300/15 text-emerald-200"
+                      aria-hidden
+                    >
+                      <TrendingUp className="h-2.5 w-2.5" strokeWidth={2.5} />
+                    </span>
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-100/85">
                       Last 24h
                     </span>
                     {toolsAddedTodayCount > 0 ? (
                       <span
-                        aria-hidden
-                        className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-400/20 text-emerald-200"
+                        className="ml-auto inline-flex items-center gap-0.5 rounded-full border border-emerald-300/30 bg-emerald-400/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-emerald-100"
                       >
-                        <ArrowUpRight className="h-2.5 w-2.5" strokeWidth={2.5} />
+                        <ArrowUpRight className="h-2 w-2" strokeWidth={3} />
+                        New
                       </span>
                     ) : null}
                   </div>
-                  <div className="mt-1 flex items-baseline gap-1.5">
+                  <div className="mt-1.5 flex items-baseline gap-1.5">
                     <CountUp
                       value={toolsAddedTodayCount}
                       duration={1100}
                       prefix="+"
-                      className="text-3xl font-semibold tabular-nums text-white sm:text-4xl"
+                      className="bg-gradient-to-br from-white via-emerald-50 to-emerald-200 bg-clip-text text-3xl font-bold tabular-nums tracking-tight text-transparent drop-shadow-[0_1px_8px_rgba(110,231,183,0.3)] sm:text-4xl"
+                      placeholderClassName="text-3xl font-bold tabular-nums tracking-tight text-white/40 sm:text-4xl"
                     />
-                    <span className="text-xs font-medium text-white/55">added</span>
+                    <span className="text-xs font-medium text-white/60">added</span>
                   </div>
                 </div>
               </div>
