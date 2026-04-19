@@ -22,6 +22,13 @@ import { toolCategoryListForBadges, toolIsAgency } from "@/lib/tool-categories";
 import { isToolCreatedToday } from "@/lib/tool-dates";
 import { toolCategoryBadgeClass } from "@/lib/tool-category-styles";
 import { toolHasDownloadableApp } from "@/lib/tool-flags";
+import {
+  buildEvidenceChips,
+  tierBadgeClassName,
+  tierLabel,
+  type PopularityTier,
+  type PopularitySignals,
+} from "@/lib/popularity-signals";
 
 export type ToolCardLayout = "grid" | "list";
 
@@ -322,12 +329,30 @@ export function ToolCard({
   const fullDescription = String(tool.description ?? "").trim();
   const needsExpandToggle = fullDescription.length > 100;
 
-  const formatVisits = (visits?: number | null) => {
-    if (!visits) return null;
-    if (visits >= 1000000) return `${(visits / 1000000).toFixed(1)}M`;
-    if (visits >= 1000) return `${(visits / 1000).toFixed(1)}K`;
-    return visits.toString();
-  };
+  // Honest popularity row — see lib/popularity-signals.ts. The legacy
+  // `~X.YM/mo` text used to come from a GPT hallucination of scraped copy
+  // ("convert users to visits: 2.5M users = 7.5M visits") which was wildly
+  // misleading. The new badge + chips show only sourced signals (Tranco
+  // rank, GitHub stars, domain age, Wikipedia presence, on-page claims).
+  const popularityTier =
+    (tool.popularityTier as PopularityTier | null | undefined) ?? null;
+  const popularitySignals = (tool.popularitySignals ??
+    null) as Partial<PopularitySignals> | null;
+  const evidenceChips = buildEvidenceChips({
+    ...(popularitySignals ?? {}),
+    trancoRank:
+      popularitySignals?.trancoRank ?? tool.trancoRank ?? null,
+    githubRepo: popularitySignals?.githubRepo ?? tool.githubRepo ?? null,
+    githubStars: popularitySignals?.githubStars ?? tool.githubStars ?? null,
+    domainAgeYears:
+      popularitySignals?.domainAgeYears ?? tool.domainAgeYears ?? null,
+    wikipediaPageTitle:
+      popularitySignals?.wikipediaPageTitle ?? tool.wikipediaPageTitle ?? null,
+    wikipediaPageviews90d:
+      popularitySignals?.wikipediaPageviews90d ??
+      tool.wikipediaPageviews90d ??
+      null,
+  });
 
   const logoBlock = (
     <>
@@ -391,15 +416,35 @@ export function ToolCard({
 
   const trafficVisitsRow = (
     <>
-      {tool.traffic && tool.traffic !== "unknown" && (
+      {popularityTier && (
+        <Badge
+          variant="outline"
+          className={cn(
+            "shrink-0 whitespace-nowrap text-[11px] font-medium leading-tight",
+            tierBadgeClassName(popularityTier),
+          )}
+          title={`Popularity tier from real signals (Tranco rank, GitHub stars, domain age, Wikipedia presence). Score: ${
+            tool.popularityScore ?? "—"
+          }/100.`}
+        >
+          {tierLabel(popularityTier)}
+        </Badge>
+      )}
+      {evidenceChips.map((chip) => (
+        <span
+          key={chip.label}
+          title={chip.title}
+          className="inline-flex items-center whitespace-nowrap rounded-md border border-border/60 bg-muted/40 px-1.5 py-0.5 text-[11px] text-muted-foreground"
+        >
+          {chip.label}
+        </span>
+      ))}
+      {/* Keep the curated "Low/Medium/High" tag too — it's a fast eyeball
+          signal that complements the precise badge. */}
+      {!popularityTier && tool.traffic && tool.traffic !== "unknown" && (
         <span className="inline-flex items-center gap-1 whitespace-nowrap text-xs text-muted-foreground">
           <TrendingUp className="h-3 w-3 shrink-0" />
           {trafficLabels[tool.traffic]}
-        </span>
-      )}
-      {tool.estimatedVisits != null && (
-        <span className="whitespace-nowrap text-xs text-muted-foreground">
-          ~{formatVisits(tool.estimatedVisits)}/mo
         </span>
       )}
     </>

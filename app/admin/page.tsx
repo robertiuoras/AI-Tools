@@ -47,7 +47,7 @@ import { toolHasDownloadableApp, toolIsAgency } from '@/lib/tool-flags'
 import { toolCategoryList, videoCategoryList } from '@/lib/tool-categories'
 import type { Tool, Video } from '@/lib/supabase'
 import { cn } from '@/lib/utils'
-import { Loader2, Plus, Trash2, Edit2, Sparkles, RefreshCw, Star, Youtube, Music2, Check, X } from 'lucide-react'
+import { Loader2, Plus, Trash2, Edit2, Sparkles, RefreshCw, Star, TrendingUp, Youtube, Music2, Check, X } from 'lucide-react'
 
 /** Shared tool form → API body (matches PUT / auto-save). */
 type AdminToolFormState = {
@@ -185,6 +185,21 @@ function buildToolPostPayloadFromAnalyze(
     payload.estimatedVisits = data.estimatedVisits
   if (data.isAgency === true) payload.isAgency = true
   if (data.hasDownloadableApp === true) payload.hasDownloadableApp = true
+  // Forward the popularity snapshot (Tranco/GitHub/age/Wiki/claims) so it
+  // lands on the new row directly — no need for a follow-up backfill call.
+  const pop = data.popularity as Record<string, unknown> | null | undefined
+  if (pop && typeof pop === 'object') {
+    if (typeof pop.trancoRank === 'number') payload.trancoRank = pop.trancoRank
+    if (typeof pop.githubRepo === 'string') payload.githubRepo = pop.githubRepo
+    if (typeof pop.githubStars === 'number') payload.githubStars = pop.githubStars
+    if (typeof pop.domainAgeYears === 'number') payload.domainAgeYears = pop.domainAgeYears
+    if (typeof pop.wikipediaPageTitle === 'string') payload.wikipediaPageTitle = pop.wikipediaPageTitle
+    if (typeof pop.wikipediaPageviews90d === 'number')
+      payload.wikipediaPageviews90d = pop.wikipediaPageviews90d
+    if (typeof pop.score === 'number') payload.popularityScore = pop.score
+    if (typeof pop.tier === 'string') payload.popularityTier = pop.tier
+    payload.popularitySignals = pop
+  }
   return payload
 }
 
@@ -1985,6 +2000,22 @@ export default function AdminPage() {
         if (data.estimatedVisits !== null && data.estimatedVisits !== undefined) payload.estimatedVisits = data.estimatedVisits
         if (data.isAgency === true) payload.isAgency = true
         if (data.hasDownloadableApp === true) payload.hasDownloadableApp = true
+        // Forward the popularity snapshot from /api/tools/analyze so the new
+        // tool row lands with real signals attached (Tranco, GitHub, age, …).
+        const bulkPop = data.popularity as Record<string, unknown> | null | undefined
+        if (bulkPop && typeof bulkPop === 'object') {
+          if (typeof bulkPop.trancoRank === 'number') payload.trancoRank = bulkPop.trancoRank
+          if (typeof bulkPop.githubRepo === 'string') payload.githubRepo = bulkPop.githubRepo
+          if (typeof bulkPop.githubStars === 'number') payload.githubStars = bulkPop.githubStars
+          if (typeof bulkPop.domainAgeYears === 'number') payload.domainAgeYears = bulkPop.domainAgeYears
+          if (typeof bulkPop.wikipediaPageTitle === 'string')
+            payload.wikipediaPageTitle = bulkPop.wikipediaPageTitle
+          if (typeof bulkPop.wikipediaPageviews90d === 'number')
+            payload.wikipediaPageviews90d = bulkPop.wikipediaPageviews90d
+          if (typeof bulkPop.score === 'number') payload.popularityScore = bulkPop.score
+          if (typeof bulkPop.tier === 'string') payload.popularityTier = bulkPop.tier
+          payload.popularitySignals = bulkPop
+        }
 
         const submitResponse = await fetch('/api/tools', {
           method: 'POST',
@@ -2444,6 +2475,100 @@ export default function AdminPage() {
                     >
                       <Star className="h-4 w-4" />
                       Add Missing Ratings
+                    </Button>
+                    {/* Re-run the new logo resolver against tools whose
+                        current logo is missing or a weak fallback (Google S2
+                        / DuckDuckGo). Fixes things like canva.com landing
+                        with the og:image banner. */}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        try {
+                          const session = await supabase.auth.getSession()
+                          const token = (await session).data.session?.access_token
+                          const response = await fetch('/api/admin/repair-logos', {
+                            method: 'POST',
+                            headers: {
+                              'Content-Type': 'application/json',
+                              Authorization: `Bearer ${token}`,
+                            },
+                            body: JSON.stringify({ limit: 50 }),
+                          })
+                          const data = await response.json()
+                          if (response.ok) {
+                            addToast({
+                              variant: 'success',
+                              title: 'Logos repaired',
+                              description: `Processed ${data.processed} tools, updated ${data.changedCount}.`,
+                              duration: 8000,
+                            })
+                            fetchTools()
+                          } else {
+                            throw new Error(data.error || 'Failed to repair logos')
+                          }
+                        } catch (error: any) {
+                          addToast({
+                            variant: 'error',
+                            title: 'Repair Logos Failed',
+                            description: error.message || 'Could not repair logos',
+                          })
+                        }
+                      }}
+                      className="gap-2"
+                    >
+                      <RefreshCw className="h-4 w-4" />
+                      Repair Logos
+                    </Button>
+                    {/* Refresh real popularity signals (Tranco rank, GitHub
+                        stars, domain age, Wikipedia, on-page hard claims).
+                        Replaces the old GPT-hallucinated "~7.5M/mo" number. */}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        try {
+                          const session = await supabase.auth.getSession()
+                          const token = (await session).data.session?.access_token
+                          const response = await fetch('/api/admin/refresh-popularity', {
+                            method: 'POST',
+                            headers: {
+                              'Content-Type': 'application/json',
+                              Authorization: `Bearer ${token}`,
+                            },
+                            body: JSON.stringify({ limit: 25 }),
+                          })
+                          const data = await response.json()
+                          if (response.ok) {
+                            addToast({
+                              variant: 'success',
+                              title: 'Popularity refreshed',
+                              description: `Processed ${data.processed} tools, updated ${data.changedCount}.`,
+                              duration: 8000,
+                            })
+                            fetchTools()
+                          } else if (response.status === 503 && data?.hint) {
+                            addToast({
+                              variant: 'error',
+                              title: 'Migration needed',
+                              description: data.hint,
+                              duration: 12000,
+                            })
+                          } else {
+                            throw new Error(data.error || 'Failed to refresh popularity')
+                          }
+                        } catch (error: any) {
+                          addToast({
+                            variant: 'error',
+                            title: 'Refresh Popularity Failed',
+                            description: error.message || 'Could not refresh popularity',
+                          })
+                        }
+                      }}
+                      className="gap-2"
+                    >
+                      <TrendingUp className="h-4 w-4" />
+                      Refresh Popularity
                     </Button>
                   </div>
               </div>

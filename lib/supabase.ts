@@ -65,7 +65,32 @@ export interface Tool {
   traffic: "low" | "medium" | "high" | "unknown" | null;
   revenue: "free" | "freemium" | "paid" | "enterprise" | null;
   rating: number | null;
+  /**
+   * @deprecated GPT-hallucinated monthly visits. Kept for backwards
+   * compatibility only; no longer rendered. See popularity* fields below.
+   */
   estimatedVisits: number | null;
+  // ── Honest popularity signals (see lib/popularity-signals.ts) ─────────
+  /** Detected GitHub repo URL (when the tool's HTML linked to one). */
+  githubRepo?: string | null;
+  /** Live GitHub star count for `githubRepo`. */
+  githubStars?: number | null;
+  /** Tranco rank (1 = #1 globally; null if outside top 1M). */
+  trancoRank?: number | null;
+  /** Domain age in years (RDAP / Wayback). */
+  domainAgeYears?: number | null;
+  /** English Wikipedia article title that matched. */
+  wikipediaPageTitle?: string | null;
+  /** Sum of last-90-day pageviews for that article. */
+  wikipediaPageviews90d?: number | null;
+  /** Composite 0-100 score from real signals. */
+  popularityScore?: number | null;
+  /** Mapped tier badge: major / established / emerging / niche. */
+  popularityTier?: 'major' | 'established' | 'emerging' | 'niche' | null;
+  /** Raw signals JSONB blob (see PopularitySignals in lib/popularity-signals.ts). */
+  popularitySignals?: Record<string, unknown> | null;
+  /** ISO timestamp when popularity signals were last refreshed. */
+  popularityRefreshedAt?: string | null;
   createdAt: string;
   updatedAt: string;
   upvoteCount?: number;

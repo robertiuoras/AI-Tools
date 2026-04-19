@@ -22,6 +22,14 @@ import {
   logOpenAIUsage,
 } from '@/lib/openai-usage'
 import { enforceApiRateLimit } from '@/lib/api-rate-limit'
+import {
+  resolveLogoFromHtml,
+  resolveLogoFromHostnameOnly,
+} from '@/lib/logo-resolver'
+import {
+  computePopularity,
+  type PopularitySignals,
+} from '@/lib/popularity-signals'
 
 /** Normalize + dedupe AI category output; drop redundant "Other"; cap length; primary = first. */
 function categoriesFromAiContent(content: {
@@ -60,7 +68,14 @@ interface AnalysisResult {
   revenue: 'free' | 'freemium' | 'paid' | 'enterprise' | null
   traffic: 'low' | 'medium' | 'high' | 'unknown'
   rating: number | null
+  /**
+   * Legacy "estimated monthly visits" — kept on the schema for backwards
+   * compatibility but no longer rendered on cards. The honest signals live in
+   * {@link popularity}.
+   */
   estimatedVisits: number | null
+  /** Composite real-data popularity snapshot (Tranco / GitHub / age / Wiki / claims). */
+  popularity?: PopularitySignals | null
   logoUrl: string | null
   hasDownloadableApp?: boolean
   openaiUsage?: {
@@ -136,6 +151,12 @@ async function scrapeWebsiteInfo(url: string): Promise<{
   logoUrl: string | null
   pricingContent: string
   pageContent: string
+  /**
+   * Truncated raw HTML kept around for downstream consumers that need to read
+   * attribute values the sanitizer drops (e.g. `<a href="github.com/X/Y">`
+   * for GitHub repo detection in popularity-signals).
+   */
+  rawHtmlSnippet: string
   hasDownloadableAppHeuristic: boolean
   agencyHint: boolean
 }> {
@@ -157,6 +178,7 @@ async function scrapeWebsiteInfo(url: string): Promise<{
         logoUrl: null,
         pricingContent: '',
         pageContent: '',
+        rawHtmlSnippet: '',
         hasDownloadableAppHeuristic: false,
         agencyHint: false,
       }
@@ -234,129 +256,16 @@ async function scrapeWebsiteInfo(url: string): Promise<{
       .substring(0, 3000) // Reduced from 5000 to 3000 chars for token optimization
       .toLowerCase()
 
-    // Find logo/favicon. Strategy:
-    //  1. Parse <link rel="icon|apple-touch-icon|mask-icon" ...> from the HTML
-    //     (handles attribute order, multi-value rels, sizes hint).
-    //  2. Try og:image / twitter:image (often a high-res brand asset).
-    //  3. HEAD-probe a list of common favicon paths (/favicon.ico, /favicon.png,
-    //     /apple-touch-icon.png, /icon.png — covers Next.js / Astro defaults).
-    //  4. Look for an <img> with "logo" in its class/id/alt.
-    //  5. Last-resort fallback: Google's S2 favicon service. This is what
-    //     fixes the "Remotion has a favicon but we couldn't find it" case —
-    //     Google's index already has a 128px PNG for any indexed domain.
-    let logoUrl: string | null = null
-    const urlObj = new URL(url)
-    const origin = urlObj.origin
-    const candidatesFromLinks: string[] = []
-
-    // ── Method 1: every <link rel="...icon..."> tag, regardless of attr order ─
-    const linkTagRe = /<link\b[^>]*>/gi
-    for (const tag of html.match(linkTagRe) ?? []) {
-      const relMatch = tag.match(/\brel\s*=\s*["']([^"']+)["']/i)
-      const hrefMatch = tag.match(/\bhref\s*=\s*["']([^"']+)["']/i)
-      if (!relMatch || !hrefMatch) continue
-      const rel = relMatch[1].toLowerCase()
-      if (
-        rel.includes('icon') ||
-        rel === 'apple-touch-icon-precomposed' ||
-        rel === 'mask-icon' ||
-        rel === 'fluid-icon'
-      ) {
-        candidatesFromLinks.push(hrefMatch[1])
-      }
-    }
-    // Prefer apple-touch-icon (180px) > sized icon > anything else.
-    candidatesFromLinks.sort((a, b) => {
-      const score = (s: string) =>
-        /apple-touch-icon/i.test(s) ? 3 : /\b(192|256|512|180|144|128)\b/.test(s) ? 2 : 1
-      return score(b) - score(a)
-    })
-    for (const href of candidatesFromLinks) {
-      try {
-        const candidate = href.startsWith('http')
-          ? href
-          : new URL(href, origin).toString()
-        if (candidate) {
-          logoUrl = candidate
-          break
-        }
-      } catch { /* try next */ }
-    }
-
-    // ── Method 2: og:image / twitter:image ──────────────────────────────────
-    if (!logoUrl) {
-      const ogPatterns = [
-        /<meta[^>]*property=["']og:image(?::secure_url)?["'][^>]*content=["']([^"']+)["']/i,
-        /<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:image(?::secure_url)?["']/i,
-        /<meta[^>]*name=["']twitter:image(?::src)?["'][^>]*content=["']([^"']+)["']/i,
-      ]
-      for (const pattern of ogPatterns) {
-        const m = html.match(pattern)
-        if (m) {
-          try {
-            logoUrl = m[1].startsWith('http') ? m[1] : new URL(m[1], origin).toString()
-            if (logoUrl) break
-          } catch { /* try next */ }
-        }
-      }
-    }
-
-    // ── Method 3: HEAD-probe well-known favicon paths in parallel ───────────
-    // We previously just constructed a URL string without verifying it
-    // existed, which often led to broken-image cards. HEAD with a 2.5s
-    // timeout gives us a real signal at trivial cost.
-    if (!logoUrl) {
-      const commonPaths = [
-        '/apple-touch-icon.png',
-        '/favicon.png',
-        '/favicon.svg',
-        '/favicon.ico',
-        '/icon.png',
-        '/icon.svg',
-        '/logo.png',
-        '/logo.svg',
-      ]
-      const probes = commonPaths.map(async (path) => {
-        const u = new URL(path, origin).toString()
-        try {
-          const r = await fetch(u, {
-            method: 'HEAD',
-            signal: AbortSignal.timeout(2500),
-            redirect: 'follow',
-          })
-          if (r.ok && (r.headers.get('content-type') ?? '').startsWith('image')) {
-            return u
-          }
-        } catch { /* ignore */ }
-        return null
-      })
-      const results = await Promise.all(probes)
-      logoUrl = results.find((x): x is string => x !== null) ?? null
-    }
-
-    // ── Method 4: <img> with "logo" in class/id/alt ─────────────────────────
-    if (!logoUrl) {
-      const logoImgMatch =
-        html.match(/<img[^>]*(?:class|id|alt)=["'][^"']*logo[^"']*["'][^>]*src=["']([^"']+)["']/i) ||
-        html.match(/<img[^>]*src=["']([^"']+)["'][^>]*(?:class|id|alt)=["'][^"']*logo[^"']*["']/i)
-      if (logoImgMatch) {
-        try {
-          const logoPath = logoImgMatch[1]
-          logoUrl = logoPath.startsWith('http')
-            ? logoPath
-            : new URL(logoPath, origin).toString()
-        } catch { /* continue */ }
-      }
-    }
-
-    // ── Method 5: Google S2 favicon service — guaranteed last-resort ────────
-    // Returns a high-quality PNG for any indexed domain (which is essentially
-    // every commercial site). This is what "fixes Remotion" — even when the
-    // page's own <link rel="icon"> is dynamically injected and not in the
-    // initial HTML, Google has already crawled and cached it.
-    if (!logoUrl) {
-      logoUrl = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(urlObj.hostname)}&sz=128`
-    }
+    // Logo resolution lives in `lib/logo-resolver.ts`. It tries (in order):
+    //   schema.org JSON-LD `Organization.logo` → ranked <link rel="icon"> →
+    //   HEAD-verified common paths → <img class="logo"> → DuckDuckGo icon →
+    //   Google S2 favicon. og:image is intentionally excluded — it's almost
+    //   always a 1200×630 social banner that center-crops to a smear in the
+    //   small square card slot (this is what made canva.com look "logoless"
+    //   with the previous code).
+    const resolvedLogo = await resolveLogoFromHtml(url, html)
+    const logoUrl = resolvedLogo.url
+    console.log('🖼️ [Scrape] Logo resolved via', resolvedLogo.source, '→', logoUrl)
 
     // Pricing probes were started in parallel above; just await the result here.
     const pricingContent = await pricingContentPromise
@@ -369,12 +278,17 @@ async function scrapeWebsiteInfo(url: string): Promise<{
       detectAgencyFromText(textForAgency) ||
       detectAgencyFromUrlAndText(hostForAgency, textForAgency)
 
+    // Cap the raw HTML at 80KB; that's enough to capture any reasonable head
+    // + visible body links without burning memory in the pipeline.
+    const rawHtmlSnippet = html.length > 80_000 ? html.slice(0, 80_000) : html
+
     return {
       title,
       description,
       logoUrl,
       pricingContent,
       pageContent,
+      rawHtmlSnippet,
       hasDownloadableAppHeuristic,
       agencyHint,
     }
@@ -942,14 +856,18 @@ export async function POST(request: NextRequest) {
         }, { status: statusCode })
       }
       
-      // For rate limits and blocking, create minimal scraped data and continue
+      // For rate limits and blocking, create minimal scraped data and continue.
+      // Even without HTML, we can still hand the user a usable card icon by
+      // resolving against the favicon services.
       console.log('⚠️ [Analyze] Scraping failed, but will attempt OpenAI analysis with URL only')
+      const fallbackLogo = await resolveLogoFromHostnameOnly(validUrl.hostname)
       scraped = {
         title: validUrl.hostname.replace('www.', '').replace('.com', '').replace('.ai', ''),
         description: '',
-        logoUrl: null,
+        logoUrl: fallbackLogo.url,
         pricingContent: '',
         pageContent: '',
+        rawHtmlSnippet: '',
         hasDownloadableAppHeuristic: false,
         agencyHint: false,
       }
@@ -1100,6 +1018,25 @@ export async function POST(request: NextRequest) {
     const isAgency =
       !corpusIndicatesProductVendorNotServicesAgency(corpusForAgency) &&
       (isAgencyFromCats || modelAgency)
+    // Compute honest popularity signals in parallel with the rest of the
+    // pipeline. Never throws — failures land in `popularity.errors`.
+    const popularity = await computePopularity({
+      url: validUrl.toString(),
+      toolName: analysis.name || scraped.title || validUrl.hostname.replace('www.', ''),
+      pageHtml: scraped.rawHtmlSnippet,
+      pageText: scraped.pageContent,
+    })
+    console.log('📈 [Analyze] Popularity:', {
+      tier: popularity.tier,
+      score: popularity.score,
+      tranco: popularity.trancoRank,
+      githubStars: popularity.githubStars,
+      ageYears: popularity.domainAgeYears,
+      wiki: popularity.wikipediaPageTitle,
+      claims: popularity.hardClaims.length,
+      errors: Object.keys(popularity.errors),
+    })
+
     const result: AnalysisResult = {
       name: analysis.name || scraped.title || validUrl.hostname.replace('www.', ''),
       description: analysis.description || scraped.description || 'AI tool',
@@ -1110,8 +1047,15 @@ export async function POST(request: NextRequest) {
       revenue: analysis.revenue ?? null,
       traffic: analysis.traffic ?? 'unknown',
       rating: analysis.rating ?? null,
-      estimatedVisits: analysis.estimatedVisits ?? null,
-      logoUrl: analysis.logoUrl || scraped.logoUrl || null,
+      // Legacy field — keep null going forward; the model's guess was the
+      // source of the fake "~7.5M/mo" cards. Real signals live in `popularity`.
+      estimatedVisits: null,
+      popularity,
+      // Trust the deterministic resolver in `scraped.logoUrl` over anything
+      // the model might have hallucinated; fall back to model output only if
+      // the resolver returned nothing (shouldn't happen — it always returns
+      // at least Google S2).
+      logoUrl: scraped.logoUrl || analysis.logoUrl || null,
       // Native/desktop app flag: strict HTML signals only (ignore model guesses to avoid false positives).
       hasDownloadableApp: Boolean(scraped.hasDownloadableAppHeuristic),
       _debug: {

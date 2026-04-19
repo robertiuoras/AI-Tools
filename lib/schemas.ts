@@ -727,6 +727,20 @@ const toolObjectSchema = z.object({
   isAgency: z.boolean().optional().nullable(),
   /** Native/desktop/mobile store or explicit download links detected. */
   hasDownloadableApp: z.boolean().optional().nullable(),
+  // ── Honest popularity signals (see lib/popularity-signals.ts) ─────────
+  // All optional + nullable so old payloads keep validating.
+  githubRepo: z.string().url().nullable().optional(),
+  githubStars: z.number().int().min(0).nullable().optional(),
+  trancoRank: z.number().int().min(1).nullable().optional(),
+  domainAgeYears: z.number().min(0).nullable().optional(),
+  wikipediaPageTitle: z.string().nullable().optional(),
+  wikipediaPageviews90d: z.number().int().min(0).nullable().optional(),
+  popularityScore: z.number().int().min(0).max(100).nullable().optional(),
+  popularityTier: z
+    .enum(['major', 'established', 'emerging', 'niche'])
+    .nullable()
+    .optional(),
+  popularitySignals: z.unknown().nullable().optional(),
 })
 
 const preprocessTool = z.preprocess((data: any) => {

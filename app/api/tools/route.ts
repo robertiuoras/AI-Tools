@@ -305,6 +305,7 @@ export async function GET(request: NextRequest) {
         upvoteCount?: number;
         estimatedVisits?: number | null;
         rating?: number | null;
+        popularityScore?: number | null;
       };
       processedTools.sort(
         (a: Row, b: Row) => popularityScore(b) - popularityScore(a),
@@ -395,6 +396,43 @@ export async function POST(request: NextRequest) {
     supabaseData.isAgency = validatedData.isAgency === true;
     supabaseData.hasDownloadableApp = validatedData.hasDownloadableApp === true;
 
+    // Honest popularity signals (only included if the popularity migration ran).
+    // We try the full insert first; if Supabase rejects with 42703 ("column does
+    // not exist") we retry without these fields so the app keeps working until
+    // the operator runs `supabase-migration-popularity-signals.sql`.
+    const popularityKeys = [
+      'githubRepo',
+      'githubStars',
+      'trancoRank',
+      'domainAgeYears',
+      'wikipediaPageTitle',
+      'wikipediaPageviews90d',
+      'popularityScore',
+      'popularityTier',
+      'popularitySignals',
+      'popularityRefreshedAt',
+    ] as const
+    const v = validatedData as unknown as Record<string, unknown>
+    if (v.githubRepo != null) supabaseData.githubRepo = v.githubRepo
+    if (v.githubStars != null) supabaseData.githubStars = v.githubStars
+    if (v.trancoRank != null) supabaseData.trancoRank = v.trancoRank
+    if (v.domainAgeYears != null) supabaseData.domainAgeYears = v.domainAgeYears
+    if (v.wikipediaPageTitle != null) supabaseData.wikipediaPageTitle = v.wikipediaPageTitle
+    if (v.wikipediaPageviews90d != null) supabaseData.wikipediaPageviews90d = v.wikipediaPageviews90d
+    if (v.popularityScore != null) supabaseData.popularityScore = v.popularityScore
+    if (v.popularityTier != null) supabaseData.popularityTier = v.popularityTier
+    if (v.popularitySignals != null) supabaseData.popularitySignals = v.popularitySignals
+    // Only set the refresh timestamp when we actually have new signal data to
+    // record — avoids stamping legacy rows with a meaningless "refreshed now".
+    if (
+      v.popularityScore != null ||
+      v.popularitySignals != null ||
+      v.trancoRank != null ||
+      v.githubStars != null
+    ) {
+      supabaseData.popularityRefreshedAt = new Date().toISOString()
+    }
+
     // Add timestamps
     const now = new Date().toISOString();
     supabaseData.createdAt = now;
@@ -438,11 +476,28 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const { data: tool, error } = await admin
+    let { data: tool, error } = await admin
       .from("tool")
       .insert(supabaseData)
       .select()
       .single();
+
+    // 42703 = "undefined column". Retry without the popularity fields when the
+    // operator hasn't applied supabase-migration-popularity-signals.sql yet.
+    if (error && (error.code === '42703' || /column .* does not exist/i.test(error.message ?? ''))) {
+      console.warn(
+        '[POST /api/tools] Popularity columns missing — retrying insert without them. Run supabase-migration-popularity-signals.sql to enable.'
+      );
+      const fallbackData: Record<string, unknown> = { ...supabaseData };
+      for (const key of popularityKeys) delete fallbackData[key];
+      const retry = await admin
+        .from("tool")
+        .insert(fallbackData)
+        .select()
+        .single();
+      tool = retry.data;
+      error = retry.error;
+    }
 
     if (error) {
       console.error("❌ Supabase error creating tool:", error);
