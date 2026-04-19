@@ -197,24 +197,44 @@ export function WhiteboardPanel({ token }: Props) {
         const [ownRes, sharedRes] = await Promise.all([
           fetch("/api/whiteboard", {
             headers: { Authorization: `Bearer ${token}` },
+            cache: "no-store",
           }),
           fetch("/api/whiteboard/shared", {
             headers: { Authorization: `Bearer ${token}` },
+            cache: "no-store",
           }),
         ]);
         if (cancelled) return;
 
+        let ownList: BoardMeta[] = [];
+        let sharedList: SharedBoardMeta[] = [];
         if (ownRes.ok) {
           const data = (await ownRes.json()) as { boards: BoardMeta[] };
-          const list = data.boards ?? [];
-          setBoards(list);
-          if (list.length > 0) {
-            setActive({ kind: "own", boardId: list[0].id });
-          }
+          ownList = data.boards ?? [];
+          setBoards(ownList);
         }
         if (sharedRes.ok) {
           const data = (await sharedRes.json()) as { boards: SharedBoardMeta[] };
-          setSharedBoards(data.boards ?? []);
+          sharedList = data.boards ?? [];
+          setSharedBoards(sharedList);
+        }
+
+        // Pick a sensible default active board: first own board, falling
+        // back to the first shared one if the user owns nothing yet.
+        if (ownList.length > 0) {
+          setActive({ kind: "own", boardId: ownList[0].id });
+        } else if (sharedList.length > 0) {
+          const sb = sharedList[0];
+          setActive({
+            kind: "shared",
+            boardId: sb.boardId,
+            ownerId: sb.ownerId,
+            permission: sb.permission,
+            ownerName:
+              sb.owner?.name?.trim() ||
+              sb.owner?.email?.split("@")[0] ||
+              "Owner",
+          });
         }
       } catch {/* */}
       finally { if (!cancelled) setLoading(false); }
@@ -320,6 +340,38 @@ export function WhiteboardPanel({ token }: Props) {
     async (boardId: string) => {
       if (deletingId) return;
       setDeletingId(boardId);
+
+      // Optimistic local removal so the user sees the board disappear
+      // immediately. We sync with the server's authoritative list once
+      // it responds, but never RE-INSERT a board (the server no longer
+      // resurrects "default" entries, so this is always safe now).
+      const wasActiveOwn =
+        active?.kind === "own" && active.boardId === boardId;
+      const optimistic = boards.filter((b) => b.id !== boardId);
+      setBoards(optimistic);
+      if (wasActiveOwn) {
+        // Move active off the deleted board immediately. Prefer the next
+        // own board, then the first shared one, else nothing.
+        const nextOwn = optimistic[0];
+        if (nextOwn) {
+          setActive({ kind: "own", boardId: nextOwn.id });
+        } else if (sharedBoards[0]) {
+          const sb = sharedBoards[0];
+          setActive({
+            kind: "shared",
+            boardId: sb.boardId,
+            ownerId: sb.ownerId,
+            permission: sb.permission,
+            ownerName:
+              sb.owner?.name?.trim() ||
+              sb.owner?.email?.split("@")[0] ||
+              "Owner",
+          });
+        } else {
+          setActive(null);
+        }
+      }
+
       try {
         const res = await fetch("/api/whiteboard", {
           method: "POST",
@@ -334,11 +386,12 @@ export function WhiteboardPanel({ token }: Props) {
           throw new Error(text || `Server returned ${res.status}`);
         }
         const data = (await res.json()) as { ok: true; boards?: BoardMeta[] };
-        // Prefer the server's authoritative list; fall back to a refetch.
+        // Sync with the server's list so other clients/tabs converge.
         let next: BoardMeta[] | null = Array.isArray(data.boards) ? data.boards : null;
         if (!next) {
           const r = await fetch("/api/whiteboard", {
             headers: { Authorization: `Bearer ${token}` },
+            cache: "no-store",
           });
           if (r.ok) {
             const d = (await r.json()) as { boards: BoardMeta[] };
@@ -347,9 +400,10 @@ export function WhiteboardPanel({ token }: Props) {
         }
         if (next) {
           setBoards(next);
+          // If our active board got removed externally too, pick a fallback.
           const activeOwnId =
             active?.kind === "own" ? active.boardId : null;
-          if (activeOwnId === boardId || (activeOwnId && !next.some((b) => b.id === activeOwnId))) {
+          if (activeOwnId && !next.some((b) => b.id === activeOwnId)) {
             const nextFirst = next[0]?.id;
             setActive(nextFirst ? { kind: "own", boardId: nextFirst } : null);
           }
@@ -374,7 +428,7 @@ export function WhiteboardPanel({ token }: Props) {
         setConfirmDelete(null);
       }
     },
-    [token, active, deletingId, addToast],
+    [token, active, boards, sharedBoards, deletingId, addToast],
   );
 
   return (
@@ -459,8 +513,13 @@ export function WhiteboardPanel({ token }: Props) {
                     >
                       <Pencil className="h-3 w-3" />
                     </button>
-                    {boards.length > 1 ? (
-                      <button
+                    {/* Always allow deletion. Hiding the button when only
+                        one board remained was confusing — users couldn't
+                        remove a phantom "Untitled" board left over from
+                        the old auto-seed bug. They get an empty state if
+                        they delete the last one and can create a new one
+                        from there. */}
+                    <button
                         type="button"
                         title="Delete board"
                         onClick={(e) => {
@@ -471,7 +530,6 @@ export function WhiteboardPanel({ token }: Props) {
                       >
                         <Trash2 className="h-3 w-3" />
                       </button>
-                    ) : null}
                   </div>
                 </>
               )}
@@ -660,9 +718,35 @@ export function WhiteboardPanel({ token }: Props) {
               }
             />
           </WhiteboardRoomMount>
-        ) : (
+        ) : loading ? (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading…
+          </div>
+        ) : (
+          // Truly empty state — no own boards, no shared boards.
+          // Replaces the old "always seed a default" workaround that
+          // caused the persistent "Untitled Board" bug.
+          <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+              <Plus className="h-6 w-6" />
+            </div>
+            <div className="space-y-1">
+              <p className="text-sm font-semibold text-foreground">
+                No whiteboards yet
+              </p>
+              <p className="max-w-xs text-xs text-muted-foreground">
+                Create your first board to start sketching, brainstorming
+                and collaborating in real time.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void createBoard()}
+              className="mt-1 inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground shadow-sm hover:bg-primary/90"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              New whiteboard
+            </button>
           </div>
         )}
       </div>

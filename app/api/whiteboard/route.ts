@@ -119,17 +119,16 @@ export async function GET(request: NextRequest) {
     const ownerHintParam = request.nextUrl.searchParams.get("ownerId");
 
     if (!boardId) {
-      // List boards
+      // List the user's boards verbatim. We deliberately do NOT seed a
+      // virtual "default" when the list is empty — that historical
+      // behavior caused two well-known bugs:
+      //   1. Deleting the only board would resurrect it (the empty list
+      //      was instantly back-filled with the virtual "default").
+      //   2. The virtual default got persisted via an autosave the
+      //      moment the user touched the canvas, so creating a real
+      //      board afterwards left them with TWO Untitled boards.
+      // The client now renders an explicit empty state instead.
       const boards = await loadBoardsMeta(userId);
-      // If no boards yet, seed a default one
-      if (boards.length === 0) {
-        const defaultBoard: BoardMeta = {
-          id: "default",
-          name: "Untitled Board",
-          updatedAt: new Date().toISOString(),
-        };
-        return NextResponse.json({ boards: [defaultBoard] });
-      }
       return NextResponse.json({ boards });
     }
 
@@ -250,6 +249,23 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      // Verify the board still exists in the OWNER's meta BEFORE we
+      // upload anything. Two reasons:
+      //   1. Snapshot files for deleted boards were getting orphaned in
+      //      storage by trailing autosaves fired on unmount.
+      //   2. Resurrecting a "default" entry from a stale save was the
+      //      root cause of the "I deleted it but it came back" bug.
+      // If the board is gone we return 410 Gone and the client suppresses
+      // any further saves for that boardId.
+      const boards = await loadBoardsMeta(resolvedOwnerId);
+      const exists = boards.some((b) => b.id === body.boardId);
+      if (!exists) {
+        return NextResponse.json(
+          { ok: false, gone: true, error: "Board no longer exists" },
+          { status: 410 },
+        );
+      }
+
       const path = `${resolvedOwnerId}/${body.boardId}.json`;
       const bytes = new TextEncoder().encode(JSON.stringify(body.snapshot));
       const { error } = await admin.storage
@@ -257,29 +273,6 @@ export async function POST(request: NextRequest) {
         .upload(path, bytes, { contentType: "application/json", upsert: true });
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-      // Update updatedAt in the OWNER's boards meta IF the board still
-      // exists. Critical: do NOT re-add a missing board here. WhiteboardInner
-      // fires one last autosave on unmount, which races with delete and
-      // would otherwise resurrect a board the user just removed. The
-      // "create" action is the only thing that should add a board to meta.
-      const boards = await loadBoardsMeta(resolvedOwnerId);
-      const exists = boards.some((b) => b.id === body.boardId);
-      if (!exists) {
-        // Board was deleted (or is the virtual "default" that hasn't been
-        // persisted yet). For "default", seed it on the OWNER's account
-        // only if they're the requester; otherwise no-op so we don't
-        // resurrect a deleted board.
-        if (
-          isOwnBoard &&
-          body.boardId === "default" &&
-          boards.length === 0
-        ) {
-          await saveBoardsMeta(userId, [
-            { id: "default", name: "Untitled Board", updatedAt: new Date().toISOString() },
-          ]);
-        }
-        return NextResponse.json({ ok: true });
-      }
       const updated = boards.map((b) =>
         b.id === body.boardId ? { ...b, updatedAt: new Date().toISOString() } : b
       );
@@ -292,10 +285,9 @@ export async function POST(request: NextRequest) {
       const id = `board-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const newBoard: BoardMeta = { id, name, updatedAt: new Date().toISOString() };
       const boards = await loadBoardsMeta(userId);
-      // Seed default if empty
-      if (boards.length === 0) {
-        boards.push({ id: "default", name: "Untitled Board", updatedAt: new Date().toISOString() });
-      }
+      // No virtual-default seeding here. Previously we pushed a "default"
+      // entry when meta was empty, which caused the user to end up with
+      // two Untitled boards after creating their first one.
       await saveBoardsMeta(userId, [...boards, newBoard]);
       return NextResponse.json({ board: newBoard });
     }
@@ -332,30 +324,25 @@ export async function POST(request: NextRequest) {
       }
 
       const before = loaded.boards;
-      // Tolerate the synthetic "default" board: GET returns it virtually
-      // when no metadata exists, so the user can hit "delete" on a board
-      // that was never persisted. Treat that as a successful no-op.
+      // Board not in meta? Just nuke any orphan snapshot file and return
+      // the unchanged list. Don't attempt to "tolerate" a synthetic
+      // default — the GET endpoint no longer fabricates one.
       if (before.length > 0 && !before.some((b) => b.id === body.boardId)) {
-        // Board already gone — make sure any orphan snapshot file is also removed.
         await admin.storage
           .from(WHITEBOARD_BUCKET)
           .remove([`${userId}/${body.boardId}.json`]);
         return NextResponse.json({ ok: true, boards: before });
       }
 
-      let next = before.filter((b) => b.id !== body.boardId);
-      // Must keep at least one board so the UI always has something to show.
-      if (next.length === 0) {
-        next = [
-          { id: "default", name: "Untitled Board", updatedAt: new Date().toISOString() },
-        ];
-      }
+      const next = before.filter((b) => b.id !== body.boardId);
+      // Empty is a valid state — the client renders an empty placeholder
+      // with a "Create your first board" prompt. We deliberately do NOT
+      // re-seed a default entry here; doing so was the root cause of
+      // "I deleted my board but it keeps coming back".
       await saveBoardsMeta(userId, next);
-      // Delete the snapshot file (ignore error if not found).
       await admin.storage
         .from(WHITEBOARD_BUCKET)
         .remove([`${userId}/${body.boardId}.json`]);
-      // Return the new list so the client can sync without a second round-trip.
       return NextResponse.json({ ok: true, boards: next });
     }
 

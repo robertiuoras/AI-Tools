@@ -76,7 +76,7 @@ async function postSave(
   boardId: string,
   snapshot: PersistedSnapshot,
   ownerId: string | null,
-) {
+): Promise<{ gone: boolean }> {
   const res = await fetch("/api/whiteboard", {
     method: "POST",
     headers: {
@@ -90,7 +90,13 @@ async function postSave(
       ...(ownerId ? { ownerId } : {}),
     }),
   });
+  if (res.status === 410) {
+    // Board was deleted on the server. Caller will mark it dead so we
+    // don't keep trying to autosave (and worse, recreating it).
+    return { gone: true };
+  }
   if (!res.ok) console.warn("[whiteboard] Save failed:", res.status);
+  return { gone: false };
 }
 
 /**
@@ -205,6 +211,10 @@ export default function WhiteboardInner({
   const latestRef = useRef<PersistedSnapshot | null>(null);
   const debounceRef = useRef<number | null>(null);
   const dirtyRef = useRef(false);
+  // Set when the server tells us the board is gone (410). Suppresses
+  // every future save / beacon for this boardId so trailing autosaves
+  // can't resurrect a deleted board.
+  const goneRef = useRef(false);
 
   // ── Liveblocks bindings ─────────────────────────────────────────
   const broadcast = useBroadcastEvent();
@@ -249,19 +259,20 @@ export default function WhiteboardInner({
   // ── Local debounced save (Supabase storage) ─────────────────────
   const flush = useCallback(async () => {
     if (!latestRef.current || !dirtyRef.current) return;
-    if (isViewOnly) {
+    if (isViewOnly || goneRef.current) {
       dirtyRef.current = false;
       return;
     }
     dirtyRef.current = false;
     const snap = latestRef.current;
     try {
-      await postSave(
+      const res = await postSave(
         tokenRef.current,
         boardIdRef.current,
         snap,
         ownerIdRef.current,
       );
+      if (res.gone) goneRef.current = true;
     } catch (e) {
       console.warn("[whiteboard] Save error:", e);
     }
@@ -270,7 +281,12 @@ export default function WhiteboardInner({
   useEffect(() => {
     const interval = window.setInterval(() => { void flush(); }, AUTOSAVE_INTERVAL_MS);
     const onBeforeUnload = () => {
-      if (latestRef.current && dirtyRef.current && !isViewOnly) {
+      if (
+        latestRef.current &&
+        dirtyRef.current &&
+        !isViewOnly &&
+        !goneRef.current
+      ) {
         try {
           const blob = new Blob(
             [
