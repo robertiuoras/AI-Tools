@@ -620,8 +620,13 @@ function RemoteParticipantsBadge({
     };
   });
 
+  // NOTE: pinned to top-14 (not top-3) so it sits *under* Excalidraw's
+  // top-left hamburger menu instead of covering it. On a shared whiteboard
+  // the user reported the menu becoming uncliccable as soon as a second
+  // participant joined and this pill rendered — the pill was on top of the
+  // hamburger button at z-10 and ate every click.
   return (
-    <div className="absolute left-3 top-3 z-10 flex items-center gap-2 rounded-full border border-border/60 bg-background/90 py-1 pl-1 pr-2.5 text-[11px] font-medium text-foreground shadow-sm backdrop-blur">
+    <div className="absolute left-3 top-14 z-10 flex items-center gap-2 rounded-full border border-border/60 bg-background/90 py-1 pl-1 pr-2.5 text-[11px] font-medium text-foreground shadow-sm backdrop-blur">
       <div className="flex -space-x-1.5">
         {list.map((p) => (
           <div

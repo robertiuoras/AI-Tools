@@ -7,6 +7,7 @@ import { useAuthSession } from "@/components/AuthSessionProvider";
 import { useToast } from "@/components/ui/toaster";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/lib/supabase";
 
 interface NotificationRow {
   id: string;
@@ -25,7 +26,14 @@ interface ApiResponse {
   unreadCount: number;
 }
 
-const POLL_INTERVAL_MS = 45_000;
+/**
+ * Polling is only the *fallback* now — the real-time `postgres_changes`
+ * subscription below pushes new rows the instant they're inserted. We keep
+ * a slow background poll so the bell stays consistent if the websocket
+ * drops, falls behind, or the realtime publication isn't applied yet on a
+ * given environment.
+ */
+const POLL_INTERVAL_MS = 60_000;
 /** Bumped each time the bell stops/starts polling so we don't double-fire toasts. */
 const SEEN_LS_KEY = "notif:lastSeenIds";
 
@@ -173,6 +181,78 @@ export function NotificationsBell() {
       document.removeEventListener("visibilitychange", onFocus);
     };
   }, [user, fetchNotifications]);
+
+  // Real-time push for new notifications. Subscribes to INSERTs on
+  // public.notification scoped to this user, so as soon as a share API
+  // call writes the row, the bell updates and a toast fires — no waiting
+  // for the 60s poll, no need to reload the page after someone shares a
+  // whiteboard or note. Falls back silently if the realtime publication
+  // isn't enabled in the target Supabase project (the poll above keeps
+  // things working).
+  useEffect(() => {
+    if (!user) return;
+    const userId = user.id;
+    const channel = supabase
+      .channel(`notifications:user:${userId}`)
+      .on(
+        "postgres_changes" as never,
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "notification",
+          filter: `user_id=eq.${userId}`,
+        } as never,
+        (payload: { new: NotificationRow }) => {
+          const row = payload?.new;
+          if (!row || !row.id) return;
+          // Skip if we've already seen this id (e.g. the poll race-won, or
+          // realtime resent on reconnect).
+          const seen = seenIdsRef.current;
+          if (seen.has(row.id)) return;
+          seen.add(row.id);
+          saveSeenIds(seen);
+
+          setItems((prev) => {
+            if (prev.some((n) => n.id === row.id)) return prev;
+            // Cap to ~30 like the API to keep the dropdown tight.
+            return [row, ...prev].slice(0, 30);
+          });
+          if (!row.is_read) setUnreadCount((c) => c + 1);
+
+          // Skip the toast on the very first session load — fetchNotifications
+          // already handles that initial flush. Realtime inserts are by
+          // definition fresh, so always toast (subject to the same burst
+          // protection: we only fire once per id thanks to the seen set).
+          addToast({
+            title: row.title,
+            description: row.body ?? undefined,
+            variant: "info",
+            duration: 7000,
+          });
+
+          if (typeof window !== "undefined") {
+            try {
+              window.dispatchEvent(
+                new CustomEvent("ai-tools:new-notifications", {
+                  detail: { items: [row], types: [row.type] },
+                }),
+              );
+            } catch {
+              /* noop */
+            }
+          }
+        },
+      )
+      .subscribe();
+
+    return () => {
+      try {
+        void supabase.removeChannel(channel);
+      } catch {
+        /* noop */
+      }
+    };
+  }, [user, addToast]);
 
   // Close dropdown on outside click / Escape.
   useEffect(() => {
