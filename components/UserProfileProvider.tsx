@@ -16,6 +16,14 @@ export interface UserProfile {
   name: string;
   avatar_url: string | null;
   role?: string | null;
+  /** Short bio shown in shared collaboration surfaces. */
+  bio?: string | null;
+  /** Override the auto-assigned hash colour used for cursors / avatars. */
+  cursor_color?: string | null;
+  /** UI theme preference. "system" defers to the OS/browser. */
+  theme_pref?: "light" | "dark" | "system" | null;
+  /** When false, suppresses outbound emails on share-related events. */
+  email_notifications?: boolean | null;
 }
 
 interface UserProfileContextValue {
@@ -165,3 +173,25 @@ export function avatarColor(seed?: string | null): string {
   const hue = Math.abs(h) % 360;
   return `hsl(${hue}, 65%, 45%)`;
 }
+
+/**
+ * Resolves a user's preferred cursor / accent colour. Falls back to the
+ * deterministic hash colour so old users without a custom value keep
+ * looking exactly the same.
+ */
+export function resolveAccentColor(
+  custom?: string | null,
+  seed?: string | null,
+): string {
+  const trimmed = (custom ?? "").trim();
+  if (trimmed.length > 0) return trimmed;
+  return avatarColor(seed);
+}
+
+/** Curated palette shown in the profile settings dialog. */
+export const ACCENT_COLOR_PRESETS = [
+  "#ef4444", "#f97316", "#f59e0b", "#eab308",
+  "#84cc16", "#22c55e", "#10b981", "#14b8a6",
+  "#06b6d4", "#0ea5e9", "#3b82f6", "#6366f1",
+  "#8b5cf6", "#a855f7", "#d946ef", "#ec4899",
+];

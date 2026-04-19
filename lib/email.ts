@@ -1,4 +1,5 @@
 import { Resend } from "resend";
+import { supabaseAdmin } from "@/lib/supabase";
 
 /**
  * Thin wrapper around Resend so the rest of the app doesn't have to
@@ -64,6 +65,28 @@ export async function sendEmail(params: SendEmailParams): Promise<{
   } catch (e) {
     console.error("[email] Unexpected send error:", e);
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * Returns false if the recipient has opted out of share-related emails
+ * via Profile settings. Defaults to true (send) when the column is null,
+ * the row is missing, or the lookup fails — never block emails because
+ * Supabase had a hiccup.
+ */
+export async function shouldEmailUser(userId: string): Promise<boolean> {
+  if (!userId) return true;
+  try {
+    const admin = supabaseAdmin as any;
+    const { data } = await admin
+      .from("user")
+      .select("email_notifications")
+      .eq("id", userId)
+      .maybeSingle();
+    if (!data) return true;
+    return data.email_notifications !== false;
+  } catch {
+    return true;
   }
 }
 

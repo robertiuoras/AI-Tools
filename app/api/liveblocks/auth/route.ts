@@ -81,7 +81,7 @@ export async function POST(request: NextRequest) {
     const admin = supabaseAdmin as any;
     const { data: userRow } = await admin
       .from("user")
-      .select("id, email, name, avatar_url")
+      .select("id, email, name, avatar_url, cursor_color, bio")
       .eq("id", userId)
       .maybeSingle();
 
@@ -89,7 +89,15 @@ export async function POST(request: NextRequest) {
       (userRow?.name as string | undefined)?.trim() ||
       (userRow?.email as string | undefined)?.split("@")[0] ||
       "Anonymous";
-    const colour = colourForUserId(userId);
+    // Prefer the user's chosen accent colour from Profile settings.
+    // Fall back to the deterministic palette so legacy users without a
+    // saved colour keep the same look.
+    const customColour = (userRow?.cursor_color as string | null | undefined)?.trim();
+    const colour =
+      customColour && customColour.length > 0
+        ? customColour
+        : colourForUserId(userId);
+    const bio = (userRow?.bio as string | null | undefined)?.trim() || undefined;
 
     const session = liveblocks.prepareSession(userId, {
       userInfo: {
@@ -97,6 +105,7 @@ export async function POST(request: NextRequest) {
         email: userRow?.email ?? null,
         color: colour,
         avatar: (userRow?.avatar_url as string | null | undefined) ?? undefined,
+        bio,
       },
     });
     session.allow(resourceRoomId, canEdit ? session.FULL_ACCESS : session.READ_ACCESS);

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { getUserId, resolveNoteAccess } from "@/lib/notes-auth";
 import { createNotification } from "@/lib/notifications";
-import { sendEmail, escapeHtml } from "@/lib/email";
+import { sendEmail, escapeHtml, shouldEmailUser } from "@/lib/email";
 import { snapshotNoteVersion } from "@/lib/note-versions";
 
 /**
@@ -216,6 +216,10 @@ async function notifyShare(p: NotifyShareParams): Promise<void> {
   });
 
   if (!p.recipient.email) return;
+
+  // Respect the recipient's email opt-out from Profile settings.
+  const optedIn = await shouldEmailUser(p.recipient.id);
+  if (!optedIn) return;
 
   const safeOwner = escapeHtml(ownerName);
   const safeNote = escapeHtml(noteTitle);

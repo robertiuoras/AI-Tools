@@ -68,6 +68,7 @@ export function NavLinks() {
     pathname === '/prompts' || pathname.startsWith('/prompts/')
   const isNotesPage = pathname === '/notes'
   const isProjectsPage = pathname === '/projects'
+  const isNewsPage = pathname === '/news'
   const isCreatorsView = isVideosPage && searchParams.get('view') === 'creators'
 
   const linkBase =
@@ -197,6 +198,25 @@ export function NavLinks() {
           </Link>
         </>
       ) : null}
+      <span className="text-muted-foreground/60 px-0.5 font-light" aria-hidden>
+        |
+      </span>
+      <Link
+        href="/news"
+        className={cn(
+          linkBase,
+          isNewsPage
+            ? 'bg-background text-foreground shadow-sm ring-1 ring-border/50'
+            : 'text-muted-foreground hover:bg-background/50',
+        )}
+      >
+        <NavLabel
+          active={isNewsPage}
+          gradient={{ from: 'from-violet-500', to: 'to-fuchsia-500' }}
+        >
+          News
+        </NavLabel>
+      </Link>
     </div>
   )
 }

@@ -3,7 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase";
 import { getUserId } from "@/lib/notes-auth";
 import { resolveWhiteboardAccess } from "@/lib/whiteboard-auth";
 import { createNotification } from "@/lib/notifications";
-import { sendEmail, escapeHtml } from "@/lib/email";
+import { sendEmail, escapeHtml, shouldEmailUser } from "@/lib/email";
 
 export const dynamic = "force-dynamic";
 
@@ -266,6 +266,10 @@ async function notifyWhiteboardShare(p: NotifyParams): Promise<void> {
   });
 
   if (!p.recipient.email) return;
+
+  // Respect the recipient's email opt-out from Profile settings.
+  const optedIn = await shouldEmailUser(p.recipient.id);
+  if (!optedIn) return;
 
   const safeOwner = escapeHtml(ownerName);
   const safeName = escapeHtml(p.boardName);

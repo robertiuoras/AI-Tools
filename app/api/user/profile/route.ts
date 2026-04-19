@@ -41,7 +41,9 @@ export async function GET(request: NextRequest) {
     const admin = supabaseAdmin as any;
     const { data, error } = await admin
       .from("user")
-      .select("id, email, name, avatar_url, role")
+      .select(
+        "id, email, name, avatar_url, role, bio, cursor_color, theme_pref, email_notifications",
+      )
       .eq("id", userId)
       .maybeSingle();
     if (error) {
@@ -65,6 +67,10 @@ export async function PATCH(request: NextRequest) {
     const body = (await request.json().catch(() => ({}))) as {
       name?: unknown;
       clearAvatar?: unknown;
+      bio?: unknown;
+      cursorColor?: unknown;
+      themePref?: unknown;
+      emailNotifications?: unknown;
     };
 
     const updates: Record<string, unknown> = {};
@@ -81,6 +87,44 @@ export async function PATCH(request: NextRequest) {
     if (body.clearAvatar === true) {
       updates.avatar_url = null;
     }
+    if (body.bio === null || typeof body.bio === "string") {
+      const trimmed =
+        typeof body.bio === "string" ? body.bio.trim() : null;
+      if (trimmed && trimmed.length > 280) {
+        return NextResponse.json(
+          { error: "Bio must be 280 characters or fewer." },
+          { status: 400 },
+        );
+      }
+      updates.bio = trimmed && trimmed.length > 0 ? trimmed : null;
+    }
+    if (body.cursorColor === null || typeof body.cursorColor === "string") {
+      const raw =
+        typeof body.cursorColor === "string" ? body.cursorColor.trim() : null;
+      // Accept hex (#abc, #abcdef) or hsl(...) — anything reasonable up
+      // to 32 chars. Sanitize obviously bad input.
+      if (raw && raw.length > 32) {
+        return NextResponse.json(
+          { error: "Cursor colour string is too long." },
+          { status: 400 },
+        );
+      }
+      updates.cursor_color = raw && raw.length > 0 ? raw : null;
+    }
+    if (typeof body.themePref === "string") {
+      const v = body.themePref.toLowerCase();
+      if (v !== "light" && v !== "dark" && v !== "system") {
+        return NextResponse.json(
+          { error: "themePref must be 'light', 'dark', or 'system'." },
+          { status: 400 },
+        );
+      }
+      updates.theme_pref = v;
+    }
+    if (typeof body.emailNotifications === "boolean") {
+      updates.email_notifications = body.emailNotifications;
+    }
+
     if (Object.keys(updates).length === 0) {
       return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
     }
@@ -90,7 +134,9 @@ export async function PATCH(request: NextRequest) {
       .from("user")
       .update(updates)
       .eq("id", userId)
-      .select("id, email, name, avatar_url, role")
+      .select(
+        "id, email, name, avatar_url, role, bio, cursor_color, theme_pref, email_notifications",
+      )
       .single();
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
