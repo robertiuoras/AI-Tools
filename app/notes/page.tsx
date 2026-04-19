@@ -121,6 +121,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { LiveblocksRoomProvider } from "@/components/LiveblocksRoomProvider";
+import { CollaborativeNoteEditor } from "@/components/CollaborativeNoteEditor";
+import { NoteVersionHistory } from "@/components/NoteVersionHistory";
+import { History } from "lucide-react";
 
 function parseInsetClipFromImg(img: HTMLImageElement): {
   top: number;
@@ -1147,6 +1151,16 @@ function NotesPageInner() {
     | { noteId: string; noteTitle: string }
     | null
   >(null);
+  /**
+   * Number of share rows for the currently-selected note when the user is the
+   * owner. Drives the decision to mount the realtime-collaborative editor:
+   * even a solo viewer of their own un-shared note keeps the legacy custom
+   * editor (with mentions, find-in-note, etc.). Once the note is shared with
+   * anyone, both sides switch to the Tiptap+Yjs editor.
+   */
+  const [selectedOwnedShareCount, setSelectedOwnedShareCount] = useState<number>(0);
+  /** Version-history drawer toggle for the active note. */
+  const [versionHistoryOpen, setVersionHistoryOpen] = useState<boolean>(false);
   const [loading, setLoading] = useState(false);
   const [notesLoading, setNotesLoading] = useState(true);
   const pagesRef = useRef(pages);
@@ -1425,6 +1439,48 @@ function NotesPageInner() {
     const shared = sharedNotes.find((s) => s.note.id === selectedNoteId);
     return shared?.note ?? null;
   }, [notes, sharedNotes, selectedNoteId]);
+
+  /**
+   * When the user opens an OWNED note, fetch its share count once. Anything
+   * > 0 means we should mount the realtime collaborative editor instead of
+   * the legacy custom one. (For shared-with-me notes, the recipient always
+   * gets the collab editor regardless.) The fetch is fire-and-forget and
+   * silently degrades to 0 on error.
+   */
+  useEffect(() => {
+    setSelectedOwnedShareCount(0);
+    setVersionHistoryOpen(false);
+    if (!selectedNoteId || !token || isSharedNoteSelected) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/notes/${selectedNoteId}/shares`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok || cancelled) return;
+        const rows = await res.json();
+        setSelectedOwnedShareCount(Array.isArray(rows) ? rows.length : 0);
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedNoteId, token, isSharedNoteSelected]);
+
+  /** True when the note is collaborative — either shared with me or shared by me. */
+  const useCollaborativeEditor = useMemo(
+    () => isSharedNoteSelected || selectedOwnedShareCount > 0,
+    [isSharedNoteSelected, selectedOwnedShareCount],
+  );
+
+  /** Whether the current user can write to the note (edit-permission share or owner). */
+  const canEditSelectedNote = useMemo(() => {
+    if (!selectedNote) return false;
+    if (isSharedNoteSelected) return selectedSharedPermission === "edit";
+    return true;
+  }, [selectedNote, isSharedNoteSelected, selectedSharedPermission]);
 
   const allNotesSearchResults = useMemo(() => {
     const q = searchAllNotesQuery.trim().toLowerCase();
@@ -5193,6 +5249,17 @@ function NotesPageInner() {
                         editedNowMs,
                       )}
                     </span>
+                    {useCollaborativeEditor ? (
+                      <button
+                        type="button"
+                        onClick={() => setVersionHistoryOpen(true)}
+                        className="ml-2 inline-flex items-center gap-1 rounded-full border border-border bg-background px-2 py-0.5 text-[11px] font-medium text-foreground hover:bg-muted"
+                        title="Show version history"
+                      >
+                        <History className="h-3 w-3" />
+                        History
+                      </button>
+                    ) : null}
                   </div>
                 ) : null}
                 <div
@@ -6116,7 +6183,36 @@ function NotesPageInner() {
                       )}
                     </div>
                   </div>
-                  {isEditing ? (
+                  {useCollaborativeEditor ? (
+                    /*
+                     * Realtime collaborative editor (Tiptap + Yjs over
+                     * Liveblocks). Used whenever the note is shared in
+                     * either direction. Always "live" — there's no
+                     * separate read/edit mode because remote edits
+                     * stream in continuously.
+                     */
+                    <LiveblocksRoomProvider
+                      noteId={selectedNote.id}
+                      fallback={
+                        <div className="rounded-lg bg-muted/30 px-3 py-6 text-center text-sm text-muted-foreground">
+                          Connecting collaborative session…
+                        </div>
+                      }
+                    >
+                      <CollaborativeNoteEditor
+                        noteId={selectedNote.id}
+                        initialHtml={selectedNote.content || ""}
+                        canEdit={canEditSelectedNote}
+                        placeholder="Start typing… others will see your edits live."
+                        className={cn(
+                          "note-html-scroll w-full min-w-0 max-w-full flex-1 overflow-x-hidden overflow-y-auto rounded-lg bg-muted/30 px-3 py-2 text-sm text-foreground [overflow-wrap:anywhere]",
+                          noteBodyFullscreen
+                            ? "min-h-0 flex-1 max-h-none sm:min-h-0"
+                            : "min-h-[200px] max-h-[min(65vh,520px)] sm:min-h-[240px] sm:max-h-[min(70vh,560px)]",
+                        )}
+                      />
+                    </LiveblocksRoomProvider>
+                  ) : isEditing ? (
                     <NoteBodyEditor
                       editorRef={editorRef}
                       noteId={selectedNote.id}
@@ -6564,6 +6660,30 @@ function NotesPageInner() {
           noteTitle={shareDialog.noteTitle}
           token={token}
           onClose={() => setShareDialog(null)}
+        />
+      )}
+      {selectedNote && (
+        <NoteVersionHistory
+          noteId={selectedNote.id}
+          open={versionHistoryOpen}
+          onClose={() => setVersionHistoryOpen(false)}
+          onReverted={(updated) => {
+            // Reflect the reverted content immediately in the list cache.
+            // The collaborative editor's open Yjs doc still holds the
+            // pre-revert state, so prompt a reload to re-seed cleanly.
+            if (updated) {
+              setNotes((prev) =>
+                prev.map((n) =>
+                  n.id === updated.id
+                    ? { ...n, title: updated.title, content: updated.content, updatedAt: updated.updatedAt }
+                    : n,
+                ),
+              );
+              if (typeof window !== "undefined") {
+                window.location.reload();
+              }
+            }
+          }}
         />
       )}
     </div>

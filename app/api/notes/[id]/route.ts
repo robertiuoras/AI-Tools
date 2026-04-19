@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { getUserId, resolveNoteAccess } from "@/lib/notes-auth";
+import { snapshotNoteVersion } from "@/lib/note-versions";
 
 export async function PUT(
   request: NextRequest,
@@ -40,6 +41,23 @@ export async function PUT(
     const { data, error } = await query.select("*").single();
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    // Snapshot the version (deduped to ~1/min) only when the actual content
+    // changed — title-only or favorite-only edits don't need a snapshot.
+    if (typeof body?.content === "string" && data) {
+      try {
+        await snapshotNoteVersion({
+          noteId: id,
+          authorId: userId,
+          title: (data.title as string) ?? "Untitled Note",
+          content: (data.content as string) ?? "",
+        });
+      } catch (err) {
+        // Snapshot failures must never break a save.
+        console.error("[notes] snapshotNoteVersion failed", err);
+      }
+    }
+
     return NextResponse.json(data);
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
