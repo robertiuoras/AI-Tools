@@ -146,15 +146,27 @@ export async function POST(request: NextRequest) {
         .upload(path, bytes, { contentType: "application/json", upsert: true });
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-      // Update updatedAt in boards meta
+      // Update updatedAt in boards meta IF this board still exists in meta.
+      // Critical: do NOT re-add a missing board here. WhiteboardInner fires
+      // one last autosave on unmount, which races with delete and would
+      // otherwise resurrect a board the user just removed. The "create"
+      // action is the only thing that should add a board to meta.
       const boards = await loadBoardsMeta(userId);
+      const exists = boards.some((b) => b.id === body.boardId);
+      if (!exists) {
+        // Board was deleted (or is the virtual "default" that hasn't been
+        // persisted yet). For "default", seed it; otherwise no-op so we
+        // don't resurrect a deleted board.
+        if (body.boardId === "default" && boards.length === 0) {
+          await saveBoardsMeta(userId, [
+            { id: "default", name: "Untitled Board", updatedAt: new Date().toISOString() },
+          ]);
+        }
+        return NextResponse.json({ ok: true });
+      }
       const updated = boards.map((b) =>
         b.id === body.boardId ? { ...b, updatedAt: new Date().toISOString() } : b
       );
-      // If board isn't in meta (e.g. "default"), add it
-      if (!updated.find((b) => b.id === body.boardId)) {
-        updated.push({ id: body.boardId, name: "Untitled Board", updatedAt: new Date().toISOString() });
-      }
       await saveBoardsMeta(userId, updated);
       return NextResponse.json({ ok: true });
     }

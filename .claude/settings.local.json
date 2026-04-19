@@ -2,7 +2,15 @@
   "permissions": {
     "allow": [
       "Bash(npx tsc:*)",
-      "Bash(node_modules/.bin/tsc --noEmit)"
+      "Bash(node_modules/.bin/tsc --noEmit)",
+      "Bash(python skills/ui-ux-pro-max/scripts/search.py \"AI tools directory SaaS catalog dark mode professional\" --design-system -p \"AI Tools Directory\")",
+      "Bash(python3 skills/ui-ux-pro-max/scripts/search.py \"AI tools directory SaaS catalog dark mode professional\" --design-system -p \"AI Tools Directory\")",
+      "Bash(python:*)",
+      "Bash(C:/Users/Gamer/AppData/Local/Python/pythoncore-3.14-64/python.exe:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git push:*)",
+      "Bash(cmd /c \"dir /b /s \\\\\"C:\\\\Users\\\\Gamer\\\\Desktop\\\\Projects\\\\AI-Tools\\\\node_modules\\\\\" 2>&1 | findstr /i tldraw\")"
     ]
   }
 }

@@ -421,18 +421,12 @@ function HomePageContent() {
   ]);
 
   useEffect(() => {
-    // When returning to / from another route (e.g. /notes), the catalog
-    // provider has already hydrated `tools` from the in-memory cache so the
-    // page is interactive immediately. Hitting `/api/tools` synchronously on
-    // every nav added a perceptible "few second" delay because it competed
-    // with the heavy /notes tear-down + /home re-mount. Strategy:
-    //   - If cache is fresh (< 60s), skip the background fetch entirely.
-    //   - Otherwise, defer the background revalidation to the next idle frame
-    //     so the route transition completes first.
-    const cacheAge = getClientToolsCacheAgeMs();
-    const hasFreshCache = toolsRef.current.length > 0 && cacheAge < 60_000;
-    if (hasFreshCache) return;
-
+    // Strategy: paint instantly from the in-memory cache (handled by
+    // ToolsCatalogProvider), then ALWAYS schedule a background revalidation.
+    // We previously skipped revalidation when cache was < 60s old, but that
+    // meant tools added via /admin → home (soft nav) wouldn't appear until a
+    // hard refresh. Defer to the next idle frame so the route transition
+    // completes first, but never skip the network call.
     if (toolsRef.current.length > 0) {
       const idle =
         typeof window !== "undefined" &&
@@ -458,6 +452,24 @@ function HomePageContent() {
     }
 
     void fetchTools();
+  }, [fetchTools]);
+
+  // Revalidate when the user returns to the tab (e.g. after adding a tool in
+  // /admin and switching back). Cheap because /api/tools is fast and we only
+  // refetch if the cache is older than ~5s.
+  useEffect(() => {
+    const onFocus = () => {
+      if (document.visibilityState !== "visible") return;
+      const age = getClientToolsCacheAgeMs();
+      if (age < 5_000) return;
+      void fetchTools();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
   }, [fetchTools]);
 
   const handleRefreshAll = useCallback(async () => {
