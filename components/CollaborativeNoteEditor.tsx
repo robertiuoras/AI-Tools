@@ -6,13 +6,47 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
-import { useEditor, EditorContent } from "@tiptap/react";
+import { useEditor, EditorContent, Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Collaboration from "@tiptap/extension-collaboration";
 import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
 import Placeholder from "@tiptap/extension-placeholder";
 import Link from "@tiptap/extension-link";
+import Underline from "@tiptap/extension-underline";
+import Highlight from "@tiptap/extension-highlight";
+import TextAlign from "@tiptap/extension-text-align";
+import TaskList from "@tiptap/extension-task-list";
+import TaskItem from "@tiptap/extension-task-item";
+import {
+  Bold,
+  Italic,
+  Underline as UnderlineIcon,
+  Strikethrough,
+  Highlighter,
+  List,
+  ListOrdered,
+  ListChecks,
+  Quote,
+  Code2,
+  Link2,
+  Link2Off,
+  Heading1,
+  Heading2,
+  Heading3,
+  Pilcrow,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  Minus,
+  Undo2,
+  Redo2,
+  Copy as CopyIcon,
+  Scissors,
+  ClipboardPaste,
+  Type,
+} from "lucide-react";
 import * as Y from "yjs";
 import { LiveblocksYjsProvider } from "@liveblocks/yjs";
 import { useRoom, useOthers, useSelf } from "@liveblocks/react";
@@ -65,6 +99,9 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
 
   const providerRef = useRef<LiveblocksYjsProvider | null>(null);
   const [isProviderReady, setIsProviderReady] = useState(false);
+  // Right-click menu position. `null` when closed; `{x, y}` (viewport coords)
+  // when the user has requested it inside the editor surface.
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
 
   // Initialise the Liveblocks Yjs provider exactly once per room mount.
   useEffect(() => {
@@ -90,8 +127,15 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
       immediatelyRender: false,
       extensions: providerRef.current
         ? [
+            // StarterKit's history is disabled — Yjs provides multiplayer-aware
+            // undo/redo via @tiptap/extension-collaboration's UndoManager.
             StarterKit.configure({ history: false }),
-            Link.configure({ openOnClick: false }),
+            Underline,
+            Highlight.configure({ multicolor: false }),
+            TextAlign.configure({ types: ["heading", "paragraph"] }),
+            TaskList,
+            TaskItem.configure({ nested: true }),
+            Link.configure({ openOnClick: false, autolink: true }),
             Placeholder.configure({
               placeholder: placeholder ?? "Start typing… others will see your edits live.",
             }),
@@ -99,13 +143,6 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
             CollaborationCursor.configure({
               provider: providerRef.current,
               user: { name: userName, color: userColour },
-              /*
-               * Custom render: replaces the default heavy "sticky note"
-               * label with a minimal pill that floats just above the
-               * caret. The label fades out shortly after appearing so
-               * it doesn't permanently obstruct the text the remote
-               * user is editing — see the CSS rules below.
-               */
               render: (user) => {
                 const safeName = String(user.name ?? "Anonymous");
                 const safeColour =
@@ -130,7 +167,12 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
           ]
         : [
             StarterKit.configure({ history: false }),
-            Link.configure({ openOnClick: false }),
+            Underline,
+            Highlight.configure({ multicolor: false }),
+            TextAlign.configure({ types: ["heading", "paragraph"] }),
+            TaskList,
+            TaskItem.configure({ nested: true }),
+            Link.configure({ openOnClick: false, autolink: true }),
             Placeholder.configure({
               placeholder: placeholder ?? "Connecting to live session…",
             }),
@@ -139,7 +181,7 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
       editorProps: {
         attributes: {
           class:
-            "prose prose-sm sm:prose-base dark:prose-invert max-w-none focus:outline-none min-h-[300px] px-1 py-2",
+            "prose prose-sm sm:prose-base dark:prose-invert max-w-none focus:outline-none min-h-[300px] px-2 py-3 collab-prose",
         },
       },
     },
@@ -356,7 +398,15 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
   return (
     <div className={className}>
       <PresenceBar />
-      <div className="collab-editor-shell rounded-md border border-border/40 bg-background/60 px-3 py-2">
+      {canEdit && editor ? <EditorToolbar editor={editor} /> : null}
+      <div
+        className="collab-editor-shell relative rounded-xl border border-border/50 bg-gradient-to-b from-background to-muted/10 shadow-sm focus-within:border-primary/40 focus-within:shadow-md"
+        onContextMenu={(e) => {
+          if (!canEdit || !editor) return;
+          e.preventDefault();
+          setCtxMenu({ x: e.clientX, y: e.clientY });
+        }}
+      >
         <EditorContent editor={editor} />
       </div>
       {!canEdit ? (
@@ -365,13 +415,103 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
           make changes.
         </div>
       ) : null}
+      {ctxMenu && editor ? (
+        <CollabContextMenu
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          editor={editor}
+          onClose={() => setCtxMenu(null)}
+        />
+      ) : null}
       {/*
-       * Cursor styles. Scoped via .collab-editor-shell so they can't leak
-       * into other ProseMirror instances on the page. The pill auto-fades
-       * a couple of seconds after the cursor stops moving — but reappears
-       * instantly on hover so you can always identify who's where.
-       */}
+       * Editor styles. Scoped via .collab-editor-shell so they can't leak
+       * into other ProseMirror instances on the page.
+       *
+       * Includes:
+       *   - I-beam text cursor on hover over editable content.
+       *   - Premium prose touches: spacing, list bullets/numbers, heading
+       *     scale, link underlines that don't fight the colour.
+       *   - Remote-cursor pill (carried over from the cursor restyle).
+       */
+      }
       <style jsx global>{`
+        .collab-editor-shell .ProseMirror {
+          cursor: text;
+          min-height: 220px;
+          line-height: 1.65;
+        }
+        .collab-editor-shell .ProseMirror:focus { outline: none; }
+        .collab-editor-shell .collab-prose p { margin: 0 0 0.6em; }
+        .collab-editor-shell .collab-prose h1 { font-size: 1.6em; line-height: 1.25; margin: 0.6em 0 0.4em; font-weight: 700; }
+        .collab-editor-shell .collab-prose h2 { font-size: 1.3em; line-height: 1.3;  margin: 0.5em 0 0.35em; font-weight: 700; }
+        .collab-editor-shell .collab-prose h3 { font-size: 1.1em; line-height: 1.35; margin: 0.45em 0 0.3em; font-weight: 600; }
+        .collab-editor-shell .collab-prose ul { padding-left: 1.4em; list-style: disc; }
+        .collab-editor-shell .collab-prose ol { padding-left: 1.4em; list-style: decimal; }
+        .collab-editor-shell .collab-prose blockquote {
+          border-left: 3px solid hsl(var(--primary) / 0.6);
+          padding: 0.05em 0.9em;
+          margin: 0.5em 0;
+          color: hsl(var(--muted-foreground));
+          background: hsl(var(--muted) / 0.35);
+          border-radius: 0 6px 6px 0;
+        }
+        .collab-editor-shell .collab-prose code {
+          background: hsl(var(--muted) / 0.7);
+          padding: 0.12em 0.4em;
+          border-radius: 4px;
+          font-size: 0.92em;
+        }
+        .collab-editor-shell .collab-prose pre {
+          background: hsl(var(--muted) / 0.7);
+          padding: 0.85em 1em;
+          border-radius: 8px;
+          overflow-x: auto;
+        }
+        .collab-editor-shell .collab-prose pre code { background: transparent; padding: 0; }
+        .collab-editor-shell .collab-prose a {
+          color: hsl(var(--primary));
+          text-decoration: underline;
+          text-underline-offset: 3px;
+          text-decoration-thickness: 1.5px;
+        }
+        .collab-editor-shell .collab-prose mark {
+          background: linear-gradient(transparent 55%, rgba(250, 204, 21, 0.55) 55%);
+          color: inherit;
+          padding: 0 1px;
+          border-radius: 1px;
+        }
+        .collab-editor-shell .collab-prose hr {
+          border: 0;
+          border-top: 1px solid hsl(var(--border));
+          margin: 1.2em 0;
+        }
+        /* Task list checkboxes */
+        .collab-editor-shell .collab-prose ul[data-type="taskList"] {
+          list-style: none;
+          padding-left: 0.4em;
+        }
+        .collab-editor-shell .collab-prose ul[data-type="taskList"] li {
+          display: flex;
+          align-items: flex-start;
+          gap: 0.5em;
+        }
+        .collab-editor-shell .collab-prose ul[data-type="taskList"] li > label {
+          margin-top: 0.35em;
+          flex-shrink: 0;
+          user-select: none;
+        }
+        .collab-editor-shell .collab-prose ul[data-type="taskList"] li > div {
+          flex: 1;
+          min-width: 0;
+        }
+        .collab-editor-shell .collab-prose p.is-editor-empty:first-child::before {
+          content: attr(data-placeholder);
+          color: hsl(var(--muted-foreground) / 0.65);
+          float: left;
+          height: 0;
+          pointer-events: none;
+        }
+        /* Remote cursor pill */
         .collab-editor-shell .collab-caret {
           position: relative;
           display: inline-block;
@@ -499,4 +639,588 @@ function initials(name: string): string {
   const parts = trimmed.split(/\s+/);
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+/* ────────────────────────────────────────────────────────────────────── */
+/*  Toolbar                                                                */
+/* ────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Premium floating toolbar shown above the collaborative editor.
+ * Mirrors the legacy editor's most-used formatting actions and adds a
+ * few collab-friendly extras (task lists, alignment). Active commands
+ * pulse with the primary colour so users always know what's on.
+ */
+function EditorToolbar({ editor }: { editor: Editor }) {
+  // Force re-render whenever the editor's selection / marks change so
+  // toolbar buttons reflect the current state ("active" highlights).
+  const [, force] = useState(0);
+  useEffect(() => {
+    const tick = () => force((n) => n + 1);
+    editor.on("selectionUpdate", tick);
+    editor.on("transaction", tick);
+    editor.on("focus", tick);
+    return () => {
+      editor.off("selectionUpdate", tick);
+      editor.off("transaction", tick);
+      editor.off("focus", tick);
+    };
+  }, [editor]);
+
+  const promptForLink = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const previous = (editor.getAttributes("link") as { href?: string }).href ?? "";
+    const url = window.prompt("Link URL (leave blank to remove)", previous);
+    if (url === null) return;
+    if (url.trim() === "") {
+      editor.chain().focus().extendMarkRange("link").unsetLink().run();
+      return;
+    }
+    let href = url.trim();
+    if (!/^https?:\/\//i.test(href) && !/^mailto:/i.test(href)) href = `https://${href}`;
+    editor.chain().focus().extendMarkRange("link").setLink({ href }).run();
+  }, [editor]);
+
+  const headingValue: "p" | "h1" | "h2" | "h3" = editor.isActive("heading", { level: 1 })
+    ? "h1"
+    : editor.isActive("heading", { level: 2 })
+      ? "h2"
+      : editor.isActive("heading", { level: 3 })
+        ? "h3"
+        : "p";
+
+  const setHeading = (v: string) => {
+    const chain = editor.chain().focus();
+    if (v === "p") chain.setParagraph().run();
+    else chain.toggleHeading({ level: Number(v.slice(1)) as 1 | 2 | 3 }).run();
+  };
+
+  return (
+    <div
+      className="mb-2 flex flex-wrap items-center gap-1 rounded-xl border border-border/60 bg-gradient-to-b from-background to-muted/40 px-1.5 py-1 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/70"
+      role="toolbar"
+      aria-label="Editor toolbar"
+    >
+      <ToolbarSelect
+        value={headingValue}
+        onChange={setHeading}
+        title="Text style"
+        options={[
+          { value: "p", label: "Paragraph", icon: <Pilcrow className="h-3.5 w-3.5" /> },
+          { value: "h1", label: "Heading 1", icon: <Heading1 className="h-3.5 w-3.5" /> },
+          { value: "h2", label: "Heading 2", icon: <Heading2 className="h-3.5 w-3.5" /> },
+          { value: "h3", label: "Heading 3", icon: <Heading3 className="h-3.5 w-3.5" /> },
+        ]}
+      />
+
+      <ToolbarSep />
+
+      <ToolbarButton
+        title="Bold (Ctrl/⌘ B)"
+        active={editor.isActive("bold")}
+        onClick={() => editor.chain().focus().toggleBold().run()}
+      >
+        <Bold className="h-3.5 w-3.5" />
+      </ToolbarButton>
+      <ToolbarButton
+        title="Italic (Ctrl/⌘ I)"
+        active={editor.isActive("italic")}
+        onClick={() => editor.chain().focus().toggleItalic().run()}
+      >
+        <Italic className="h-3.5 w-3.5" />
+      </ToolbarButton>
+      <ToolbarButton
+        title="Underline (Ctrl/⌘ U)"
+        active={editor.isActive("underline")}
+        onClick={() => editor.chain().focus().toggleUnderline().run()}
+      >
+        <UnderlineIcon className="h-3.5 w-3.5" />
+      </ToolbarButton>
+      <ToolbarButton
+        title="Strikethrough"
+        active={editor.isActive("strike")}
+        onClick={() => editor.chain().focus().toggleStrike().run()}
+      >
+        <Strikethrough className="h-3.5 w-3.5" />
+      </ToolbarButton>
+      <ToolbarButton
+        title="Highlight"
+        active={editor.isActive("highlight")}
+        onClick={() => editor.chain().focus().toggleHighlight().run()}
+      >
+        <Highlighter className="h-3.5 w-3.5" />
+      </ToolbarButton>
+      <ToolbarButton
+        title="Inline code"
+        active={editor.isActive("code")}
+        onClick={() => editor.chain().focus().toggleCode().run()}
+      >
+        <Type className="h-3.5 w-3.5" />
+      </ToolbarButton>
+
+      <ToolbarSep />
+
+      <ToolbarButton
+        title="Bullet list"
+        active={editor.isActive("bulletList")}
+        onClick={() => editor.chain().focus().toggleBulletList().run()}
+      >
+        <List className="h-3.5 w-3.5" />
+      </ToolbarButton>
+      <ToolbarButton
+        title="Numbered list"
+        active={editor.isActive("orderedList")}
+        onClick={() => editor.chain().focus().toggleOrderedList().run()}
+      >
+        <ListOrdered className="h-3.5 w-3.5" />
+      </ToolbarButton>
+      <ToolbarButton
+        title="Task list"
+        active={editor.isActive("taskList")}
+        onClick={() => editor.chain().focus().toggleTaskList().run()}
+      >
+        <ListChecks className="h-3.5 w-3.5" />
+      </ToolbarButton>
+      <ToolbarButton
+        title="Quote"
+        active={editor.isActive("blockquote")}
+        onClick={() => editor.chain().focus().toggleBlockquote().run()}
+      >
+        <Quote className="h-3.5 w-3.5" />
+      </ToolbarButton>
+      <ToolbarButton
+        title="Code block"
+        active={editor.isActive("codeBlock")}
+        onClick={() => editor.chain().focus().toggleCodeBlock().run()}
+      >
+        <Code2 className="h-3.5 w-3.5" />
+      </ToolbarButton>
+
+      <ToolbarSep />
+
+      <ToolbarButton
+        title="Align left"
+        active={editor.isActive({ textAlign: "left" })}
+        onClick={() => editor.chain().focus().setTextAlign("left").run()}
+      >
+        <AlignLeft className="h-3.5 w-3.5" />
+      </ToolbarButton>
+      <ToolbarButton
+        title="Align center"
+        active={editor.isActive({ textAlign: "center" })}
+        onClick={() => editor.chain().focus().setTextAlign("center").run()}
+      >
+        <AlignCenter className="h-3.5 w-3.5" />
+      </ToolbarButton>
+      <ToolbarButton
+        title="Align right"
+        active={editor.isActive({ textAlign: "right" })}
+        onClick={() => editor.chain().focus().setTextAlign("right").run()}
+      >
+        <AlignRight className="h-3.5 w-3.5" />
+      </ToolbarButton>
+
+      <ToolbarSep />
+
+      <ToolbarButton
+        title={editor.isActive("link") ? "Edit link" : "Add link"}
+        active={editor.isActive("link")}
+        onClick={promptForLink}
+      >
+        <Link2 className="h-3.5 w-3.5" />
+      </ToolbarButton>
+      {editor.isActive("link") ? (
+        <ToolbarButton
+          title="Remove link"
+          onClick={() => editor.chain().focus().extendMarkRange("link").unsetLink().run()}
+        >
+          <Link2Off className="h-3.5 w-3.5" />
+        </ToolbarButton>
+      ) : null}
+      <ToolbarButton
+        title="Horizontal rule"
+        onClick={() => editor.chain().focus().setHorizontalRule().run()}
+      >
+        <Minus className="h-3.5 w-3.5" />
+      </ToolbarButton>
+
+      <ToolbarSep />
+
+      <ToolbarButton
+        title="Undo (Ctrl/⌘ Z)"
+        onClick={() => editor.chain().focus().undo().run()}
+        disabled={!editor.can().undo()}
+      >
+        <Undo2 className="h-3.5 w-3.5" />
+      </ToolbarButton>
+      <ToolbarButton
+        title="Redo (Ctrl/⌘ Shift Z)"
+        onClick={() => editor.chain().focus().redo().run()}
+        disabled={!editor.can().redo()}
+      >
+        <Redo2 className="h-3.5 w-3.5" />
+      </ToolbarButton>
+    </div>
+  );
+}
+
+/** Pill-shaped toolbar button with an "active" state that uses the theme's primary colour. */
+function ToolbarButton({
+  children,
+  onClick,
+  active,
+  disabled,
+  title,
+}: {
+  children: ReactNode;
+  onClick: () => void;
+  active?: boolean;
+  disabled?: boolean;
+  title?: string;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      aria-pressed={active ? true : undefined}
+      disabled={disabled}
+      // onMouseDown preventDefault so clicking the button doesn't blur the
+      // editor and lose the current selection.
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onClick}
+      className={[
+        "inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors",
+        active
+          ? "bg-primary/15 text-primary ring-1 ring-primary/30"
+          : "text-foreground/80 hover:bg-muted hover:text-foreground",
+        disabled ? "cursor-not-allowed opacity-40 hover:bg-transparent hover:text-foreground/80" : "",
+      ].join(" ")}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** Small native-select wrapped to look toolbar-native (icon-prefixed). */
+function ToolbarSelect({
+  value,
+  onChange,
+  options,
+  title,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: Array<{ value: string; label: string; icon?: ReactNode }>;
+  title?: string;
+}) {
+  return (
+    <label
+      title={title}
+      className="relative inline-flex h-7 items-center rounded-md text-xs text-foreground/80 hover:bg-muted hover:text-foreground"
+    >
+      <span className="pointer-events-none flex items-center pl-1.5">
+        {options.find((o) => o.value === value)?.icon}
+      </span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onMouseDown={(e) => e.stopPropagation()}
+        className="h-7 cursor-pointer appearance-none bg-transparent pl-1.5 pr-1 text-xs font-medium focus:outline-none"
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function ToolbarSep() {
+  return <span className="mx-0.5 h-5 w-px bg-border/70" aria-hidden />;
+}
+
+/* ────────────────────────────────────────────────────────────────────── */
+/*  Right-click menu                                                       */
+/* ────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Premium right-click menu for the collaborative editor.
+ *
+ * Renders at the cursor position, auto-clamps to the viewport, and
+ * dismisses on outside-click, Escape, or scroll. Mirrors the most-used
+ * commands in the toolbar plus standard editing primitives so users
+ * never feel like they "lost features" compared to the legacy editor.
+ */
+function CollabContextMenu({
+  x,
+  y,
+  editor,
+  onClose,
+}: {
+  x: number;
+  y: number;
+  editor: Editor;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  // Close on outside-click / Escape / scroll. Stays open while interacting
+  // with the menu itself (clicks inside don't dismiss).
+  useEffect(() => {
+    const onPointerDown = (e: MouseEvent) => {
+      if (!ref.current) return;
+      if (!ref.current.contains(e.target as Node)) onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    const onScroll = () => onClose();
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [onClose]);
+
+  // Clamp into the viewport after first paint (so we can read rect width/height).
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const pad = 8;
+    let left = x;
+    let top = y;
+    if (left + rect.width > vw - pad) left = Math.max(pad, vw - rect.width - pad);
+    if (top + rect.height > vh - pad) top = Math.max(pad, vh - rect.height - pad);
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  }, [x, y]);
+
+  const close = onClose;
+
+  // Selection helpers used by cut/copy/paste/select-all.
+  const selectionText = useCallback(() => {
+    const { from, to, empty } = editor.state.selection;
+    if (empty) return "";
+    return editor.state.doc.textBetween(from, to, "\n");
+  }, [editor]);
+
+  const doCopy = useCallback(async () => {
+    const text = selectionText();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      /* clipboard may be denied; ignore silently */
+    }
+  }, [selectionText]);
+
+  const doCut = useCallback(async () => {
+    const text = selectionText();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      /* ignore */
+    }
+    editor.chain().focus().deleteSelection().run();
+  }, [editor, selectionText]);
+
+  const doPaste = useCallback(async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) editor.chain().focus().insertContent(text).run();
+    } catch {
+      /* clipboard read may be denied; the user can still use Ctrl+V */
+    }
+  }, [editor]);
+
+  const Item = ({
+    icon,
+    label,
+    shortcut,
+    onClick,
+    disabled,
+    danger,
+  }: {
+    icon: ReactNode;
+    label: string;
+    shortcut?: string;
+    onClick: () => void;
+    disabled?: boolean;
+    danger?: boolean;
+  }) => (
+    <button
+      type="button"
+      disabled={disabled}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => {
+        if (disabled) return;
+        onClick();
+        close();
+      }}
+      className={[
+        "flex w-full items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
+        disabled
+          ? "cursor-not-allowed text-muted-foreground/60"
+          : danger
+            ? "text-destructive hover:bg-destructive/10"
+            : "text-foreground/90 hover:bg-muted",
+      ].join(" ")}
+    >
+      <span className="flex items-center gap-2">
+        <span className="flex h-3.5 w-3.5 items-center justify-center text-muted-foreground">
+          {icon}
+        </span>
+        {label}
+      </span>
+      {shortcut ? (
+        <span className="text-[10px] tabular-nums text-muted-foreground">{shortcut}</span>
+      ) : null}
+    </button>
+  );
+
+  const Sep = () => <div className="my-1 h-px bg-border/70" role="separator" />;
+
+  const hasSelection = !editor.state.selection.empty;
+
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      className="fixed z-[140] w-60 max-w-[calc(100vw-1rem)] overflow-hidden rounded-xl border border-border/70 bg-popover/95 p-1 shadow-2xl ring-1 ring-black/5 backdrop-blur"
+      style={{ left: x, top: y }}
+    >
+      <Item
+        icon={<Undo2 className="h-3.5 w-3.5" />}
+        label="Undo"
+        shortcut="Ctrl Z"
+        disabled={!editor.can().undo()}
+        onClick={() => editor.chain().focus().undo().run()}
+      />
+      <Item
+        icon={<Redo2 className="h-3.5 w-3.5" />}
+        label="Redo"
+        shortcut="Ctrl ⇧ Z"
+        disabled={!editor.can().redo()}
+        onClick={() => editor.chain().focus().redo().run()}
+      />
+      <Sep />
+      <Item
+        icon={<Scissors className="h-3.5 w-3.5" />}
+        label="Cut"
+        shortcut="Ctrl X"
+        disabled={!hasSelection}
+        onClick={() => void doCut()}
+      />
+      <Item
+        icon={<CopyIcon className="h-3.5 w-3.5" />}
+        label="Copy"
+        shortcut="Ctrl C"
+        disabled={!hasSelection}
+        onClick={() => void doCopy()}
+      />
+      <Item
+        icon={<ClipboardPaste className="h-3.5 w-3.5" />}
+        label="Paste"
+        shortcut="Ctrl V"
+        onClick={() => void doPaste()}
+      />
+      <Sep />
+      <Item
+        icon={<Bold className="h-3.5 w-3.5" />}
+        label="Bold"
+        shortcut="Ctrl B"
+        onClick={() => editor.chain().focus().toggleBold().run()}
+      />
+      <Item
+        icon={<Italic className="h-3.5 w-3.5" />}
+        label="Italic"
+        shortcut="Ctrl I"
+        onClick={() => editor.chain().focus().toggleItalic().run()}
+      />
+      <Item
+        icon={<UnderlineIcon className="h-3.5 w-3.5" />}
+        label="Underline"
+        shortcut="Ctrl U"
+        onClick={() => editor.chain().focus().toggleUnderline().run()}
+      />
+      <Item
+        icon={<Strikethrough className="h-3.5 w-3.5" />}
+        label="Strikethrough"
+        onClick={() => editor.chain().focus().toggleStrike().run()}
+      />
+      <Item
+        icon={<Highlighter className="h-3.5 w-3.5" />}
+        label="Highlight"
+        onClick={() => editor.chain().focus().toggleHighlight().run()}
+      />
+      <Sep />
+      <Item
+        icon={<List className="h-3.5 w-3.5" />}
+        label="Bullet list"
+        onClick={() => editor.chain().focus().toggleBulletList().run()}
+      />
+      <Item
+        icon={<ListOrdered className="h-3.5 w-3.5" />}
+        label="Numbered list"
+        onClick={() => editor.chain().focus().toggleOrderedList().run()}
+      />
+      <Item
+        icon={<ListChecks className="h-3.5 w-3.5" />}
+        label="Task list"
+        onClick={() => editor.chain().focus().toggleTaskList().run()}
+      />
+      <Item
+        icon={<Quote className="h-3.5 w-3.5" />}
+        label="Quote"
+        onClick={() => editor.chain().focus().toggleBlockquote().run()}
+      />
+      <Item
+        icon={<Code2 className="h-3.5 w-3.5" />}
+        label="Code block"
+        onClick={() => editor.chain().focus().toggleCodeBlock().run()}
+      />
+      <Sep />
+      <Item
+        icon={<Link2 className="h-3.5 w-3.5" />}
+        label={editor.isActive("link") ? "Edit link" : "Add link"}
+        onClick={() => {
+          if (typeof window === "undefined") return;
+          const previous = (editor.getAttributes("link") as { href?: string }).href ?? "";
+          const url = window.prompt("Link URL (leave blank to remove)", previous);
+          if (url === null) return;
+          if (url.trim() === "") {
+            editor.chain().focus().extendMarkRange("link").unsetLink().run();
+            return;
+          }
+          let href = url.trim();
+          if (!/^https?:\/\//i.test(href) && !/^mailto:/i.test(href)) href = `https://${href}`;
+          editor.chain().focus().extendMarkRange("link").setLink({ href }).run();
+        }}
+      />
+      {editor.isActive("link") ? (
+        <Item
+          icon={<Link2Off className="h-3.5 w-3.5" />}
+          label="Remove link"
+          onClick={() => editor.chain().focus().extendMarkRange("link").unsetLink().run()}
+        />
+      ) : null}
+      <Sep />
+      <Item
+        icon={<Type className="h-3.5 w-3.5" />}
+        label="Select all"
+        shortcut="Ctrl A"
+        onClick={() => editor.chain().focus().selectAll().run()}
+      />
+    </div>
+  );
 }
