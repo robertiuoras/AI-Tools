@@ -33,10 +33,24 @@ export const BETTING_SPORTS = [
   "Other",
 ] as const;
 
+/**
+ * Markets the bot recognises. Since the bot now accepts a free-text query,
+ * this list mostly serves the system prompt and anyone debugging — the model
+ * itself normalises whatever the user wrote.
+ */
 export const BETTING_MARKETS = [
   "Moneyline",
-  "Point spread",
-  "Over/Under (totals)",
+  "Point spread / handicap",
+  "Over/Under goals",
+  "Over/Under points",
+  "Over/Under corners",
+  "Over/Under cards",
+  "Both teams to score",
+  "Asian handicap",
+  "Draw no bet",
+  "Double chance",
+  "Correct score",
+  "Anytime / first goalscorer",
   "Player prop",
   "Team prop",
   "First half / first quarter",
@@ -126,7 +140,20 @@ export interface BettingMetricScore {
   direction: "for" | "against" | "neutral";
 }
 
+export interface BettingFixture {
+  homeTeam: string;
+  awayTeam: string;
+  competition: string;
+  kickoffIso: string | null;
+  venue: string | null;
+}
+
 export interface BettingAnalysisResult {
+  fixture: BettingFixture | null;
+  pickSummary: string;
+  marketNormalized: string;
+  oddsUsed: ParsedOdds | null;
+  oddsSource: "user" | "estimated-market" | "unknown";
   verdict: BettingVerdict;
   verdictLabel: string;
   verdictRationale: string;
@@ -156,21 +183,35 @@ export interface BettingAnalysisResult {
   } | null;
 }
 
-export interface BettingAnalysisPayload {
-  sport: string;
-  league?: string;
-  event: string;
-  pick: string;
-  market: string;
-  oddsAmerican: string | number;
-  stakeBankroll?: string | number | null;
-  notes?: string;
+/** Natural-language chat request payload sent from the page. */
+export interface BettingChatPayload {
+  /** Free-form query, e.g. "Arsenal over 2.5 goals vs Chelsea tomorrow". */
+  query: string;
+  /** Optional decimal or American odds the user wants to override with. */
+  odds?: string | number | null;
+  /** Optional research notes or specific context. */
+  notes?: string | null;
+  /** Optional bankroll (USD) to compute a dollar stake. */
+  bankroll?: string | number | null;
 }
 
 /* ── odds math (pure, used on both server and client) ─────────────────── */
 
+export interface ParsedOdds {
+  decimal: number;
+  american: number;
+  impliedPct: number;
+  /** What the user typed: decimal (1.91) vs American (-110 / +180). */
+  format: "decimal" | "american";
+}
+
 export function americanToDecimal(n: number): number {
   return n >= 100 ? n / 100 + 1 : 100 / Math.abs(n) + 1;
+}
+
+export function decimalToAmerican(d: number): number {
+  if (!(d > 1)) return 0;
+  return d >= 2 ? Math.round((d - 1) * 100) : Math.round(-100 / (d - 1));
 }
 
 export function americanToImpliedProb(n: number): number {
@@ -178,16 +219,78 @@ export function americanToImpliedProb(n: number): number {
   return (1 / d) * 100;
 }
 
-export function parseAmericanOdds(value: string | number): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    if (value === 0) return null;
-    if (value > 0 && value < 100) return null;
-    return value;
-  }
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim().replace(/^\+/, "");
-  const n = Number(trimmed);
+/**
+ * Accepts either American ("+180", "-110", -110, 180) or decimal ("1.91", 1.91, "2.50").
+ * Returns a normalised object or null if the value is unreadable.
+ *
+ * Disambiguation rules:
+ *   - An explicit leading "+" / "-" → American.
+ *   - Absolute value ≥ 100 → American (no one types decimal 100.0).
+ *   - Otherwise decimal, valid range [1.01, 99.99].
+ */
+export function parseOdds(
+  value: string | number | null | undefined,
+): ParsedOdds | null {
+  if (value === null || value === undefined) return null;
+  let str = typeof value === "number" ? String(value) : value.trim();
+  if (!str) return null;
+
+  const hasPlus = str.startsWith("+");
+  const hasMinus = str.startsWith("-");
+  if (hasPlus) str = str.slice(1);
+
+  const n = Number(str);
   if (!Number.isFinite(n) || n === 0) return null;
-  if (n > 0 && n < 100) return null;
-  return n;
+
+  const americanSigned = hasMinus ? n : n;
+
+  if (hasPlus || hasMinus || Math.abs(americanSigned) >= 100) {
+    if (Math.abs(americanSigned) < 100) return null;
+    const dec = americanToDecimal(americanSigned);
+    return {
+      decimal: Number(dec.toFixed(4)),
+      american: americanSigned,
+      impliedPct: (1 / dec) * 100,
+      format: "american",
+    };
+  }
+
+  if (n < 1.01 || n >= 100) return null;
+  return {
+    decimal: Number(n.toFixed(4)),
+    american: decimalToAmerican(n),
+    impliedPct: (1 / n) * 100,
+    format: "decimal",
+  };
 }
+
+/** Legacy helper – kept so older callers don't break. Returns the American
+ *  representation of any odds-like input, or null. */
+export function parseAmericanOdds(value: string | number): number | null {
+  const o = parseOdds(value);
+  return o ? o.american : null;
+}
+
+/* ── stream event shape (server → client SSE payloads) ─────────────────── */
+
+export type BettingStreamEvent =
+  | { type: "stage"; stage: string; label: string; status: "running" | "done" }
+  | { type: "thought"; stage: string; text: string }
+  | { type: "fixture"; fixture: BettingFixture }
+  | { type: "final"; result: BettingAnalysisResult }
+  | { type: "error"; message: string }
+  | { type: "done" };
+
+/** Fixed stage ordering the server emits + the UI renders. */
+export const BETTING_STAGES: Array<{ id: string; label: string }> = [
+  { id: "parse", label: "Understanding your request" },
+  { id: "fixture", label: "Identifying the fixture" },
+  { id: "odds", label: "Pricing the market" },
+  { id: "form", label: "Recent form & momentum" },
+  { id: "injuries", label: "Injuries & lineups" },
+  { id: "h2h", label: "Head-to-head" },
+  { id: "tactics", label: "Tactical matchup" },
+  { id: "market", label: "Market-specific trends" },
+  { id: "value", label: "Line value vs fair price" },
+  { id: "synthesis", label: "Final verdict" },
+];
