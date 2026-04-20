@@ -4,29 +4,78 @@
  */
 
 /**
- * True only when the page shows a real installable app: a real link to an
- * official store with an app id, an installable package linked from an `href`,
- * or a known first-party download hub. Marketing prose like "our AI app" or
- * stray references to ".exe" inside scripts/CSS are intentionally ignored.
+ * True when the page shows a real installable app. We use a layered approach
+ * so that modern landing pages (Wispr Flow, Linear, etc.) that push visitors
+ * through an intermediate `/get-started` or `/download` page are still caught,
+ * without over-firing on marketing copy like "our AI app":
  *
- * To avoid false positives like Vidwud/face-swap web tools that merely mention
- * an "app", every signal must look like a real link in href / src context, and
- * store URLs must include an app/extension identifier (not just the domain).
+ *   Tier A — a single obvious link is enough:
+ *     • App / Play / Microsoft Store URL with an app id
+ *     • TestFlight, Chrome Web Store, Firefox addons page
+ *     • Direct installable artifact (.dmg/.msi/.exe/.apk/...)
+ *     • Known first-party download hub (slack, notion, discord, ...)
+ *
+ *   Tier B — "download for [platform]" style call-to-action. Anchor links
+ *     whose visible text includes "download" / "install" / "get the app"
+ *     alongside a specific OS name count as a real install CTA even when
+ *     they point at an internal router page.
+ *
+ *   Tier C — copy + link corroboration. If the page explicitly says things
+ *     like "available on Mac, Windows, iPhone, and Android" or "runs natively
+ *     on", AND the same page contains at least one anchor that looks like a
+ *     download router (`/download`, `/get-started`, `/desktop`, `/mac`,
+ *     `/windows`, `/ios`, `/android`), we count it. Text alone is not enough;
+ *     blog posts talk about "Mac and Windows" all the time.
+ *
+ * Scripts and styles are stripped before text signals are read.
  */
 export function detectDownloadableAppFromHtml(html: string): boolean {
   if (!html || html.length < 40) return false
 
-  // Limit detection to actual link/script attributes so promo copy doesn't trip us up.
+  // ── 1. Pull every attribute value we care about ──────────────────────────
   const hrefValues: string[] = []
   const attrRe = /(?:href|src|content|data-href|data-url)\s*=\s*("([^"]+)"|'([^']+)')/gi
   let m: RegExpExecArray | null
   while ((m = attrRe.exec(html)) !== null) {
     const v = (m[2] ?? m[3] ?? "").trim()
     if (v) hrefValues.push(v)
-    if (hrefValues.length > 4000) break
+    if (hrefValues.length > 6000) break
   }
   if (hrefValues.length === 0) return false
 
+  // ── 2. Pull <a> / <button> anchor text + href pairs (for Tier B) ────────
+  // We also look at aria-labels so icon-only buttons still count.
+  const anchors: Array<{ href: string; text: string }> = []
+  const anchorRe =
+    /<a\b([^>]*)>([\s\S]*?)<\/a>/gi
+  let a: RegExpExecArray | null
+  while ((a = anchorRe.exec(html)) !== null) {
+    const attrs = a[1] ?? ""
+    const inner = (a[2] ?? "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase()
+    const hrefMatch = attrs.match(/\bhref\s*=\s*("([^"]+)"|'([^']+)')/i)
+    const ariaMatch = attrs.match(/\baria-label\s*=\s*("([^"]+)"|'([^']+)')/i)
+    const href = (hrefMatch?.[2] ?? hrefMatch?.[3] ?? "").trim()
+    const aria = (ariaMatch?.[2] ?? ariaMatch?.[3] ?? "").trim().toLowerCase()
+    const text = `${inner} ${aria}`.trim()
+    if (href) anchors.push({ href, text })
+    if (anchors.length > 3000) break
+  }
+
+  // ── 3. Strip scripts/styles for a clean visible-copy corpus ─────────────
+  const visibleText = html
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .toLowerCase()
+    .slice(0, 20000)
+
+  // ── Tier A — concrete install links ─────────────────────────────────────
   const isAppleStoreApp = (u: string) =>
     /^https?:\/\/(?:apps\.apple\.com|itunes\.apple\.com)\/[^?#]*\/(?:app|id\d+)/i.test(u) ||
     /^https?:\/\/(?:apps\.apple\.com|itunes\.apple\.com)\/[^?#]*[?&]id=\d+/i.test(u)
@@ -37,7 +86,7 @@ export function detectDownloadableAppFromHtml(html: string): boolean {
     /^https?:\/\/(?:apps\.microsoft\.com|www\.microsoft\.com)\/store\/(?:apps|productid)\//i.test(u)
   const isTestFlight = (u: string) => /^https?:\/\/testflight\.apple\.com\/join\//i.test(u)
   const isInstallableArtifact = (u: string) =>
-    /\.(?:dmg|msi|exe|deb|rpm|pkg|apk|appimage)(?:$|[?#])/i.test(u)
+    /\.(?:dmg|msi|exe|deb|rpm|pkg|apk|appimage|xap|appx|msix)(?:$|[?#])/i.test(u)
   const isChromeWebstoreItem = (u: string) =>
     /^https?:\/\/chromewebstore\.google\.com\/detail\//i.test(u) ||
     /^https?:\/\/chrome\.google\.com\/webstore\/detail\//i.test(u)
@@ -49,7 +98,10 @@ export function detectDownloadableAppFromHtml(html: string): boolean {
     /^https?:\/\/(?:www\.)?notion\.so\/desktop\b/i.test(u) ||
     /^https?:\/\/(?:www\.)?notion\.com\/desktop\b/i.test(u) ||
     /^https?:\/\/(?:www\.)?obsidian\.md\/download\b/i.test(u) ||
-    /^https?:\/\/discord\.com\/download\b/i.test(u)
+    /^https?:\/\/discord\.com\/download\b/i.test(u) ||
+    /^https?:\/\/(?:www\.)?linear\.app\/download\b/i.test(u) ||
+    /^https?:\/\/(?:www\.)?figma\.com\/downloads\b/i.test(u) ||
+    /^https?:\/\/(?:www\.)?arc\.net\/download\b/i.test(u)
 
   for (const u of hrefValues) {
     if (
@@ -64,6 +116,66 @@ export function detectDownloadableAppFromHtml(html: string): boolean {
     ) {
       return true
     }
+  }
+
+  // ── Tier B — strong CTA: anchor text says "Download for Mac" etc. ──────
+  // Platform nouns we care about: mac/macos/osx, windows/pc, ios/iphone/ipad,
+  // android, linux. We only count if the anchor text *also* carries a
+  // download-intent verb (download/install/get/available/native).
+  const platformInText =
+    /\b(mac\s?os|macos|mac\b|osx|os x|windows|win(?:dows)? pc|pc\b|ios\b|iphone|ipad|ipados|android|linux|chromebook|desktop|mobile)\b/
+  const downloadIntent =
+    /\b(download|install|get it|get the app|get flow|get on|open in|try in|available on|now on|native)\b/
+  for (const { href, text } of anchors) {
+    if (!text) continue
+    if (downloadIntent.test(text) && platformInText.test(text) && href.length > 0) {
+      // Make sure the target at least looks web-ish (not just "#")
+      if (href.startsWith("#") || href.toLowerCase().startsWith("mailto:")) continue
+      return true
+    }
+  }
+
+  // ── Tier C — visible copy says "available on X, Y, Z" + a download router ─
+  const multiPlatformStatement =
+    /\bavailable\s+(?:on|for)\s+(?:mac(?:\s?os)?|macos|osx|windows|ios|iphone|ipad|android)\b[^.]{0,80}\b(?:mac(?:\s?os)?|macos|osx|windows|ios|iphone|ipad|android)\b/i
+  const runsNativelyStatement =
+    /\b(?:runs?|works?)\s+(?:natively|native(?:ly)?)\s+(?:on|across)\s+(?:mac|macos|windows|ios|iphone|ipad|android|linux)\b/i
+  const desktopAppStatement =
+    /\b(?:desktop|native|mobile)\s+app\s+(?:for|on)\s+(?:mac|macos|windows|ios|iphone|ipad|android|linux)\b/i
+  const getTheAppStatement =
+    /\b(?:get|download|install)\s+(?:the\s+)?(?:app|flow|client)\s+(?:for|on)\s+(?:mac|macos|windows|ios|iphone|ipad|android|linux)\b/i
+
+  const hasCopyClaim =
+    multiPlatformStatement.test(visibleText) ||
+    runsNativelyStatement.test(visibleText) ||
+    desktopAppStatement.test(visibleText) ||
+    getTheAppStatement.test(visibleText)
+
+  if (hasCopyClaim) {
+    // Need a download-router link on the same page so we don't flag a blog
+    // post that merely *mentions* native apps.
+    const downloadRouterHref = (u: string) => {
+      // Only consider same-origin / relative links (absolute http:// to the
+      // same host is fine too — we don't have the host here, so we accept
+      // "/" and "https://" paths equally).
+      const s = u.toLowerCase()
+      if (s.startsWith("mailto:") || s.startsWith("tel:") || s.startsWith("#")) return false
+      return (
+        /(?:^|\/)(?:download|downloads|get[-_]?started|start|get[-_]?the[-_]?app|desktop|mobile|apps?|install|mac|macos|windows|ios|android)(?:\/|\?|$)/i.test(
+          s,
+        )
+      )
+    }
+    // Also accept the anchor text carrying the intent even without a hit on
+    // the path (some sites point at `/?ref=cta`).
+    const downloadAnchor =
+      anchors.some(({ href }) => downloadRouterHref(href)) ||
+      anchors.some(
+        ({ text }) =>
+          /\b(?:download|get started|install|get the app)\b/.test(text) &&
+          /\b(free|for|on|mac|windows|ios|android|iphone|ipad|app|flow)\b/.test(text),
+      )
+    if (downloadAnchor) return true
   }
 
   return false
@@ -166,11 +278,36 @@ export function refineRevenueModel(
     /\$\s*0\s*\/\s*(mo|month|yr|year|user|seat)\b/.test(combined) ||
     /\bforever\s+free\b/.test(combined) ||
     /\bunlimited\s+free\b/.test(combined) ||
-    /\bfree\s+for\s+(personal|individual|hobby|small\s+teams?)\b/.test(combined)
+    /\bfree\s+for\s+(personal|individual|hobby|small\s+teams?)\b/.test(combined) ||
+    // "2000 free words", "200 free minutes", "30 free credits" — strong
+    // "metered free tier" wording that modern AI tools use instead of the
+    // classic "free plan" label.
+    /\b\d{2,}[,\d]*\s+free\s+(words|minutes|credits|messages|tokens|queries|requests|transcriptions|characters|pages|calls|emails|generations|runs|uploads)\b/.test(
+      combined,
+    ) ||
+    /\bfree\s+\d{1,}[,\d]*\s+(words|minutes|credits|messages|tokens|queries|requests|transcriptions|characters|pages|calls|emails|generations|runs|uploads)\b/.test(
+      combined,
+    ) ||
+    // "Free" header in a plan table right next to a "Pro"/"Premium" row —
+    // strong signal that the product ships a permanent free tier.
+    /\bfree\b[\s\S]{0,400}\b(pro|premium|business|team|growth|plus)\s+(plan)?\b[\s\S]{0,40}\$\s?\d/.test(
+      combined,
+    )
 
   const trialOnly =
     /\b(\d+[- ]?day|two[- ]?week|one[- ]?week|14[- ]?day|7[- ]?day|30[- ]?day)\s+(free\s+)?trial\b/.test(combined) ||
-    /\bfree\s+trial\b/.test(combined)
+    /\bfree\s+trial\b/.test(combined) ||
+    /\bfree\s+for\s+\d+\s+days?\b/.test(combined) ||
+    /\bfree\s+for\s+(one|two|three|four)\s+weeks?\b/.test(combined)
+
+  // "No credit card required" is a near-universal tell for a real free tier
+  // — trials that ask for a card almost never say this. When the product
+  // also has paid plans, this is strong enough on its own to flip a "paid"
+  // verdict to "freemium".
+  const noCardRequired =
+    /\bno\s+credit\s+card(?:\s+required|\s+needed)?\b/.test(combined) ||
+    /\bwithout\s+(?:a\s+)?credit\s+card\b/.test(combined) ||
+    /\bno\s+card\s+(?:required|needed)\b/.test(combined)
 
   const paidPlansExist =
     /\b(starts?\s+at|from)\s+\$\s?\d/.test(combined) ||
@@ -208,6 +345,14 @@ export function refineRevenueModel(
   }
 
   if (revenue === "paid" && hasFreeTier && paidPlansExist) {
+    return "freemium"
+  }
+
+  // "No credit card required" + paid plans = a real free tier, even when
+  // the landing copy only shows a trial duration. Modern devtools (Wispr
+  // Flow, Granola, Superhuman, etc.) advertise trial length on the home
+  // page and hide the permanent free tier on the pricing page.
+  if ((revenue === "paid" || !revenue) && paidPlansExist && noCardRequired) {
     return "freemium"
   }
 

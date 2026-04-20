@@ -40,3 +40,6 @@ next-env.d.ts
 /prisma/*.db
 /prisma/*.db-journal
 
+# scratch commit message used by the windows git driver
+.git-commit-msg.tmp
+

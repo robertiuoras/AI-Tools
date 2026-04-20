@@ -18,7 +18,6 @@ import {
   Bot,
   LayoutGrid,
   Loader2,
-  Sparkles,
   TrendingUp,
   ArrowRight,
   Wand2,
@@ -280,50 +279,65 @@ export default function ProjectsPage() {
               </Link>
             </li>
 
-            {/* ── Betting bot (coming soon) ─────────────────── */}
+            {/* ── AI Betting Bot ────────────────────────────── */}
             <li>
-              <Card
-                className={cn(
-                  "group relative h-full overflow-hidden border-border/80 bg-card/80 shadow-md backdrop-blur-sm transition-shadow",
-                  "hover:border-amber-500/20 hover:shadow-lg hover:shadow-amber-500/5",
-                )}
+              <Link
+                href="/projects/ai-betting-bot"
+                className="block h-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-2xl"
               >
-                <div
-                  className="pointer-events-none absolute inset-0 bg-gradient-to-br from-amber-500/[0.05] via-transparent to-orange-500/[0.04]"
-                  aria-hidden
-                />
-                <CardHeader className="relative space-y-3 pb-2">
-                  <div className="flex items-start justify-between gap-3">
-                    <div
-                      className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500/20 to-orange-600/20 ring-1 ring-amber-500/20"
-                      aria-hidden
-                    >
-                      <Bot className="h-6 w-6 text-amber-700 dark:text-amber-300" />
+                <Card
+                  className={cn(
+                    "group relative h-full overflow-hidden border-border/80 bg-card/80 shadow-md backdrop-blur-sm transition-all cursor-pointer",
+                    "hover:border-amber-500/40 hover:shadow-xl hover:shadow-amber-500/10 hover:-translate-y-0.5",
+                  )}
+                >
+                  <div
+                    className="pointer-events-none absolute inset-0 bg-gradient-to-br from-amber-500/[0.08] via-transparent to-orange-500/[0.06]"
+                    aria-hidden
+                  />
+                  <CardHeader className="relative space-y-3 pb-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <div
+                        className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500/20 to-orange-600/20 ring-1 ring-amber-500/20"
+                        aria-hidden
+                      >
+                        <Bot className="h-6 w-6 text-amber-700 dark:text-amber-300" />
+                      </div>
+                      <Badge
+                        variant="secondary"
+                        className="shrink-0 border border-amber-500/25 bg-amber-500/10 text-amber-900 dark:text-amber-200"
+                      >
+                        New
+                      </Badge>
                     </div>
-                    <Badge
-                      variant="secondary"
-                      className="shrink-0 border border-amber-500/25 bg-amber-500/10 text-amber-900 dark:text-amber-200"
-                    >
-                      Coming soon
-                    </Badge>
-                  </div>
-                  <CardTitle className="text-xl font-semibold tracking-tight">
-                    Betting bot
-                  </CardTitle>
-                  <CardDescription className="text-sm leading-relaxed">
-                    Automated odds tracking and stake suggestions—UI and
-                    integrations are under development.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="relative pt-2">
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    <span className="inline-flex items-center gap-1 rounded-md bg-muted/80 px-2 py-1 font-medium">
-                      <Sparkles className="h-3 w-3" />
-                      Internal preview
-                    </span>
-                  </div>
-                </CardContent>
-              </Card>
+                    <CardTitle className="text-xl font-semibold tracking-tight">
+                      AI Betting Bot
+                    </CardTitle>
+                    <CardDescription className="text-sm leading-relaxed">
+                      Nine-metric confidence model: scores edge, implied
+                      probability, Kelly stake, and risk for any pick.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="relative pt-2">
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      {["Confidence", "Edge %", "Kelly", "Radar", "Risks"].map(
+                        (tag) => (
+                          <span
+                            key={tag}
+                            className="inline-flex items-center gap-1 rounded-md bg-muted/80 px-2 py-1 font-medium"
+                          >
+                            {tag}
+                          </span>
+                        ),
+                      )}
+                    </div>
+                    <div className="mt-4 flex items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-400 group-hover:gap-2 transition-all">
+                      Open betting bot
+                      <ArrowRight className="h-3.5 w-3.5" />
+                    </div>
+                  </CardContent>
+                </Card>
+              </Link>
             </li>
 
           </ul>

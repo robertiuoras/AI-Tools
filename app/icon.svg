@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" shape-rendering="geometricPrecision">
+  <title>AI Tools</title>
+  <defs>
+    <radialGradient id="ai-bg" cx="30%" cy="28%" r="85%">
+      <stop offset="0%" stop-color="#a78bfa"/>
+      <stop offset="45%" stop-color="#7c3aed"/>
+      <stop offset="100%" stop-color="#d946ef"/>
+    </radialGradient>
+    <linearGradient id="ai-sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.35"/>
+      <stop offset="55%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="ai-dot" cx="50%" cy="45%" r="55%">
+      <stop offset="0%" stop-color="#fef08a"/>
+      <stop offset="60%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#b45309"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Non-square: a round brand disc -->
+  <circle cx="32" cy="32" r="30" fill="url(#ai-bg)"/>
+  <circle cx="32" cy="32" r="30" fill="url(#ai-sheen)"/>
+  <circle cx="32" cy="32" r="30" fill="none" stroke="#ffffff" stroke-opacity="0.18" stroke-width="1"/>
+
+  <!-- A monogram (rounded, strong presence at 16px) -->
+  <g fill="#ffffff">
+    <path d="
+      M32 14
+      L45.5 48
+      L38.8 48
+      L35.9 40.4
+      L28.1 40.4
+      L25.2 48
+      L18.5 48
+      Z
+      M30 35.5
+      L34 35.5
+      L32 30.3
+      Z
+    "/>
+  </g>
+
+  <!-- Gold accent dot (the 'live' spark) -->
+  <circle cx="49" cy="18" r="4.5" fill="url(#ai-dot)"/>
+  <circle cx="49" cy="18" r="4.5" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="0.6"/>
+</svg>

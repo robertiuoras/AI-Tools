@@ -62,6 +62,7 @@ export type RateLimitKind =
   | 'prompts_improve'
   | 'cs2_prices'
   | 'cs2_image'
+  | 'ai_betting_bot'
 
 const LIMITS: Record<RateLimitKind, { windowMs: number; max: number }[]> = {
   tools_analyze: [
@@ -150,6 +151,18 @@ const LIMITS: Record<RateLimitKind, { windowMs: number; max: number }[]> = {
     {
       windowMs: 3_600_000,
       max: envInt('RATE_LIMIT_CS2_IMAGE_PER_HOUR', 60),
+    },
+  ],
+  // AI Betting Bot — each call runs a ~1500-token structured JSON analysis.
+  // Keep it tight so nobody drains the key with a looping script.
+  ai_betting_bot: [
+    {
+      windowMs: 60_000,
+      max: envInt('RATE_LIMIT_AI_BETTING_BOT_PER_MINUTE', 8),
+    },
+    {
+      windowMs: 3_600_000,
+      max: envInt('RATE_LIMIT_AI_BETTING_BOT_PER_HOUR', 60),
     },
   ],
 }
