@@ -419,47 +419,61 @@ function VideosPageContent() {
 
   const hasMore = videos.length < total;
 
+  const isCreators = viewMode === "creators";
+
   return (
     <div className="flex min-h-screen flex-col">
-      {/* Hero */}
-      <div className="relative overflow-hidden border-b border-border/40 bg-gradient-to-br from-rose-500/10 via-orange-500/10 to-amber-500/10 dark:from-rose-950/30 dark:via-orange-950/20 dark:to-amber-950/20">
+      {/* Hero — title + subtitle swap based on the nav view */}
+      <div
+        className={cn(
+          "relative overflow-hidden border-b border-border/40 bg-gradient-to-br transition-colors duration-300",
+          isCreators
+            ? "from-emerald-500/10 via-cyan-500/10 to-sky-500/10 dark:from-emerald-950/30 dark:via-cyan-950/20 dark:to-sky-950/20"
+            : "from-rose-500/10 via-orange-500/10 to-amber-500/10 dark:from-rose-950/30 dark:via-orange-950/20 dark:to-amber-950/20",
+        )}
+      >
         <div className="container mx-auto px-4 py-10 sm:py-14">
           <div className="flex flex-col items-center gap-4 text-center">
-            <div className="rounded-full bg-rose-500/10 p-4 dark:bg-rose-500/20">
-              <Youtube className="h-10 w-10 text-rose-500 dark:text-rose-400" />
+            <div
+              className={cn(
+                "rounded-full p-4 transition-colors",
+                isCreators
+                  ? "bg-emerald-500/10 dark:bg-emerald-500/20"
+                  : "bg-rose-500/10 dark:bg-rose-500/20",
+              )}
+            >
+              {isCreators ? (
+                <Users className="h-10 w-10 text-emerald-500 dark:text-emerald-400" />
+              ) : (
+                <Youtube className="h-10 w-10 text-rose-500 dark:text-rose-400" />
+              )}
             </div>
             <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
-              <span className="bg-gradient-to-r from-rose-500 to-orange-500 bg-clip-text text-transparent">
-                Curated Videos
+              <span
+                className={cn(
+                  "bg-clip-text text-transparent",
+                  isCreators
+                    ? "bg-gradient-to-r from-emerald-500 to-cyan-500"
+                    : "bg-gradient-to-r from-rose-500 to-orange-500",
+                )}
+              >
+                {isCreators ? "Curated Creators" : "Curated Videos"}
               </span>
             </h1>
             <p className="max-w-xl text-sm text-muted-foreground sm:text-base">
-              Hand-picked YouTube and TikTok videos on motivation, money, AI, cars & more.
+              {isCreators
+                ? "Browse the YouTube channels and TikTok creators behind every hand-picked video — tap one to see just their clips."
+                : "Hand-picked YouTube and TikTok videos on motivation, money, AI, cars & more."}
             </p>
           </div>
         </div>
       </div>
 
       <div className="container mx-auto px-4 py-6 space-y-8">
-        {/* Videos | Creators toggle */}
-        <div className="flex items-center justify-between">
-          <div className="inline-flex rounded-xl bg-muted/50 p-1">
-            <button type="button" onClick={() => setView("videos")}
-              className={cn("rounded-lg px-5 py-2.5 text-sm font-semibold transition-all",
-                viewMode === "videos" ? "bg-background text-foreground shadow ring-1 ring-border/50" : "text-muted-foreground hover:text-foreground hover:bg-background/50")}
-            >
-              <span className={cn(viewMode === "videos" && "bg-gradient-to-r from-rose-500 to-orange-500 bg-clip-text text-transparent")}>Videos</span>
-            </button>
-            <button type="button" onClick={() => setView("creators")}
-              className={cn("rounded-lg px-5 py-2.5 text-sm font-semibold transition-all",
-                viewMode === "creators" ? "bg-background text-foreground shadow ring-1 ring-border/50" : "text-muted-foreground hover:text-foreground hover:bg-background/50")}
-            >
-              <span className={cn(viewMode === "creators" && "bg-gradient-to-r from-emerald-500 to-cyan-500 bg-clip-text text-transparent")}>Creators</span>
-            </button>
-          </div>
-
-          {/* Grid/List toggle — only in videos mode */}
-          {viewMode === "videos" && (
+        {/* Grid/List toggle — only in videos mode; the Videos|Creators switch
+            lives in the top navbar so we don't duplicate it here. */}
+        {viewMode === "videos" && (
+          <div className="flex items-center justify-end">
             <div className="flex rounded-lg border border-border bg-muted/30 p-0.5">
               <button type="button" title="Grid view" onClick={() => setLayout("grid")}
                 className={cn("flex h-8 w-8 items-center justify-center rounded-md transition-colors",
@@ -474,8 +488,8 @@ function VideosPageContent() {
                 <List className="h-4 w-4" />
               </button>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Search + filters row */}
         {(viewMode === "videos" || viewMode === "creators") && (
