@@ -1,5 +1,10 @@
 import "server-only";
 
+import type {
+  BettingBookOdds,
+  BettingHeadToHeadGame,
+} from "@/lib/betting-bot";
+
 /**
  * Wrappers around ESPN's free public (unofficial) JSON endpoints.
  * No API key required, no rate-limit headers published but they're lenient —
@@ -442,21 +447,556 @@ export function averageScore(games: EspnPastGame[]): {
   opp: number | null;
   wins: number;
   losses: number;
+  homeWins: number;
+  homeLosses: number;
+  awayWins: number;
+  awayLosses: number;
+  marginAvg: number | null;
 } {
   const valid = games.filter(
     (g) => g.teamScore != null && g.oppScore != null,
   );
-  if (!valid.length) return { ppg: null, opp: null, wins: 0, losses: 0 };
+  if (!valid.length) {
+    return {
+      ppg: null,
+      opp: null,
+      wins: 0,
+      losses: 0,
+      homeWins: 0,
+      homeLosses: 0,
+      awayWins: 0,
+      awayLosses: 0,
+      marginAvg: null,
+    };
+  }
   const ppg =
     valid.reduce((a, g) => a + (g.teamScore ?? 0), 0) / valid.length;
   const opp =
     valid.reduce((a, g) => a + (g.oppScore ?? 0), 0) / valid.length;
   const wins = valid.filter((g) => g.result === "W").length;
   const losses = valid.filter((g) => g.result === "L").length;
+  const homeWins = valid.filter(
+    (g) => g.homeAway === "home" && g.result === "W",
+  ).length;
+  const homeLosses = valid.filter(
+    (g) => g.homeAway === "home" && g.result === "L",
+  ).length;
+  const awayWins = valid.filter(
+    (g) => g.homeAway === "away" && g.result === "W",
+  ).length;
+  const awayLosses = valid.filter(
+    (g) => g.homeAway === "away" && g.result === "L",
+  ).length;
+  const marginAvg =
+    valid.reduce(
+      (a, g) => a + ((g.teamScore ?? 0) - (g.oppScore ?? 0)),
+      0,
+    ) / valid.length;
   return {
     ppg: Number(ppg.toFixed(1)),
     opp: Number(opp.toFixed(1)),
     wins,
     losses,
+    homeWins,
+    homeLosses,
+    awayWins,
+    awayLosses,
+    marginAvg: Number(marginAvg.toFixed(1)),
   };
+}
+
+/** Days between the team's last completed game and the scheduled kickoff.
+ *  Returns null if we don't have enough info. Rest-day fatigue is a pro-level
+ *  signal — 0 = back-to-back, 1 = one day off, 3+ = well-rested. */
+export function restDaysBefore(
+  recentGames: EspnPastGame[],
+  kickoffIso: string | null,
+): number | null {
+  if (!kickoffIso || !recentGames.length) return null;
+  const last = recentGames[0];
+  if (!last?.date) return null;
+  const kickoff = new Date(kickoffIso).getTime();
+  const lastGame = new Date(last.date).getTime();
+  if (!Number.isFinite(kickoff) || !Number.isFinite(lastGame)) return null;
+  const days = (kickoff - lastGame) / (1000 * 60 * 60 * 24);
+  return Math.max(0, Math.round(days));
+}
+
+/* ── Head-to-head ─────────────────────────────────────────────────────── */
+
+/**
+ * Last `limit` completed meetings between the two teams, most-recent first.
+ * We reuse the schedule endpoint for one team and filter events where the
+ * other team is the opponent. ESPN's schedule only returns the current
+ * season so for out-of-season sports H2H may come back empty — that's
+ * honest "no recent data" rather than invented data.
+ */
+export async function getHeadToHead(
+  sportPath: string,
+  homeTeamId: string,
+  awayTeamId: string,
+  limit = 5,
+): Promise<BettingHeadToHeadGame[]> {
+  if (!homeTeamId || !awayTeamId) return [];
+
+  // Pull both teams' schedules in parallel — some seasons the "home" side
+  // doesn't have the meeting on its schedule yet but the visitor's does.
+  const [aData, bData] = await Promise.all([
+    espnGet<ScheduleResponse>(
+      `${ESPN_BASE}/${sportPath}/teams/${homeTeamId}/schedule`,
+    ),
+    espnGet<ScheduleResponse>(
+      `${ESPN_BASE}/${sportPath}/teams/${awayTeamId}/schedule`,
+    ),
+  ]);
+
+  const events = [...(aData?.events ?? []), ...(bData?.events ?? [])];
+  const seen = new Set<string>();
+  const meetings: BettingHeadToHeadGame[] = [];
+
+  for (const ev of events) {
+    const id = String(ev.id ?? "");
+    if (!id || seen.has(id)) continue;
+    if (ev.status?.type?.name !== "STATUS_FINAL") continue;
+    const comp = ev.competitions?.[0];
+    if (!comp) continue;
+    const home = comp.competitors?.find((c) => c.homeAway === "home");
+    const away = comp.competitors?.find((c) => c.homeAway === "away");
+    if (!home || !away) continue;
+    const homeId = String(home.team?.id ?? "");
+    const awayId = String(away.team?.id ?? "");
+    const pair = new Set([homeId, awayId]);
+    if (!pair.has(homeTeamId) || !pair.has(awayTeamId)) continue;
+
+    const homeScore = home.score != null ? Number(home.score) : null;
+    const awayScore = away.score != null ? Number(away.score) : null;
+    let winner: BettingHeadToHeadGame["winner"] = null;
+    if (home.winner === true) winner = "home";
+    else if (away.winner === true) winner = "away";
+    else if (
+      homeScore != null &&
+      awayScore != null &&
+      homeScore === awayScore
+    )
+      winner = "tie";
+
+    seen.add(id);
+    meetings.push({
+      date: ev.date ?? "",
+      season: null,
+      homeTeam: home.team?.displayName ?? "",
+      awayTeam: away.team?.displayName ?? "",
+      homeScore,
+      awayScore,
+      winner,
+      venue: comp.venue?.fullName ?? null,
+    });
+  }
+
+  meetings.sort(
+    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
+  );
+  return meetings.slice(0, limit);
+}
+
+/* ── Team style / statistics ─────────────────────────────────────────── */
+
+type RawStatCategory = {
+  name?: string;
+  displayName?: string;
+  stats?: Array<{
+    name?: string;
+    displayName?: string;
+    shortDisplayName?: string;
+    abbreviation?: string;
+    value?: number | string;
+    displayValue?: string;
+  }>;
+};
+
+type TeamStatsResponse = {
+  splits?: {
+    categories?: RawStatCategory[];
+  };
+  results?: {
+    stats?: {
+      splitCategories?: RawStatCategory[];
+    };
+  };
+};
+
+/** Which stats are most useful per sport for a betting matchup read-out. */
+const STYLE_STAT_KEYS: Record<string, string[]> = {
+  "basketball/nba": [
+    "avgPoints",
+    "avgPointsAgainst",
+    "fieldGoalPct",
+    "threePointFieldGoalPct",
+    "avgRebounds",
+    "avgAssists",
+    "avgTurnovers",
+    "avgStealsPerGame",
+    "avgBlocksPerGame",
+    "paceOfPlay",
+  ],
+  "basketball/wnba": [
+    "avgPoints",
+    "avgPointsAgainst",
+    "fieldGoalPct",
+    "threePointFieldGoalPct",
+    "avgRebounds",
+    "avgAssists",
+    "avgTurnovers",
+  ],
+  "basketball/mens-college-basketball": [
+    "avgPoints",
+    "avgPointsAgainst",
+    "fieldGoalPct",
+    "threePointFieldGoalPct",
+  ],
+  "football/nfl": [
+    "totalYardsPerGame",
+    "passingYardsPerGame",
+    "rushingYardsPerGame",
+    "pointsPerGame",
+    "yardsAllowedPerGame",
+    "pointsAllowedPerGame",
+    "turnoverDifferential",
+    "thirdDownConvPct",
+  ],
+  "hockey/nhl": [
+    "avgGoals",
+    "avgGoalsAgainst",
+    "powerPlayPct",
+    "penaltyKillPct",
+    "shotsPerGame",
+    "savePct",
+  ],
+  "baseball/mlb": [
+    "teamBattingAvg",
+    "onBasePct",
+    "sluggingPct",
+    "runsPerGame",
+    "earnedRunAvg",
+    "whip",
+  ],
+};
+
+const DEFAULT_STYLE_KEYS = [
+  "avgPoints",
+  "avgPointsAgainst",
+  "avgGoals",
+  "avgGoalsAgainst",
+  "goalsFor",
+  "goalsAgainst",
+  "fieldGoalPct",
+  "threePointFieldGoalPct",
+];
+
+/** Fetch a small set of offense/defense style stats for a team. */
+export async function getTeamStyle(
+  sportPath: string,
+  teamId: string,
+): Promise<Array<{ key: string; label: string; value: string }>> {
+  if (!teamId) return [];
+  const data = await espnGet<TeamStatsResponse>(
+    `${ESPN_BASE}/${sportPath}/teams/${teamId}/statistics`,
+  );
+  const categories =
+    data?.splits?.categories ?? data?.results?.stats?.splitCategories ?? [];
+  if (!categories.length) return [];
+
+  const wanted = new Set(STYLE_STAT_KEYS[sportPath] ?? DEFAULT_STYLE_KEYS);
+  const hits: Array<{ key: string; label: string; value: string }> = [];
+  for (const cat of categories) {
+    for (const s of cat.stats ?? []) {
+      const k = s.name ?? s.abbreviation ?? "";
+      if (!k || !wanted.has(k)) continue;
+      const label = s.displayName ?? s.shortDisplayName ?? k;
+      const value = s.displayValue ?? String(s.value ?? "");
+      if (!value) continue;
+      hits.push({ key: k, label, value });
+      if (hits.length >= 10) break;
+    }
+    if (hits.length >= 10) break;
+  }
+  return hits;
+}
+
+/* ── ESPN pickcenter (US-book odds consensus) ─────────────────────────── */
+
+type RawPickcenterEntry = {
+  provider?: { id?: number | string; name?: string };
+  details?: string;
+  spread?: number;
+  overUnder?: number;
+  overOdds?: number;
+  underOdds?: number;
+  homeTeamOdds?: {
+    moneyLine?: number;
+    spreadOdds?: number;
+  };
+  awayTeamOdds?: {
+    moneyLine?: number;
+    spreadOdds?: number;
+  };
+  lastUpdated?: string;
+};
+
+type SummaryResponse = {
+  pickcenter?: RawPickcenterEntry[];
+};
+
+/** American odds → decimal. */
+function americanToDecimal(american: number | null | undefined): number | null {
+  if (typeof american !== "number" || !Number.isFinite(american)) return null;
+  if (american === 0) return null;
+  return american > 0
+    ? Number((american / 100 + 1).toFixed(4))
+    : Number((100 / Math.abs(american) + 1).toFixed(4));
+}
+
+/**
+ * Multi-book board from ESPN's summary endpoint. Usually returns ESPN BET,
+ * Caesars, DraftKings and FanDuel — all US books. Useful as a sanity check
+ * even for NZ bettors since lines move together.
+ */
+export async function getEventPickcenter(
+  sportPath: string,
+  eventId: string,
+): Promise<BettingBookOdds[]> {
+  if (!eventId) return [];
+  const data = await espnGet<SummaryResponse>(
+    `${ESPN_BASE}/${sportPath}/summary?event=${eventId}`,
+  );
+  if (!data?.pickcenter?.length) return [];
+
+  return data.pickcenter
+    .map((p): BettingBookOdds | null => {
+      const name = p.provider?.name ?? "Unknown";
+      const key =
+        String(p.provider?.id ?? name)
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-") || "unknown";
+      return {
+        key,
+        provider: name,
+        region: "us",
+        entainFamily: false,
+        moneylineHome: americanToDecimal(p.homeTeamOdds?.moneyLine),
+        moneylineAway: americanToDecimal(p.awayTeamOdds?.moneyLine),
+        draw: null,
+        spreadPoint: typeof p.spread === "number" ? p.spread : null,
+        spreadHomeOdds: americanToDecimal(p.homeTeamOdds?.spreadOdds),
+        spreadAwayOdds: americanToDecimal(p.awayTeamOdds?.spreadOdds),
+        total: typeof p.overUnder === "number" ? p.overUnder : null,
+        overOdds: americanToDecimal(p.overOdds),
+        underOdds: americanToDecimal(p.underOdds),
+        lastUpdateIso: p.lastUpdated ?? null,
+      };
+    })
+    .filter((x): x is BettingBookOdds => x !== null);
+}
+
+/* ── The-Odds-API (Entain / AU & NZ books) ────────────────────────────── */
+
+const ODDS_API_SPORT_MAP: Record<string, string> = {
+  "basketball/nba": "basketball_nba",
+  "basketball/wnba": "basketball_wnba",
+  "basketball/mens-college-basketball": "basketball_ncaab",
+  "football/nfl": "americanfootball_nfl",
+  "football/college-football": "americanfootball_ncaaf",
+  "hockey/nhl": "icehockey_nhl",
+  "baseball/mlb": "baseball_mlb",
+  "soccer/eng.1": "soccer_epl",
+  "soccer/esp.1": "soccer_spain_la_liga",
+  "soccer/ita.1": "soccer_italy_serie_a",
+  "soccer/ger.1": "soccer_germany_bundesliga",
+  "soccer/fra.1": "soccer_france_ligue_one",
+  "soccer/uefa.champions": "soccer_uefa_champs_league",
+  "soccer/uefa.europa": "soccer_uefa_europa_league",
+  "soccer/usa.1": "soccer_usa_mls",
+};
+
+/** Books owned by Entain plc — same price feed as Betcha.co.nz. */
+const ENTAIN_KEYS = new Set<string>([
+  "ladbrokes_au",
+  "neds",
+  "coral",
+  "ladbrokes_uk",
+  "bwin",
+]);
+
+type OddsApiEvent = {
+  id?: string;
+  sport_key?: string;
+  commence_time?: string;
+  home_team?: string;
+  away_team?: string;
+  bookmakers?: Array<{
+    key?: string;
+    title?: string;
+    last_update?: string;
+    markets?: Array<{
+      key?: string;
+      outcomes?: Array<{
+        name?: string;
+        price?: number;
+        point?: number;
+      }>;
+    }>;
+  }>;
+};
+
+function nameMatches(a: string, b: string): boolean {
+  const norm = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+  const an = norm(a);
+  const bn = norm(b);
+  if (!an || !bn) return false;
+  if (an === bn) return true;
+  // One containing the other (handles "Cleveland Cavaliers" vs "Cavaliers").
+  if (an.includes(bn) || bn.includes(an)) return true;
+  // Last-word match (handles "Cleveland" vs "Cleveland Cavaliers").
+  const aTokens = an.split(" ");
+  const bTokens = bn.split(" ");
+  const aTail = aTokens[aTokens.length - 1] ?? "";
+  const bTail = bTokens[bTokens.length - 1] ?? "";
+  return aTail.length >= 3 && aTail === bTail;
+}
+
+/**
+ * Ask The-Odds-API for Entain-family prices (Ladbrokes/Neds — Betcha's
+ * sister books) plus a few other NZ/AU books for cross-reference.
+ *
+ * Returns [] when:
+ *   • ODDS_API_KEY env var is not set (opt-in to preserve the free quota)
+ *   • sport isn't on the mapping table
+ *   • no event matches the fixture
+ *   • network/API error
+ */
+export async function getEntainOdds(
+  sportPath: string,
+  homeTeamName: string,
+  awayTeamName: string,
+  kickoffIso: string | null,
+): Promise<BettingBookOdds[]> {
+  const key = process.env.ODDS_API_KEY;
+  if (!key) return [];
+  const sportKey = ODDS_API_SPORT_MAP[sportPath];
+  if (!sportKey) return [];
+
+  // Regions param pulls books from those markets. We ask for au (Ladbrokes
+  // AU, Neds, TAB AU, Sportsbet, Pointsbet) and uk (Ladbrokes UK, Coral —
+  // also Entain-owned). us is kept as a sanity fallback.
+  const url = `https://api.the-odds-api.com/v4/sports/${sportKey}/odds?regions=au,uk,us&markets=h2h,spreads,totals&oddsFormat=decimal&apiKey=${encodeURIComponent(key)}`;
+
+  try {
+    const res = await fetch(url, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return [];
+    const events = (await res.json()) as OddsApiEvent[];
+
+    // Pick the event that matches our fixture. Name-based match; if a
+    // kickoff is supplied, tie-break by closest commence_time.
+    const kickoffMs = kickoffIso ? new Date(kickoffIso).getTime() : null;
+    let best: { ev: OddsApiEvent; delta: number } | null = null;
+    for (const ev of events) {
+      if (
+        !ev.home_team ||
+        !ev.away_team ||
+        !nameMatches(ev.home_team, homeTeamName) ||
+        !nameMatches(ev.away_team, awayTeamName)
+      )
+        continue;
+      const delta =
+        kickoffMs && ev.commence_time
+          ? Math.abs(new Date(ev.commence_time).getTime() - kickoffMs)
+          : 0;
+      if (!best || delta < best.delta) best = { ev, delta };
+    }
+    if (!best) return [];
+
+    const ev = best.ev;
+    const books: BettingBookOdds[] = [];
+    for (const b of ev.bookmakers ?? []) {
+      if (!b.key || !b.markets?.length) continue;
+      const h2h = b.markets.find((m) => m.key === "h2h");
+      const spreads = b.markets.find((m) => m.key === "spreads");
+      const totals = b.markets.find((m) => m.key === "totals");
+
+      const h2hHome = h2h?.outcomes?.find(
+        (o) => o.name && nameMatches(o.name, homeTeamName),
+      );
+      const h2hAway = h2h?.outcomes?.find(
+        (o) => o.name && nameMatches(o.name, awayTeamName),
+      );
+      const draw = h2h?.outcomes?.find(
+        (o) => (o.name ?? "").toLowerCase() === "draw",
+      );
+      const spHome = spreads?.outcomes?.find(
+        (o) => o.name && nameMatches(o.name, homeTeamName),
+      );
+      const spAway = spreads?.outcomes?.find(
+        (o) => o.name && nameMatches(o.name, awayTeamName),
+      );
+      const over = totals?.outcomes?.find(
+        (o) => (o.name ?? "").toLowerCase() === "over",
+      );
+      const under = totals?.outcomes?.find(
+        (o) => (o.name ?? "").toLowerCase() === "under",
+      );
+
+      const region: BettingBookOdds["region"] = b.key.endsWith("_au")
+        ? "au"
+        : b.key.endsWith("_uk")
+          ? "uk"
+          : b.key.endsWith("_nz") || b.key === "tab"
+            ? "nz"
+            : b.key.startsWith("bet365")
+              ? "uk"
+              : "unknown";
+
+      books.push({
+        key: b.key,
+        provider: b.title ?? b.key,
+        region,
+        entainFamily: ENTAIN_KEYS.has(b.key),
+        moneylineHome: typeof h2hHome?.price === "number" ? h2hHome.price : null,
+        moneylineAway: typeof h2hAway?.price === "number" ? h2hAway.price : null,
+        draw: typeof draw?.price === "number" ? draw.price : null,
+        spreadPoint: typeof spHome?.point === "number" ? spHome.point : null,
+        spreadHomeOdds: typeof spHome?.price === "number" ? spHome.price : null,
+        spreadAwayOdds: typeof spAway?.price === "number" ? spAway.price : null,
+        total: typeof over?.point === "number" ? over.point : null,
+        overOdds: typeof over?.price === "number" ? over.price : null,
+        underOdds: typeof under?.price === "number" ? under.price : null,
+        lastUpdateIso: b.last_update ?? null,
+      });
+    }
+
+    // Sort: Entain family first (Betcha's sister books), then AU, then UK,
+    // then US — most-relevant for the NZ bettor at the top.
+    const rank = (b: BettingBookOdds) =>
+      b.entainFamily
+        ? 0
+        : b.region === "au"
+          ? 1
+          : b.region === "nz"
+            ? 2
+            : b.region === "uk"
+              ? 3
+              : b.region === "us"
+                ? 4
+                : 5;
+    books.sort((a, b) => rank(a) - rank(b));
+    return books;
+  } catch {
+    return [];
+  }
 }

@@ -170,6 +170,15 @@ export interface BettingRealDataTeam {
   pointsAgainstAvg: number | null;
   wins10: number;
   losses10: number;
+  /** Home wins + losses inside last-10 window, when determinable. */
+  homeWins10: number;
+  homeLosses10: number;
+  awayWins10: number;
+  awayLosses10: number;
+  /** Days of rest between this team's last completed game and kickoff. */
+  restDays: number | null;
+  /** Straight-up margin trend (signed, positive = winning by). */
+  marginAvg: number | null;
   injuries: BettingRealDataPlayer[];
   recentGames: Array<{
     date: string;
@@ -181,6 +190,41 @@ export interface BettingRealDataTeam {
     oppScore: number | null;
     result: "W" | "L" | "T" | null;
   }>;
+  /** Generic sport-agnostic style stats (key/label/value). Filled when ESPN
+   *  exposes team statistics for the sport (NBA/NFL/NHL/EPL all tend to). */
+  style: Array<{ key: string; label: string; value: string }>;
+}
+
+/** A single head-to-head meeting. */
+export interface BettingHeadToHeadGame {
+  date: string;                   // ISO
+  season: string | null;          // e.g. "2024-25" if ESPN provides it
+  homeTeam: string;               // *this* matchup's home team (name)
+  awayTeam: string;
+  homeScore: number | null;
+  awayScore: number | null;
+  winner: "home" | "away" | "tie" | null;
+  venue: string | null;
+}
+
+/** One sportsbook's prices. All odds in DECIMAL format (1.91, 2.50, …). */
+export interface BettingBookOdds {
+  /** Canonical id, e.g. "ladbrokes_au", "neds", "tab", "espn-bet". */
+  key: string;
+  provider: string;               // pretty name: "Ladbrokes", "Neds", "TAB NZ"
+  region: "au" | "nz" | "us" | "uk" | "eu" | "unknown";
+  /** True when this book is Entain-family (Ladbrokes/Neds/Betcha/Coral/TAB NZ). */
+  entainFamily: boolean;
+  moneylineHome: number | null;   // decimal
+  moneylineAway: number | null;   // decimal
+  draw: number | null;            // decimal, for soccer-style 3-way markets
+  spreadPoint: number | null;     // home handicap (negative = favored)
+  spreadHomeOdds: number | null;
+  spreadAwayOdds: number | null;
+  total: number | null;
+  overOdds: number | null;
+  underOdds: number | null;
+  lastUpdateIso: string | null;
 }
 
 export interface BettingRealData {
@@ -188,6 +232,8 @@ export interface BettingRealData {
   sportLabel: string | null;
   homeTeam: BettingRealDataTeam | null;
   awayTeam: BettingRealDataTeam | null;
+  /** Legacy single-book block from the scoreboard event (kept for backwards
+   *  compat — prefer `books[]` going forward). */
   marketOdds: {
     provider: string | null;
     spread: number | null;
@@ -195,6 +241,11 @@ export interface BettingRealData {
     homeMoneyline: number | null;
     awayMoneyline: number | null;
   } | null;
+  /** Multi-book board. First entries are Entain (Betcha-equivalent) when
+   *  available; then ESPN pickcenter (US books) as a fallback/sanity check. */
+  books: BettingBookOdds[];
+  /** Last N head-to-head meetings, most-recent first. */
+  headToHead: BettingHeadToHeadGame[];
 }
 
 export interface BettingAnalysisResult {

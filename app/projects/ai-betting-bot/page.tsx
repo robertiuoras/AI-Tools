@@ -53,6 +53,7 @@ import {
   type BettingAnalysisResult,
   type BettingFixture,
   type BettingMetricScore,
+  type BettingRealData,
   type BettingRealDataTeam,
   type BettingStreamEvent,
   type BettingTrackContext,
@@ -579,6 +580,83 @@ function TeamDataPanel({
         </div>
       </div>
 
+      {/* Splits + rest + margin row — the pro-level signals. */}
+      <div className="grid grid-cols-3 gap-2 rounded-xl border border-border/40 bg-background/40 p-3 text-center">
+        <div>
+          <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">
+            H/A split
+          </p>
+          <p className="text-xs font-black tabular-nums">
+            {team.homeWins10}-{team.homeLosses10}{" "}
+            <span className="text-muted-foreground">·</span>{" "}
+            {team.awayWins10}-{team.awayLosses10}
+          </p>
+        </div>
+        <div>
+          <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">
+            Margin
+          </p>
+          <p
+            className={cn(
+              "text-sm font-black tabular-nums",
+              team.marginAvg == null
+                ? "text-muted-foreground"
+                : team.marginAvg > 0
+                  ? "text-emerald-500"
+                  : team.marginAvg < 0
+                    ? "text-rose-500"
+                    : "",
+            )}
+          >
+            {team.marginAvg != null
+              ? `${team.marginAvg > 0 ? "+" : ""}${team.marginAvg}`
+              : "—"}
+          </p>
+        </div>
+        <div>
+          <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">
+            Rest
+          </p>
+          <p
+            className={cn(
+              "text-sm font-black tabular-nums",
+              team.restDays === 0
+                ? "text-rose-500"
+                : team.restDays != null && team.restDays >= 3
+                  ? "text-emerald-500"
+                  : "",
+            )}
+          >
+            {team.restDays != null
+              ? team.restDays === 0
+                ? "B2B"
+                : `${team.restDays}d`
+              : "—"}
+          </p>
+        </div>
+      </div>
+
+      {team.style.length > 0 && (
+        <div>
+          <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+            Season stats
+          </p>
+          <div className="grid grid-cols-2 gap-1.5 rounded-xl border border-border/40 bg-background/30 p-2 text-[11px]">
+            {team.style.slice(0, 8).map((s) => (
+              <div
+                key={s.key}
+                className="flex items-center justify-between gap-2 rounded-md bg-card/50 px-2 py-1"
+              >
+                <span className="truncate text-muted-foreground">
+                  {s.label}
+                </span>
+                <span className="font-bold tabular-nums">{s.value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div>
         <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
           Last 10
@@ -599,6 +677,238 @@ function TeamDataPanel({
         </p>
         <RecentGamesList team={team} />
       </div>
+    </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/*  Head-to-head + market board                                               */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+function HeadToHeadPanel({
+  data,
+}: {
+  data: BettingRealData;
+}) {
+  const h2h = data.headToHead;
+  const homeName = data.homeTeam?.displayName ?? "";
+  if (!h2h.length) {
+    return (
+      <div className="rounded-2xl border border-dashed border-border/60 bg-card/30 p-5 text-sm text-muted-foreground">
+        No recent head-to-head meetings found in the available ESPN schedule
+        data. The model will treat the matchup with a neutral prior.
+      </div>
+    );
+  }
+  const homeWins = h2h.filter(
+    (g) =>
+      (g.winner === "home" && g.homeTeam === homeName) ||
+      (g.winner === "away" && g.awayTeam === homeName),
+  ).length;
+  const homeAbbr = data.homeTeam?.abbreviation ?? "H";
+  const awayAbbr = data.awayTeam?.abbreviation ?? "A";
+  return (
+    <div className="rounded-2xl border border-border/60 bg-card/40 p-4">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+            Head-to-head (last {h2h.length})
+          </p>
+          <p className="text-lg font-black tabular-nums">
+            {homeAbbr}{" "}
+            <span className="text-emerald-500">{homeWins}</span>
+            <span className="mx-1 text-muted-foreground">·</span>
+            <span className="text-rose-500">{h2h.length - homeWins}</span>{" "}
+            {awayAbbr}
+          </p>
+        </div>
+        <div className="text-right text-[10px] font-bold uppercase tracking-widest text-emerald-500/80">
+          Verified · ESPN
+        </div>
+      </div>
+      <ul className="divide-y divide-border/40 overflow-hidden rounded-xl border border-border/40 bg-background/40 text-sm">
+        {h2h.map((g, i) => {
+          const winSide = g.winner;
+          return (
+            <li
+              key={`${g.date}-${i}`}
+              className="grid grid-cols-[auto_1fr_auto] items-center gap-3 px-3 py-2"
+            >
+              <span className="text-[11px] font-semibold text-muted-foreground tabular-nums">
+                {g.date.slice(0, 10)}
+              </span>
+              <span className="truncate">
+                <span
+                  className={cn(
+                    "font-semibold",
+                    winSide === "away" ? "text-emerald-500" : "",
+                  )}
+                >
+                  {g.awayTeam}
+                </span>{" "}
+                <span className="tabular-nums">{g.awayScore ?? "?"}</span>{" "}
+                <span className="text-muted-foreground">@</span>{" "}
+                <span
+                  className={cn(
+                    "font-semibold",
+                    winSide === "home" ? "text-emerald-500" : "",
+                  )}
+                >
+                  {g.homeTeam}
+                </span>{" "}
+                <span className="tabular-nums">{g.homeScore ?? "?"}</span>
+              </span>
+              {g.venue && (
+                <span className="truncate text-right text-[11px] text-muted-foreground">
+                  {g.venue}
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function MarketBoardPanel({
+  data,
+  resultOdds,
+  oddsSource,
+}: {
+  data: BettingRealData;
+  resultOdds: ParsedOdds | null;
+  oddsSource: BettingAnalysisResult["oddsSource"];
+}) {
+  const books = data.books;
+  if (!books.length) {
+    return (
+      <div className="rounded-2xl border border-amber-500/40 bg-amber-500/5 p-5 text-sm">
+        <p className="font-bold text-amber-600 dark:text-amber-400">
+          No live market odds available
+        </p>
+        <p className="mt-1 text-muted-foreground">
+          Add a free API key from{" "}
+          <a
+            href="https://the-odds-api.com/"
+            target="_blank"
+            rel="noreferrer"
+            className="underline underline-offset-2 hover:text-foreground"
+          >
+            the-odds-api.com
+          </a>{" "}
+          as <code className="rounded bg-muted px-1 py-0.5 text-xs">
+            ODDS_API_KEY
+          </code>{" "}
+          on Vercel to pull Ladbrokes / Neds / TAB prices (these share the
+          Betcha feed because they&apos;re all Entain-owned).
+        </p>
+      </div>
+    );
+  }
+  const entainCount = books.filter((b) => b.entainFamily).length;
+  return (
+    <div className="rounded-2xl border border-border/60 bg-card/40 p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+            Market board
+          </p>
+          <p className="text-base font-bold">
+            {books.length} book{books.length === 1 ? "" : "s"}
+            {entainCount > 0 && (
+              <span className="ml-2 rounded-md bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+                {entainCount} Entain (= Betcha)
+              </span>
+            )}
+          </p>
+        </div>
+        {resultOdds && (
+          <div className="text-right">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+              {oddsSource === "user" ? "Your price" : "Auto-priced from"}
+            </p>
+            <p className="text-sm font-black tabular-nums">
+              {resultOdds.decimal.toFixed(2)}
+            </p>
+          </div>
+        )}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[560px] text-sm">
+          <thead>
+            <tr className="border-b border-border/40 text-left text-[10px] uppercase tracking-widest text-muted-foreground">
+              <th className="py-2 pr-3 font-bold">Book</th>
+              <th className="py-2 pr-3 text-right font-bold">ML H</th>
+              <th className="py-2 pr-3 text-right font-bold">ML A</th>
+              <th className="py-2 pr-3 text-right font-bold">Spread</th>
+              <th className="py-2 pr-3 text-right font-bold">Total</th>
+              <th className="py-2 text-right font-bold">O / U</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border/40">
+            {books.map((b) => (
+              <tr
+                key={b.key}
+                className={cn(
+                  "tabular-nums",
+                  b.entainFamily && "bg-emerald-500/5",
+                )}
+              >
+                <td className="py-2 pr-3">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold">{b.provider}</span>
+                    {b.entainFamily && (
+                      <span className="rounded bg-emerald-500/10 px-1 py-0.5 text-[9px] font-bold uppercase tracking-widest text-emerald-600 dark:text-emerald-400">
+                        Entain
+                      </span>
+                    )}
+                    {!b.entainFamily && b.region !== "unknown" && (
+                      <span className="rounded bg-muted px-1 py-0.5 text-[9px] font-bold uppercase tracking-widest text-muted-foreground">
+                        {b.region}
+                      </span>
+                    )}
+                  </div>
+                </td>
+                <td className="py-2 pr-3 text-right">
+                  {b.moneylineHome?.toFixed(2) ?? "—"}
+                </td>
+                <td className="py-2 pr-3 text-right">
+                  {b.moneylineAway?.toFixed(2) ?? "—"}
+                </td>
+                <td className="py-2 pr-3 text-right">
+                  {b.spreadPoint != null
+                    ? `${b.spreadPoint > 0 ? "+" : ""}${b.spreadPoint}`
+                    : "—"}
+                </td>
+                <td className="py-2 pr-3 text-right">
+                  {b.total != null ? b.total : "—"}
+                </td>
+                <td className="py-2 text-right">
+                  {b.overOdds != null || b.underOdds != null
+                    ? `${b.overOdds?.toFixed(2) ?? "—"} / ${b.underOdds?.toFixed(2) ?? "—"}`
+                    : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {entainCount === 0 && (
+        <p className="mt-3 text-[11px] text-muted-foreground">
+          No Entain-family books returned for this event. Prices shown are
+          from alternative markets — verify on{" "}
+          <a
+            href="https://betcha.co.nz/"
+            target="_blank"
+            rel="noreferrer"
+            className="underline underline-offset-2 hover:text-foreground"
+          >
+            Betcha.co.nz
+          </a>{" "}
+          before placing.
+        </p>
+      )}
     </div>
   );
 }
@@ -2257,6 +2567,18 @@ export default function AiBettingBotPage() {
                     />
                   ) : null}
                 </div>
+
+                {/* Head-to-head history — grounds the "H2H" metric. */}
+                <HeadToHeadPanel data={result.realData} />
+
+                {/* Live market board from Entain-family (Betcha-equivalent)
+                    and ESPN pickcenter — grounds the "Market trends" and
+                    "Line value" metrics. */}
+                <MarketBoardPanel
+                  data={result.realData}
+                  resultOdds={result.oddsUsed}
+                  oddsSource={result.oddsSource}
+                />
               </section>
             ) : null}
 

@@ -19,8 +19,13 @@ import {
 import {
   averageScore,
   findFixture,
+  getEntainOdds,
+  getEventPickcenter,
+  getHeadToHead,
   getRecentGames,
   getTeamInjuries,
+  getTeamStyle,
+  restDaysBefore,
   sportFromHint,
   streakString,
   type EspnFixture,
@@ -408,19 +413,63 @@ async function collectRealData(
   sportLabel: string,
   fixture: EspnFixture,
 ): Promise<BettingRealData> {
-  const [homeInjuries, awayInjuries, homeGames, awayGames] = await Promise.all([
+  // Parallelise everything — these are independent ESPN/odds-API calls.
+  const [
+    homeInjuries,
+    awayInjuries,
+    homeGames,
+    awayGames,
+    headToHead,
+    homeStyle,
+    awayStyle,
+    pickcenter,
+    entainBooks,
+  ] = await Promise.all([
     getTeamInjuries(sportPath, fixture.homeTeam.id),
     getTeamInjuries(sportPath, fixture.awayTeam.id),
     getRecentGames(sportPath, fixture.homeTeam.id, 10),
     getRecentGames(sportPath, fixture.awayTeam.id, 10),
+    getHeadToHead(sportPath, fixture.homeTeam.id, fixture.awayTeam.id, 5),
+    getTeamStyle(sportPath, fixture.homeTeam.id),
+    getTeamStyle(sportPath, fixture.awayTeam.id),
+    getEventPickcenter(sportPath, fixture.id),
+    getEntainOdds(
+      sportPath,
+      fixture.homeTeam.displayName,
+      fixture.awayTeam.displayName,
+      fixture.date || null,
+    ),
   ]);
+
+  // Books: Entain family first (Ladbrokes / Neds — Betcha's sister books),
+  // then ESPN pickcenter as sanity check. De-dup by key.
+  const seenKeys = new Set<string>();
+  const books = [...entainBooks, ...pickcenter].filter((b) => {
+    if (seenKeys.has(b.key)) return false;
+    seenKeys.add(b.key);
+    return true;
+  });
 
   return {
     source: "espn",
     sportLabel,
-    homeTeam: toRealDataTeam(fixture.homeTeam, homeInjuries, homeGames),
-    awayTeam: toRealDataTeam(fixture.awayTeam, awayInjuries, awayGames),
+    homeTeam: toRealDataTeam(
+      fixture.homeTeam,
+      homeInjuries,
+      homeGames,
+      homeStyle,
+      fixture.date || null,
+    ),
+    awayTeam: toRealDataTeam(
+      fixture.awayTeam,
+      awayInjuries,
+      awayGames,
+      awayStyle,
+      fixture.date || null,
+    ),
     marketOdds: fixture.odds,
+    books,
+    headToHead,
   };
 }
 
@@ -428,6 +477,8 @@ function toRealDataTeam(
   team: EspnFixture["homeTeam"],
   injuries: EspnInjury[],
   games: EspnPastGame[],
+  style: Array<{ key: string; label: string; value: string }>,
+  kickoffIso: string | null,
 ): BettingRealDataTeam {
   const avg = averageScore(games);
   return {
@@ -441,6 +492,12 @@ function toRealDataTeam(
     pointsAgainstAvg: avg.opp,
     wins10: avg.wins,
     losses10: avg.losses,
+    homeWins10: avg.homeWins,
+    homeLosses10: avg.homeLosses,
+    awayWins10: avg.awayWins,
+    awayLosses10: avg.awayLosses,
+    restDays: restDaysBefore(games, kickoffIso),
+    marginAvg: avg.marginAvg,
     injuries: injuries.map((i) => ({
       name: i.playerName,
       position: i.position,
@@ -458,6 +515,7 @@ function toRealDataTeam(
       oppScore: g.oppScore,
       result: g.result,
     })),
+    style,
   };
 }
 
@@ -488,18 +546,150 @@ function summariseRealData(data: BettingRealData | null): string {
           )
           .join(" | ")
       : "no recent games";
-    return `${label}: ${t.displayName} (${t.record ?? "record n/a"}) — last-10 ${t.last10Streak || "n/a"}, avg ${t.pointsForAvg ?? "?"} for / ${t.pointsAgainstAvg ?? "?"} against. Injuries: ${inj}. Recent games: ${recent}.`;
+    const style = t.style.length
+      ? t.style.map((s) => `${s.label} ${s.value}`).join(", ")
+      : "no season stats available";
+    const splits = `home ${t.homeWins10}-${t.homeLosses10} / away ${t.awayWins10}-${t.awayLosses10}`;
+    const restLine =
+      t.restDays != null
+        ? `rest ${t.restDays}d${t.restDays === 0 ? " (BACK-TO-BACK)" : t.restDays >= 3 ? " (well-rested)" : ""}`
+        : "rest unknown";
+    const marginLine = t.marginAvg != null ? `margin ${t.marginAvg > 0 ? "+" : ""}${t.marginAvg}/g` : "margin n/a";
+    return `${label}: ${t.displayName} (${t.record ?? "record n/a"}) — last-10 ${t.last10Streak || "n/a"} (${splits}), ${marginLine}, avg ${t.pointsForAvg ?? "?"} for / ${t.pointsAgainstAvg ?? "?"} against, ${restLine}. Season stats: ${style}. Injuries: ${inj}. Recent games: ${recent}.`;
   };
-  const bookLine = data.marketOdds
-    ? `Book odds (${data.marketOdds.provider ?? "ESPN feed"}): spread ${data.marketOdds.spread ?? "n/a"}, total ${data.marketOdds.overUnder ?? "n/a"}, ML home ${data.marketOdds.homeMoneyline ?? "n/a"} / away ${data.marketOdds.awayMoneyline ?? "n/a"}.`
-    : "";
+
+  const h2hLine = data.headToHead.length
+    ? `HEAD-TO-HEAD (last ${data.headToHead.length}, newest first): ${data.headToHead
+        .map(
+          (h) =>
+            `${h.date.slice(0, 10)} ${h.awayTeam} ${h.awayScore ?? "?"}-${h.homeScore ?? "?"} ${h.homeTeam} (${h.winner ?? "?"} won)${h.venue ? ` at ${h.venue}` : ""}`,
+        )
+        .join(" | ")}.`
+    : "HEAD-TO-HEAD: no recent meetings found in the available schedule data. Do not invent prior results.";
+
+  const bookLines = data.books.length
+    ? [
+        `MARKET BOARD (${data.books.length} book${data.books.length === 1 ? "" : "s"}, Entain-family first):`,
+        ...data.books.slice(0, 8).map((b) => {
+          const parts: string[] = [];
+          if (b.moneylineHome != null || b.moneylineAway != null) {
+            parts.push(
+              `ML ${b.moneylineHome?.toFixed(2) ?? "n/a"}/${b.moneylineAway?.toFixed(2) ?? "n/a"}${b.draw != null ? `/${b.draw.toFixed(2)}` : ""}`,
+            );
+          }
+          if (b.spreadPoint != null) {
+            parts.push(
+              `spread ${b.spreadPoint > 0 ? "+" : ""}${b.spreadPoint} (${b.spreadHomeOdds?.toFixed(2) ?? "-"}/${b.spreadAwayOdds?.toFixed(2) ?? "-"})`,
+            );
+          }
+          if (b.total != null) {
+            parts.push(
+              `total ${b.total} (O${b.overOdds?.toFixed(2) ?? "-"} / U${b.underOdds?.toFixed(2) ?? "-"})`,
+            );
+          }
+          return `  • ${b.provider}${b.entainFamily ? " [ENTAIN = Betcha-equivalent]" : ""} — ${parts.join(", ")}`;
+        }),
+      ].join("\n")
+    : "MARKET BOARD: no live odds available — explicitly state this instead of inventing prices, and advise the user to check Betcha.co.nz.";
+
+  const legacyLine =
+    data.marketOdds && !data.books.length
+      ? `Scoreboard odds fallback (${data.marketOdds.provider ?? "ESPN"}): spread ${data.marketOdds.spread ?? "n/a"}, total ${data.marketOdds.overUnder ?? "n/a"}, ML home ${data.marketOdds.homeMoneyline ?? "n/a"} / away ${data.marketOdds.awayMoneyline ?? "n/a"}.`
+      : "";
+
   return [
     part("HOME", data.homeTeam),
     part("AWAY", data.awayTeam),
-    bookLine,
+    h2hLine,
+    bookLines,
+    legacyLine,
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+/**
+ * Try to pick the right price out of the book board for the user's pickSide.
+ * Returns null when we can't confidently match (bet-specific e.g. "first
+ * goalscorer" — Kelly/edge stays null in that case).
+ */
+function pickOddsFromBooks(
+  data: BettingRealData | null,
+  intent: ParsedIntent,
+  fixture: EspnFixture | null,
+): { odds: ParsedOdds; source: string } | null {
+  if (!data?.books?.length || !fixture) return null;
+  const preferred =
+    data.books.find((b) => b.entainFamily) ??
+    data.books.find((b) => b.region === "au" || b.region === "nz") ??
+    data.books[0];
+  if (!preferred) return null;
+
+  const side = (intent.pickSide || "").toLowerCase();
+  const market = (intent.marketHint || "").toLowerCase();
+  const homeMatch = nameish(side, fixture.homeTeam.displayName);
+  const awayMatch = nameish(side, fixture.awayTeam.displayName);
+
+  // Totals (over/under).
+  if (/\bover\b/.test(side) || /\bover\b/.test(market)) {
+    if (preferred.overOdds) {
+      return {
+        odds: parseOdds(preferred.overOdds) as ParsedOdds,
+        source: `${preferred.provider} over ${preferred.total ?? "?"}`,
+      };
+    }
+  }
+  if (/\bunder\b/.test(side) || /\bunder\b/.test(market)) {
+    if (preferred.underOdds) {
+      return {
+        odds: parseOdds(preferred.underOdds) as ParsedOdds,
+        source: `${preferred.provider} under ${preferred.total ?? "?"}`,
+      };
+    }
+  }
+
+  // Spread handicap (look for +x.5 / -x.5 style).
+  if (/\b(spread|handicap|line)\b/.test(market)) {
+    if (homeMatch && preferred.spreadHomeOdds) {
+      return {
+        odds: parseOdds(preferred.spreadHomeOdds) as ParsedOdds,
+        source: `${preferred.provider} ${fixture.homeTeam.displayName} ${preferred.spreadPoint ?? ""}`,
+      };
+    }
+    if (awayMatch && preferred.spreadAwayOdds) {
+      return {
+        odds: parseOdds(preferred.spreadAwayOdds) as ParsedOdds,
+        source: `${preferred.provider} ${fixture.awayTeam.displayName} ${preferred.spreadPoint != null ? -preferred.spreadPoint : ""}`,
+      };
+    }
+  }
+
+  // Moneyline default when the pickSide is a team.
+  if (homeMatch && preferred.moneylineHome) {
+    return {
+      odds: parseOdds(preferred.moneylineHome) as ParsedOdds,
+      source: `${preferred.provider} ${fixture.homeTeam.displayName} ML`,
+    };
+  }
+  if (awayMatch && preferred.moneylineAway) {
+    return {
+      odds: parseOdds(preferred.moneylineAway) as ParsedOdds,
+      source: `${preferred.provider} ${fixture.awayTeam.displayName} ML`,
+    };
+  }
+  return null;
+}
+
+function nameish(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  const norm = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+  const an = norm(a);
+  const bn = norm(b);
+  return an.includes(bn) || bn.includes(an);
 }
 
 function buildResearchPrompt(
@@ -521,12 +711,12 @@ function buildResearchPrompt(
     : "NO CONFIRMED FIXTURE — ESPN did not return a match. Do not invent teams, venue or kickoff time.";
 
   const oddsLine = userOdds
-    ? `User-supplied odds: ${userOdds.decimal.toFixed(2)} decimal (${
+    ? `User-supplied / auto-resolved odds: ${userOdds.decimal.toFixed(2)} decimal (${
         userOdds.american > 0 ? "+" : ""
       }${userOdds.american} American) → book implied ${userOdds.impliedPct.toFixed(
         2,
-      )}%.`
-    : "No odds supplied by the user. Do NOT invent a specific price. State that edge/Kelly cannot be computed without odds and recommend the user check Betcha.co.nz for the real price.";
+      )}%. Use this as the working price.`
+    : "No odds supplied by the user AND none resolved from the market board. Do NOT invent a price. State that edge/Kelly cannot be computed without odds and recommend the user check Betcha.co.nz for the real price.";
 
   return `You are an elite AI sports-betting analyst. You are grounded in VERIFIED
 real-world data below — never contradict it, never invent stats, teams,
@@ -539,8 +729,9 @@ other year.
 
 ${calibration ? `${calibration}\n\n` : ""}${fixtureLine}
 
-REAL DATA (injuries, last-10 games, records) — this is your authoritative
-source. Use specific names and numbers from here when you cite facts.
+REAL DATA (injuries, last-10 games, records, head-to-head, market board) —
+this is your authoritative source. Use specific names and numbers from here
+when you cite facts.
 ${summariseRealData(realData)}
 
 USER NOTES:
@@ -550,6 +741,26 @@ USER QUERY:
 "${query.replace(/"/g, '\\"')}"
 
 ${oddsLine}
+
+HOW TO WRITE EACH STAGE (this is critical — do not say "no verified data" if
+data IS in the REAL DATA block above):
+  • form:        cite ACTUAL last-10 records, margin per game, home/away
+                 splits, rest days, any back-to-back flag, and any injury
+                 names from the block.
+  • h2h:         use the HEAD-TO-HEAD block above. Quote specific prior
+                 meeting dates + scores. Only say "no meetings" if the
+                 block literally says none.
+  • tactical:    reason from pace (ppg + opp ppg → projected total) and the
+                 style stats (FG%, 3P%, rebounds, turnovers, etc) that are
+                 present. If one team averages 115 for vs a team allowing
+                 110, name those numbers.
+  • market:     quote the MARKET BOARD lines above — compare Entain/Betcha-
+                 equivalent prices to other books, and compare the projected
+                 pace/total vs the posted total for O/U trend reads.
+  • value:       compute fair win probability from form + H2H + injuries,
+                 convert to fair decimal (1/prob), then compare to the
+                 user/auto-resolved price. Name the edge in %. If no odds
+                 exist say so explicitly.
 
 Emit your research as a STREAM using EXACTLY this protocol, one item per line:
   STAGE:: <stage-id>        (starts a stage)
@@ -563,7 +774,8 @@ Rules:
     CONFIRMED FIXTURE above verbatim if available.
   - Every THINK:: that claims a stat must come from the real-data block.
     When the real-data block doesn't have a number, say "no verified data"
-    rather than inventing one.
+    rather than inventing one — but FIRST check the block; most of the
+    time the number IS there.
   - Emit 2–4 THINK:: per stage, ordered exactly as:
 ${stageList}
 
@@ -735,10 +947,13 @@ export async function POST(request: NextRequest) {
     );
   }
   const notes = String(body.notes ?? "").trim();
-  const parsedOdds =
+  // User-supplied odds take precedence; if blank, we try to fill from
+  // Entain/market books after the fixture + real-data lookup below.
+  let parsedOdds =
     body.odds != null && String(body.odds).trim() !== ""
       ? parseOdds(body.odds)
       : null;
+  let oddsSourceLabel: string | null = parsedOdds ? "user" : null;
   const bankroll =
     body.bankroll === null ||
     body.bankroll === undefined ||
@@ -934,6 +1149,68 @@ export async function POST(request: NextRequest) {
                   .slice(0, 5)
                   .map((i) => `${i.name} (${i.status})`)
                   .join(", ")}.`,
+              });
+            }
+          }
+
+          // Head-to-head summary thought.
+          if (realData.headToHead.length) {
+            const h2h = realData.headToHead;
+            const homeName = realData.homeTeam?.displayName ?? "";
+            const homeWins = h2h.filter(
+              (g) =>
+                (g.winner === "home" && g.homeTeam === homeName) ||
+                (g.winner === "away" && g.awayTeam === homeName),
+            ).length;
+            send({
+              type: "thought",
+              stage: "form",
+              text: `H2H last ${h2h.length}: ${realData.homeTeam?.abbreviation ?? "H"} ${homeWins}-${h2h.length - homeWins} ${realData.awayTeam?.abbreviation ?? "A"}. Most recent: ${h2h[0]!.date.slice(0, 10)} ${h2h[0]!.awayTeam} ${h2h[0]!.awayScore ?? "?"}-${h2h[0]!.homeScore ?? "?"} ${h2h[0]!.homeTeam}.`,
+            });
+          } else {
+            send({
+              type: "thought",
+              stage: "form",
+              text: `No recent head-to-head found in the available ESPN schedule data — treating as neutral prior.`,
+            });
+          }
+
+          // Market board thought.
+          if (realData.books.length) {
+            const best =
+              realData.books.find((b) => b.entainFamily) ??
+              realData.books[0]!;
+            const mlHome = best.moneylineHome?.toFixed(2) ?? "?";
+            const mlAway = best.moneylineAway?.toFixed(2) ?? "?";
+            const totalLine =
+              best.total != null
+                ? ` · total ${best.total} (O${best.overOdds?.toFixed(2) ?? "-"}/U${best.underOdds?.toFixed(2) ?? "-"})`
+                : "";
+            send({
+              type: "thought",
+              stage: "fixture",
+              text: `Market board (${realData.books.length} book${realData.books.length === 1 ? "" : "s"}, top: ${best.provider}${best.entainFamily ? " – Entain/Betcha-equivalent" : ""}): ML ${mlHome}/${mlAway}${totalLine}.`,
+            });
+          } else {
+            send({
+              type: "thought",
+              stage: "fixture",
+              text: process.env.ODDS_API_KEY
+                ? `No live odds returned — the-odds-api has no matching event right now. Check Betcha.co.nz directly for the price.`
+                : `No live odds (ODDS_API_KEY env not set). Add a free key from the-odds-api.com to pull Ladbrokes/Neds/TAB prices automatically.`,
+            });
+          }
+
+          // Auto-fill odds from the book board when the user didn't supply one.
+          if (!parsedOdds) {
+            const picked = pickOddsFromBooks(realData, intent, espnFixture);
+            if (picked) {
+              parsedOdds = picked.odds;
+              oddsSourceLabel = picked.source;
+              send({
+                type: "thought",
+                stage: "fixture",
+                text: `Auto-used ${picked.source} = ${picked.odds.decimal.toFixed(2)} decimal for edge/Kelly math — user did not supply odds.`,
               });
             }
           }
@@ -1248,8 +1525,13 @@ export async function POST(request: NextRequest) {
 
       const oddsMissing = !parsedOdds;
       const oddsUsed: ParsedOdds | null = parsedOdds;
+      // "user" when the user typed odds, "estimated-market" when we filled
+      // them from the live book board (Entain / ESPN pickcenter), "unknown"
+      // when we had to give up and not price the edge.
       const oddsSource: BettingAnalysisResult["oddsSource"] = parsedOdds
-        ? "user"
+        ? oddsSourceLabel === "user"
+          ? "user"
+          : "estimated-market"
         : "unknown";
 
       const bookImpliedProbabilityPct = oddsUsed ? oddsUsed.impliedPct : null;
