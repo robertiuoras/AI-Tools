@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 import { enforceApiRateLimit } from "@/lib/api-rate-limit";
 import { logOpenAIUsage } from "@/lib/openai-usage";
 import {
@@ -26,6 +27,11 @@ import {
   type EspnPastGame,
   type EspnInjury,
 } from "@/lib/sports-data";
+import {
+  buildCalibrationSummary,
+  formatCalibrationForPrompt,
+  listTrackedBets,
+} from "@/lib/betting-bot-bets";
 
 /**
  * AI Betting Bot — streaming endpoint, grounded in ESPN's public sports API
@@ -456,6 +462,7 @@ function buildResearchPrompt(
   fixture: EspnFixture | null,
   realData: BettingRealData | null,
   todayIso: string,
+  calibration: string,
 ): string {
   const stageList = BETTING_STAGES.map((s) => `  - ${s.id}: ${s.label}`).join(
     "\n",
@@ -480,7 +487,7 @@ players or dates that contradict the verified block.
 TODAY'S REAL-WORLD DATE: ${todayIso}. If the user says "tomorrow", that is
 literally the day after ${todayIso}. Do NOT reason as if it were 2023.
 
-${fixtureLine}
+${calibration ? `${calibration}\n\n` : ""}${fixtureLine}
 
 REAL DATA (injuries, last-10 games, records) — this is your authoritative
 source. Use specific names and numbers from here when you cite facts.
@@ -692,6 +699,35 @@ export async function POST(request: NextRequest) {
   const now = new Date();
   const todayIso = now.toISOString().slice(0, 10);
 
+  // Pull this user's historical calibration so we can feed it back to the
+  // model (self-improvement loop). Best-effort — if auth or DB lookup fails
+  // we still run the analysis, just without the calibration adjustment.
+  let calibrationPrompt = "";
+  try {
+    const authHeader = request.headers.get("authorization");
+    if (authHeader) {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      if (supabaseUrl && supabaseAnonKey) {
+        const token = authHeader.replace("Bearer ", "");
+        const authed = createClient(supabaseUrl, supabaseAnonKey, {
+          global: { headers: { Authorization: `Bearer ${token}` } },
+          auth: { persistSession: false, autoRefreshToken: false },
+        });
+        const {
+          data: { user },
+        } = await authed.auth.getUser(token);
+        if (user?.id) {
+          const bets = await listTrackedBets(user.id);
+          const summary = buildCalibrationSummary(bets);
+          calibrationPrompt = formatCalibrationForPrompt(summary);
+        }
+      }
+    }
+  } catch {
+    /* non-fatal */
+  }
+
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const send = (ev: BettingStreamEvent) => controller.enqueue(encodeSse(ev));
@@ -844,6 +880,7 @@ export async function POST(request: NextRequest) {
         espnFixture,
         realData,
         todayIso,
+        calibrationPrompt,
       );
 
       let transcript = "";
@@ -1232,7 +1269,16 @@ export async function POST(request: NextRequest) {
         label: "Scoring and finalising",
         status: "done",
       });
-      send({ type: "final", result });
+      send({
+        type: "final",
+        result,
+        track: {
+          sportPath: sport?.path ?? null,
+          espnEventId: espnFixture?.id ?? null,
+          espnHomeTeamId: espnFixture?.homeTeam.id ?? null,
+          espnAwayTeamId: espnFixture?.awayTeam.id ?? null,
+        },
+      });
       send({ type: "done" });
       controller.close();
     },

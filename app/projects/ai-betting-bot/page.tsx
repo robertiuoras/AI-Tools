@@ -11,9 +11,11 @@ import {
   Clock,
   DollarSign,
   Gauge,
+  History,
   Info,
   ListChecks,
   Loader2,
+  RefreshCw,
   Radar,
   ShieldCheck,
   Sparkles,
@@ -21,6 +23,8 @@ import {
   Telescope,
   TrendingDown,
   TrendingUp,
+  Trash2,
+  Trophy,
   Wand2,
   XCircle,
   AlertTriangle,
@@ -31,6 +35,9 @@ import {
   Zap,
   MapPin,
   CalendarClock,
+  BarChart3,
+  Bookmark,
+  BookmarkCheck,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -48,8 +55,13 @@ import {
   type BettingMetricScore,
   type BettingRealDataTeam,
   type BettingStreamEvent,
+  type BettingTrackContext,
+  type CalibrationSummary,
   type ParsedOdds,
+  type TrackedBetRow,
+  type TrackedBetStatus,
 } from "@/lib/betting-bot";
+import { supabase } from "@/lib/supabase";
 
 /* ────────────────────────────────────────────────────────────────────────── */
 /*  Formatting helpers                                                        */
@@ -591,6 +603,403 @@ function TeamDataPanel({
   );
 }
 
+/* ────────────────────────────────────────────────────────────────────────── */
+/*  Tracked bets + calibration                                                */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+const STATUS_STYLES: Record<
+  TrackedBetStatus,
+  { label: string; dot: string; pill: string }
+> = {
+  pending: {
+    label: "Pending",
+    dot: "bg-sky-500",
+    pill: "bg-sky-500/10 text-sky-600 dark:text-sky-300 border-sky-500/30",
+  },
+  won: {
+    label: "Won",
+    dot: "bg-emerald-500",
+    pill:
+      "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/40",
+  },
+  lost: {
+    label: "Lost",
+    dot: "bg-rose-500",
+    pill: "bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/40",
+  },
+  push: {
+    label: "Push",
+    dot: "bg-amber-500",
+    pill:
+      "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/40",
+  },
+  void: {
+    label: "Void",
+    dot: "bg-slate-500",
+    pill:
+      "bg-slate-500/10 text-slate-700 dark:text-slate-300 border-slate-500/40",
+  },
+  needs_review: {
+    label: "Needs review",
+    dot: "bg-violet-500",
+    pill:
+      "bg-violet-500/10 text-violet-700 dark:text-violet-300 border-violet-500/40",
+  },
+  cancelled: {
+    label: "Cancelled",
+    dot: "bg-muted-foreground/40",
+    pill:
+      "bg-muted/40 text-muted-foreground border-border/40",
+  },
+};
+
+function fmtSigned(n: number | null, digits = 1, suffix = ""): string {
+  if (n == null || !Number.isFinite(n)) return "—";
+  const s = n >= 0 ? "+" : "";
+  return `${s}${n.toFixed(digits)}${suffix}`;
+}
+
+function CalibrationCard({ summary }: { summary: CalibrationSummary }) {
+  const record = `${summary.wins}-${summary.losses}${summary.pushes ? `-${summary.pushes}` : ""}`;
+  const roiTone =
+    summary.roiPct == null
+      ? "text-muted-foreground"
+      : summary.roiPct > 0
+        ? "text-emerald-600 dark:text-emerald-400"
+        : summary.roiPct < 0
+          ? "text-rose-600 dark:text-rose-400"
+          : "text-muted-foreground";
+
+  return (
+    <section className="rounded-3xl border border-border/60 bg-card/40 p-5">
+      <div className="flex flex-wrap items-center gap-2">
+        <BarChart3 className="h-5 w-5 text-amber-500" />
+        <h2 className="text-lg font-bold tracking-tight">
+          My track record
+        </h2>
+        <span className="rounded-full border border-border/50 bg-muted/30 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+          Self-calibration
+        </span>
+        {summary.pending > 0 ? (
+          <span className="rounded-full border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-sky-600 dark:text-sky-300">
+            {summary.pending} pending
+          </span>
+        ) : null}
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-4">
+        <div className="rounded-xl border border-border/40 bg-background/40 p-3">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+            Settled
+          </p>
+          <p className="mt-1 text-2xl font-black tabular-nums">
+            {summary.settled}
+          </p>
+          <p className="text-[11px] text-muted-foreground">
+            {record} record
+          </p>
+        </div>
+        <div className="rounded-xl border border-border/40 bg-background/40 p-3">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+            Win rate
+          </p>
+          <p className="mt-1 text-2xl font-black tabular-nums">
+            {summary.winRatePct == null
+              ? "—"
+              : `${summary.winRatePct.toFixed(1)}%`}
+          </p>
+          <p className="text-[11px] text-muted-foreground">
+            excludes pushes
+          </p>
+        </div>
+        <div className="rounded-xl border border-border/40 bg-background/40 p-3">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+            ROI (1u flat)
+          </p>
+          <p className={cn("mt-1 text-2xl font-black tabular-nums", roiTone)}>
+            {summary.roiPct == null
+              ? "—"
+              : `${summary.roiPct >= 0 ? "+" : ""}${summary.roiPct.toFixed(1)}%`}
+          </p>
+          <p className="text-[11px] text-muted-foreground">
+            {fmtSigned(summary.profitUnits, 2, "u")} net
+          </p>
+        </div>
+        <div className="rounded-xl border border-border/40 bg-background/40 p-3">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+            Brier score
+          </p>
+          <p className="mt-1 text-2xl font-black tabular-nums">
+            {summary.brier == null ? "—" : summary.brier.toFixed(3)}
+          </p>
+          <p className="text-[11px] text-muted-foreground">
+            lower is better · calibration quality
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-4 overflow-hidden rounded-xl border border-border/40">
+        <table className="w-full text-[12px]">
+          <thead className="bg-muted/30 text-muted-foreground">
+            <tr>
+              <th className="px-3 py-2 text-left font-bold uppercase tracking-wider">
+                Confidence bin
+              </th>
+              <th className="px-3 py-2 text-right font-bold uppercase tracking-wider">
+                Settled
+              </th>
+              <th className="px-3 py-2 text-right font-bold uppercase tracking-wider">
+                Record
+              </th>
+              <th className="px-3 py-2 text-right font-bold uppercase tracking-wider">
+                Win rate
+              </th>
+              <th className="px-3 py-2 text-right font-bold uppercase tracking-wider">
+                ROI
+              </th>
+              <th className="px-3 py-2 text-right font-bold uppercase tracking-wider">
+                Avg stated conf
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border/40">
+            {summary.buckets.map((b) => (
+              <tr
+                key={b.bin}
+                className={cn(
+                  "tabular-nums",
+                  b.settled === 0 && "opacity-50",
+                )}
+              >
+                <td className="px-3 py-2 font-semibold capitalize">
+                  {b.bin}
+                </td>
+                <td className="px-3 py-2 text-right">{b.settled}</td>
+                <td className="px-3 py-2 text-right">
+                  {b.wins}-{b.losses}
+                  {b.pushes ? `-${b.pushes}` : ""}
+                </td>
+                <td className="px-3 py-2 text-right">
+                  {b.winRatePct == null
+                    ? "—"
+                    : `${b.winRatePct.toFixed(1)}%`}
+                </td>
+                <td
+                  className={cn(
+                    "px-3 py-2 text-right font-semibold",
+                    b.roiPct != null && b.roiPct > 0 && "text-emerald-600 dark:text-emerald-400",
+                    b.roiPct != null && b.roiPct < 0 && "text-rose-600 dark:text-rose-400",
+                  )}
+                >
+                  {b.roiPct == null
+                    ? "—"
+                    : `${b.roiPct >= 0 ? "+" : ""}${b.roiPct.toFixed(1)}%`}
+                </td>
+                <td className="px-3 py-2 text-right">
+                  {b.avgConfidence == null
+                    ? "—"
+                    : `${b.avgConfidence.toFixed(0)}%`}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {summary.settled >= 3 ? (
+        <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
+          The bot reads this table on every new analysis and dials its own
+          confidence up or down to match your actual hit rate per bin.
+        </p>
+      ) : (
+        <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
+          Track at least 3 settled bets and the bot will start using this
+          calibration to correct its own confidence.
+        </p>
+      )}
+    </section>
+  );
+}
+
+function BetHistoryRow({
+  bet,
+  busy,
+  onRefresh,
+  onGrade,
+  onDelete,
+}: {
+  bet: TrackedBetRow;
+  busy: boolean;
+  onRefresh: (id: string) => void;
+  onGrade: (id: string, outcome: TrackedBetStatus) => void;
+  onDelete: (id: string) => void;
+}) {
+  const style = STATUS_STYLES[bet.status];
+  const teams =
+    bet.away_team_name && bet.home_team_name
+      ? `${bet.away_team_name} @ ${bet.home_team_name}`
+      : "(fixture not resolved)";
+  const kickoffLabel = bet.kickoff
+    ? new Date(bet.kickoff).toLocaleString(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      })
+    : "Kickoff tbd";
+  const scoreLabel =
+    bet.home_score != null && bet.away_score != null
+      ? `${bet.away_score}–${bet.home_score}`
+      : null;
+  const oddsLabel = bet.odds_decimal
+    ? `${bet.odds_decimal.toFixed(2)}x`
+    : bet.odds_american
+      ? `${bet.odds_american > 0 ? "+" : ""}${bet.odds_american}`
+      : "no odds";
+  const profitTone =
+    bet.profit_units == null
+      ? ""
+      : bet.profit_units > 0
+        ? "text-emerald-600 dark:text-emerald-400"
+        : bet.profit_units < 0
+          ? "text-rose-600 dark:text-rose-400"
+          : "text-muted-foreground";
+
+  return (
+    <li className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-card/40 p-4 md:flex-row md:items-center md:justify-between">
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider",
+              style.pill,
+            )}
+          >
+            <span className={cn("h-1.5 w-1.5 rounded-full", style.dot)} />
+            {style.label}
+          </span>
+          {bet.sport_label ? (
+            <span className="rounded-full border border-border/40 bg-muted/30 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+              {bet.sport_label}
+            </span>
+          ) : null}
+          <span className="text-[11px] text-muted-foreground">
+            {kickoffLabel}
+          </span>
+        </div>
+        <p className="mt-1.5 truncate text-sm font-bold text-foreground">
+          {bet.pick_summary}
+        </p>
+        <p className="text-[11px] text-muted-foreground">
+          {teams}
+          {scoreLabel ? (
+            <>
+              {" · "}
+              <span className="font-mono font-semibold text-foreground/80">
+                {scoreLabel}
+              </span>
+            </>
+          ) : null}
+          {" · "}
+          {bet.market_normalized}
+          {" · "}
+          <span className="font-mono">{oddsLabel}</span>
+          {" · conf "}
+          <span className="font-mono">
+            {bet.confidence_pct.toFixed(0)}%
+          </span>
+          {bet.profit_units != null ? (
+            <>
+              {" · "}
+              <span className={cn("font-mono font-semibold", profitTone)}>
+                {bet.profit_units > 0 ? "+" : ""}
+                {bet.profit_units.toFixed(2)}u
+              </span>
+            </>
+          ) : null}
+        </p>
+        {bet.settlement_notes ? (
+          <p className="mt-1 line-clamp-1 text-[11px] italic text-muted-foreground">
+            {bet.settlement_notes}
+          </p>
+        ) : null}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        {(bet.status === "pending" || bet.status === "needs_review") &&
+        bet.espn_event_id ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onClick={() => onRefresh(bet.id)}
+            title="Re-check ESPN now"
+          >
+            <RefreshCw
+              className={cn("h-3.5 w-3.5", busy && "animate-spin")}
+            />
+            <span className="ml-1 hidden sm:inline">Refresh</span>
+          </Button>
+        ) : null}
+        {bet.status === "pending" ||
+        bet.status === "needs_review" ||
+        bet.status === "lost" ||
+        bet.status === "push" ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => onGrade(bet.id, "won")}
+            className="text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-700 dark:text-emerald-400"
+            title="Mark as won"
+          >
+            <Trophy className="h-3.5 w-3.5" />
+            <span className="ml-1 hidden sm:inline">Won</span>
+          </Button>
+        ) : null}
+        {bet.status === "pending" ||
+        bet.status === "needs_review" ||
+        bet.status === "won" ||
+        bet.status === "push" ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => onGrade(bet.id, "lost")}
+            className="text-rose-600 hover:bg-rose-500/10 hover:text-rose-700 dark:text-rose-400"
+            title="Mark as lost"
+          >
+            <XCircle className="h-3.5 w-3.5" />
+            <span className="ml-1 hidden sm:inline">Lost</span>
+          </Button>
+        ) : null}
+        {bet.status !== "push" ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => onGrade(bet.id, "push")}
+            className="text-amber-600 hover:bg-amber-500/10 hover:text-amber-700 dark:text-amber-400"
+            title="Mark as push"
+          >
+            <CircleDot className="h-3.5 w-3.5" />
+            <span className="ml-1 hidden sm:inline">Push</span>
+          </Button>
+        ) : null}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => onDelete(bet.id)}
+          className="text-muted-foreground hover:bg-rose-500/10 hover:text-rose-600"
+          title="Delete"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+    </li>
+  );
+}
+
 function MetricRadar({ metrics }: { metrics: BettingMetricScore[] }) {
   const size = 280;
   const cx = size / 2;
@@ -1113,6 +1522,20 @@ export default function AiBettingBotPage() {
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
+  // Track-context sent alongside the "final" event so we can persist the
+  // ESPN identifiers when the user clicks "Track this bet".
+  const [trackCtx, setTrackCtx] = useState<BettingTrackContext | null>(null);
+  const [trackedId, setTrackedId] = useState<string | null>(null);
+  const [tracking, setTracking] = useState<boolean>(false);
+
+  // Bet history + calibration.
+  const [bets, setBets] = useState<TrackedBetRow[]>([]);
+  const [calibration, setCalibration] = useState<CalibrationSummary | null>(
+    null,
+  );
+  const [betsLoading, setBetsLoading] = useState<boolean>(false);
+  const [refreshingBetId, setRefreshingBetId] = useState<string | null>(null);
+
   const oddsParsed: ParsedOdds | null = useMemo(
     () => (odds.trim() ? parseOdds(odds) : null),
     [odds],
@@ -1176,6 +1599,8 @@ export default function AiBettingBotPage() {
           return;
         case "final":
           setResult(ev.result);
+          setTrackCtx(ev.track);
+          setTrackedId(null);
           return;
         case "error":
           setError(ev.message);
@@ -1202,9 +1627,24 @@ export default function AiBettingBotPage() {
     abortRef.current = ctrl;
 
     try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      // Forward the user's Supabase session so the server can look up
+      // their historical calibration and feed it into the prompt.
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (session?.access_token) {
+          headers.Authorization = `Bearer ${session.access_token}`;
+        }
+      } catch {
+        /* non-fatal — the endpoint works unauthenticated too */
+      }
       const res = await fetch("/api/projects/ai-betting-bot", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           query,
           odds: odds.trim() || undefined,
@@ -1277,6 +1717,199 @@ export default function AiBettingBotPage() {
     abortRef.current = null;
     setStreaming(false);
   }, []);
+
+  /** Returns `{ Authorization }` when the user is signed in — required for
+   *  any /api/projects/ai-betting-bot/bets* call. */
+  const authHeader = useCallback(async (): Promise<Record<string, string>> => {
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        return { Authorization: `Bearer ${session.access_token}` };
+      }
+    } catch {
+      /* ignore */
+    }
+    return {};
+  }, []);
+
+  const refreshBets = useCallback(
+    async (silent = false) => {
+      if (!silent) setBetsLoading(true);
+      try {
+        const auth = await authHeader();
+        if (!auth.Authorization) {
+          setBets([]);
+          setCalibration(null);
+          return;
+        }
+        const res = await fetch("/api/projects/ai-betting-bot/bets", {
+          headers: auth,
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          bets: TrackedBetRow[];
+          calibration: CalibrationSummary;
+        };
+        setBets(data.bets ?? []);
+        setCalibration(data.calibration ?? null);
+      } finally {
+        if (!silent) setBetsLoading(false);
+      }
+    },
+    [authHeader],
+  );
+
+  // Initial load + re-load whenever an analysis finishes so the calibration
+  // card always reflects the freshest numbers.
+  useEffect(() => {
+    void refreshBets(true);
+  }, [refreshBets]);
+
+  const trackCurrent = useCallback(async () => {
+    if (!result || tracking) return;
+    setTracking(true);
+    try {
+      const auth = await authHeader();
+      if (!auth.Authorization) {
+        addToast({
+          variant: "error",
+          title: "Sign in required",
+          description: "You need to be signed in to save tracked bets.",
+        });
+        return;
+      }
+      const res = await fetch("/api/projects/ai-betting-bot/bets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...auth },
+        body: JSON.stringify({
+          query,
+          result,
+          sportPath: trackCtx?.sportPath ?? null,
+          espnEventId: trackCtx?.espnEventId ?? null,
+          espnHomeTeamId: trackCtx?.espnHomeTeamId ?? null,
+          espnAwayTeamId: trackCtx?.espnAwayTeamId ?? null,
+          stakeUsd: result.kelly?.recommendedStakeUsd ?? null,
+        }),
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as { bet: TrackedBetRow };
+      setTrackedId(data.bet.id);
+      addToast({
+        variant: "success",
+        title: "Bet tracked",
+        description:
+          trackCtx?.espnEventId
+            ? "I'll auto-settle this once the game ends."
+            : "Saved. You can grade it manually when the result is in.",
+      });
+      await refreshBets(true);
+    } catch (e) {
+      addToast({
+        variant: "error",
+        title: "Couldn't track this bet",
+        description: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setTracking(false);
+    }
+  }, [
+    result,
+    tracking,
+    authHeader,
+    query,
+    trackCtx,
+    addToast,
+    refreshBets,
+  ]);
+
+  const refreshSingleBet = useCallback(
+    async (id: string) => {
+      setRefreshingBetId(id);
+      try {
+        const auth = await authHeader();
+        if (!auth.Authorization) return;
+        const res = await fetch(
+          `/api/projects/ai-betting-bot/bets/${id}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...auth },
+            body: JSON.stringify({ action: "settle" }),
+          },
+        );
+        if (!res.ok) {
+          const t = await res.text();
+          throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+        }
+        await refreshBets(true);
+      } catch (e) {
+        addToast({
+          variant: "error",
+          title: "Refresh failed",
+          description: e instanceof Error ? e.message : String(e),
+        });
+      } finally {
+        setRefreshingBetId(null);
+      }
+    },
+    [authHeader, refreshBets, addToast],
+  );
+
+  const gradeBet = useCallback(
+    async (id: string, outcome: TrackedBetStatus) => {
+      const auth = await authHeader();
+      if (!auth.Authorization) return;
+      try {
+        const res = await fetch(
+          `/api/projects/ai-betting-bot/bets/${id}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...auth },
+            body: JSON.stringify({ action: "grade", outcome }),
+          },
+        );
+        if (!res.ok) {
+          const t = await res.text();
+          throw new Error(t.slice(0, 200) || `HTTP ${res.status}`);
+        }
+        await refreshBets(true);
+      } catch (e) {
+        addToast({
+          variant: "error",
+          title: "Couldn't grade bet",
+          description: e instanceof Error ? e.message : String(e),
+        });
+      }
+    },
+    [authHeader, refreshBets, addToast],
+  );
+
+  const deleteBet = useCallback(
+    async (id: string) => {
+      if (!confirm("Delete this tracked bet? This cannot be undone.")) return;
+      const auth = await authHeader();
+      if (!auth.Authorization) return;
+      try {
+        const res = await fetch(
+          `/api/projects/ai-betting-bot/bets/${id}`,
+          { method: "DELETE", headers: auth },
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        await refreshBets(true);
+      } catch (e) {
+        addToast({
+          variant: "error",
+          title: "Delete failed",
+          description: e instanceof Error ? e.message : String(e),
+        });
+      }
+    },
+    [authHeader, refreshBets, addToast],
+  );
 
   const verdictStyle = result ? VERDICT_STYLES[result.verdict] : null;
   const showThinking = streaming || (stages.some((s) => s.status !== "pending") && !result);
@@ -1634,7 +2267,7 @@ export default function AiBettingBotPage() {
                   aria-hidden
                 />
                 <div className="flex items-start justify-between gap-4">
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
                       Verdict
                     </p>
@@ -1651,9 +2284,42 @@ export default function AiBettingBotPage() {
                       {verdictStyle.subtitle}
                     </p>
                   </div>
-                  <verdictStyle.icon
-                    className={cn("h-12 w-12 shrink-0", verdictStyle.badgeText)}
-                  />
+                  <div className="flex flex-col items-end gap-3">
+                    <verdictStyle.icon
+                      className={cn(
+                        "h-12 w-12 shrink-0",
+                        verdictStyle.badgeText,
+                      )}
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={trackedId ? "secondary" : "default"}
+                      disabled={tracking}
+                      onClick={() => void trackCurrent()}
+                      className={cn(
+                        "shrink-0",
+                        trackedId &&
+                          "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300",
+                      )}
+                      title={
+                        trackedId
+                          ? "Tracked — view in My track record below"
+                          : "Save this bet so the bot can auto-settle it later"
+                      }
+                    >
+                      {tracking ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : trackedId ? (
+                        <BookmarkCheck className="h-4 w-4" />
+                      ) : (
+                        <Bookmark className="h-4 w-4" />
+                      )}
+                      <span className="ml-1.5">
+                        {trackedId ? "Tracked" : "Track this bet"}
+                      </span>
+                    </Button>
+                  </div>
                 </div>
 
                 <div className="mt-6 grid gap-3 sm:grid-cols-3">
@@ -1923,6 +2589,64 @@ export default function AiBettingBotPage() {
                   </span>
                 </div>
               ) : null}
+            </section>
+          </div>
+        ) : null}
+
+        {/* Tracked bets + self-calibration — always visible when the user has any */}
+        {(bets.length > 0 || betsLoading) ? (
+          <div className="mt-10 space-y-6">
+            {calibration ? <CalibrationCard summary={calibration} /> : null}
+            <section aria-labelledby="my-bets-heading" className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <History className="h-5 w-5 text-violet-500" />
+                  <h2
+                    id="my-bets-heading"
+                    className="text-lg font-bold tracking-tight"
+                  >
+                    My tracked bets
+                  </h2>
+                  <span className="rounded-full border border-border/50 bg-muted/30 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                    {bets.length}
+                  </span>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void refreshBets(false)}
+                  disabled={betsLoading}
+                  title="Re-fetch and auto-settle any finished games"
+                >
+                  <RefreshCw
+                    className={cn(
+                      "h-3.5 w-3.5",
+                      betsLoading && "animate-spin",
+                    )}
+                  />
+                  <span className="ml-1">Refresh</span>
+                </Button>
+              </div>
+              {bets.length === 0 ? (
+                <p className="rounded-2xl border border-dashed border-border/50 bg-background/30 p-6 text-center text-sm text-muted-foreground">
+                  No tracked bets yet. Run an analysis and click{" "}
+                  <span className="font-semibold">Track this bet</span>.
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {bets.map((bet) => (
+                    <BetHistoryRow
+                      key={bet.id}
+                      bet={bet}
+                      busy={refreshingBetId === bet.id}
+                      onRefresh={(id) => void refreshSingleBet(id)}
+                      onGrade={(id, outcome) => void gradeBet(id, outcome)}
+                      onDelete={(id) => void deleteBet(id)}
+                    />
+                  ))}
+                </ul>
+              )}
             </section>
           </div>
         ) : null}

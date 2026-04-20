@@ -327,11 +327,97 @@ export function parseAmericanOdds(value: string | number): number | null {
 
 /* ── stream event shape (server → client SSE payloads) ─────────────────── */
 
+/** Hidden fields the server sends alongside the final analysis so the
+ *  "Track this bet" button can persist the ESPN identifiers needed for
+ *  auto-settlement later. */
+export interface BettingTrackContext {
+  sportPath: string | null;
+  espnEventId: string | null;
+  espnHomeTeamId: string | null;
+  espnAwayTeamId: string | null;
+}
+
+/* ── Tracked-bet types (shared between server and client) ──────────────── */
+
+export type TrackedBetStatus =
+  | "pending"
+  | "won"
+  | "lost"
+  | "push"
+  | "void"
+  | "needs_review"
+  | "cancelled";
+
+export interface TrackedBetRow {
+  id: string;
+  user_id: string;
+  created_at: string;
+  updated_at: string;
+  query: string;
+  pick_summary: string;
+  market_normalized: string;
+  sport_label: string | null;
+  sport_path: string | null;
+  espn_event_id: string | null;
+  espn_home_team_id: string | null;
+  espn_away_team_id: string | null;
+  home_team_name: string | null;
+  away_team_name: string | null;
+  kickoff: string | null;
+  venue: string | null;
+  odds_decimal: number | null;
+  odds_american: number | null;
+  stake_usd: number | null;
+  fair_win_probability_pct: number;
+  confidence_pct: number;
+  confidence_bin: "low" | "moderate" | "high" | "elite";
+  edge_pct: number | null;
+  verdict: string;
+  composite_score: number | null;
+  status: TrackedBetStatus;
+  settled_at: string | null;
+  home_score: number | null;
+  away_score: number | null;
+  settlement_notes: string | null;
+  profit_units: number | null;
+  user_notes: string | null;
+  snapshot: BettingAnalysisResult | null;
+}
+
+export interface CalibrationBucket {
+  bin: "low" | "moderate" | "high" | "elite";
+  settled: number;
+  wins: number;
+  losses: number;
+  pushes: number;
+  winRatePct: number | null;
+  roiPct: number | null;
+  avgConfidence: number | null;
+}
+
+export interface CalibrationSummary {
+  settled: number;
+  wins: number;
+  losses: number;
+  pushes: number;
+  winRatePct: number | null;
+  roiPct: number | null;
+  profitUnits: number;
+  brier: number | null;
+  buckets: CalibrationBucket[];
+  pending: number;
+  needsReview: number;
+}
+
 export type BettingStreamEvent =
   | { type: "stage"; stage: string; label: string; status: "running" | "done" }
   | { type: "thought"; stage: string; text: string }
   | { type: "fixture"; fixture: BettingFixture }
-  | { type: "final"; result: BettingAnalysisResult }
+  | {
+      type: "final";
+      result: BettingAnalysisResult;
+      track: BettingTrackContext;
+    }
   | { type: "error"; message: string }
   | { type: "done" };
 

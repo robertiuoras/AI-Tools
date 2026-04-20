@@ -369,6 +369,65 @@ export async function getRecentGames(
   return out;
 }
 
+/* ── Event summary (used by the settlement job) ───────────────────────── */
+
+export type EspnEventSummary = {
+  id: string;
+  date: string;
+  status: string;
+  completed: boolean;
+  homeTeamId: string;
+  awayTeamId: string;
+  homeScore: number | null;
+  awayScore: number | null;
+};
+
+/**
+ * Fetch a single event's current status/score. We hit the scoreboard with an
+ * explicit date window so the endpoint is cheap and consistent; the direct
+ * `summary?event=` endpoint is fatter and sometimes 404s for older events.
+ */
+export async function getEventSummary(
+  sportPath: string,
+  eventId: string,
+  kickoffIso: string | null,
+): Promise<EspnEventSummary | null> {
+  // A 3-day window centred on the kickoff is safe — game might have
+  // started on kickoff-day and finished on the next (late NBA, overseas
+  // soccer). If we don't know the kickoff, widen to ±7 days.
+  const anchor = kickoffIso ? new Date(kickoffIso) : new Date();
+  const radiusDays = kickoffIso ? 3 : 7;
+  const start = new Date(anchor);
+  start.setDate(start.getDate() - radiusDays);
+  const end = new Date(anchor);
+  end.setDate(end.getDate() + radiusDays);
+  const range = `${yyyymmdd(start)}-${yyyymmdd(end)}`;
+
+  const data = await espnGet<ScoreboardResponse>(
+    `${ESPN_BASE}/${sportPath}/scoreboard?dates=${range}&limit=400`,
+  );
+  const event = data?.events?.find((e) => String(e.id ?? "") === eventId);
+  if (!event) return null;
+
+  const comp = event.competitions?.[0];
+  if (!comp) return null;
+  const home = comp.competitors?.find((c) => c.homeAway === "home");
+  const away = comp.competitors?.find((c) => c.homeAway === "away");
+  if (!home || !away) return null;
+
+  const statusName = event.status?.type?.name ?? "UNKNOWN";
+  return {
+    id: eventId,
+    date: event.date ?? "",
+    status: statusName,
+    completed: statusName === "STATUS_FINAL",
+    homeTeamId: String(home.team?.id ?? ""),
+    awayTeamId: String(away.team?.id ?? ""),
+    homeScore: home.score != null ? Number(home.score) : null,
+    awayScore: away.score != null ? Number(away.score) : null,
+  };
+}
+
 /** Compact WLLWW-style string for the most recent N games. */
 export function streakString(games: EspnPastGame[], n = 10): string {
   return games
