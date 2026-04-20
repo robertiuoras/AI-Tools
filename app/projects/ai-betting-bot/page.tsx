@@ -1642,6 +1642,15 @@ export default function AiBettingBotPage() {
       } catch {
         /* non-fatal — the endpoint works unauthenticated too */
       }
+      // The browser's IANA timezone (e.g. "Pacific/Auckland") — the server
+      // uses it so "today"/"tomorrow" mean the user's calendar day instead
+      // of Vercel's UTC day.
+      let tz: string | undefined;
+      try {
+        tz = Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+      } catch {
+        tz = undefined;
+      }
       const res = await fetch("/api/projects/ai-betting-bot", {
         method: "POST",
         headers,
@@ -1650,6 +1659,7 @@ export default function AiBettingBotPage() {
           odds: odds.trim() || undefined,
           bankroll: bankroll.trim() || undefined,
           notes: notes.trim() || undefined,
+          timezone: tz,
         }),
         signal: ctrl.signal,
       });

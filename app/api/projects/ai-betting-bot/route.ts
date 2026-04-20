@@ -222,12 +222,17 @@ async function parseIntent(
   apiKey: string,
   query: string,
   todayIso: string,
+  timezone: string | null,
 ): Promise<{
   intent: ParsedIntent;
   usage?: { prompt_tokens?: number; completion_tokens?: number };
 }> {
-  const prompt = `Today's real-world date is ${todayIso}. Extract the user's betting intent
-from their message. Return JSON only.
+  const tzLine = timezone
+    ? `The user's IANA timezone is ${timezone}. Interpret "today" and "tomorrow" in THAT timezone, not UTC.`
+    : `Interpret "today" and "tomorrow" in the user's local timezone.`;
+  const prompt = `Today's real-world calendar date (in the user's timezone) is ${todayIso}.
+${tzLine}
+Extract the user's betting intent from their message. Return JSON only.
 
 Schema:
 {
@@ -317,40 +322,82 @@ function fallbackIntent(query: string): ParsedIntent {
   };
 }
 
+/** Get the user's current calendar date in their own IANA timezone. */
+function userTodayIso(tz: string | null | undefined): string {
+  try {
+    if (tz) {
+      // "en-CA" formats YYYY-MM-DD, which is ISO-compatible.
+      return new Intl.DateTimeFormat("en-CA", {
+        timeZone: tz,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date());
+    }
+  } catch {
+    /* fall through — bad tz */
+  }
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** Parse an ISO "YYYY-MM-DD" into a UTC-noon Date so day arithmetic is
+ *  DST-safe and the yyyymmdd() helper returns the same calendar day. */
+function ymdToDate(ymd: string): Date {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(Date.UTC(y, (m ?? 1) - 1, d ?? 1, 12, 0, 0));
+}
+
+/**
+ * Turn a user's date hint into an ESPN scoreboard window. We always widen
+ * by 1 day on each side because:
+ *   • ESPN's scoreboard uses US Eastern day boundaries, so a late-night
+ *     NBA game on date D in ET often lands on D+1 in NZ/EU calendars
+ *     (and vice-versa).
+ *   • The intent parser can mis-pick between "today" and "tomorrow" when
+ *     the user's phrasing is ambiguous.
+ */
 function dateRangeForHint(
   hint: ParsedIntent["dateHint"],
-  now: Date,
+  todayIsoLocal: string,
 ): { start: Date; end: Date } {
-  const start = new Date(now);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
+  const today = ymdToDate(todayIsoLocal);
+  const start = new Date(today);
+  const end = new Date(today);
   switch (hint) {
     case "today":
-      end.setHours(23, 59, 59, 999);
+      start.setUTCDate(start.getUTCDate() - 1);
+      end.setUTCDate(end.getUTCDate() + 1);
       break;
     case "tomorrow":
-      start.setDate(start.getDate() + 1);
-      end.setDate(start.getDate());
-      end.setHours(23, 59, 59, 999);
+      // Today … day-after-tomorrow (covers ET-boundary drift).
+      end.setUTCDate(end.getUTCDate() + 2);
       break;
     case "this-weekend":
-      // Cover today → next Sunday inclusive.
-      end.setDate(start.getDate() + 6);
+      end.setUTCDate(end.getUTCDate() + 7);
       break;
     case "next-7-days":
-      end.setDate(start.getDate() + 7);
+      end.setUTCDate(end.getUTCDate() + 7);
       break;
     case "past":
-      start.setDate(start.getDate() - 7);
-      end.setHours(23, 59, 59, 999);
+      start.setUTCDate(start.getUTCDate() - 7);
+      end.setUTCDate(end.getUTCDate() + 1);
       break;
     case "unknown":
     default:
-      // Broad window so we still find the fixture.
-      start.setDate(start.getDate() - 1);
-      end.setDate(start.getDate() + 7);
+      start.setUTCDate(start.getUTCDate() - 1);
+      end.setUTCDate(end.getUTCDate() + 7);
       break;
   }
+  return { start, end };
+}
+
+/** Fallback window when the narrow search misses — spans most of the week. */
+function wideRange(todayIsoLocal: string): { start: Date; end: Date } {
+  const today = ymdToDate(todayIsoLocal);
+  const start = new Date(today);
+  const end = new Date(today);
+  start.setUTCDate(start.getUTCDate() - 4);
+  end.setUTCDate(end.getUTCDate() + 9);
   return { start, end };
 }
 
@@ -463,6 +510,7 @@ function buildResearchPrompt(
   realData: BettingRealData | null,
   todayIso: string,
   calibration: string,
+  timezone: string | null,
 ): string {
   const stageList = BETTING_STAGES.map((s) => `  - ${s.id}: ${s.label}`).join(
     "\n",
@@ -484,8 +532,10 @@ function buildResearchPrompt(
 real-world data below — never contradict it, never invent stats, teams,
 players or dates that contradict the verified block.
 
-TODAY'S REAL-WORLD DATE: ${todayIso}. If the user says "tomorrow", that is
-literally the day after ${todayIso}. Do NOT reason as if it were 2023.
+TODAY'S REAL-WORLD DATE (in the user's local timezone${timezone ? ` — ${timezone}` : ""}): ${todayIso}.
+If the user says "tomorrow", that is literally the day after ${todayIso} in
+${timezone ?? "their local"} time. Do NOT reason as if it were 2023 or any
+other year.
 
 ${calibration ? `${calibration}\n\n` : ""}${fixtureLine}
 
@@ -696,8 +746,14 @@ export async function POST(request: NextRequest) {
       ? null
       : Number(body.bankroll);
 
-  const now = new Date();
-  const todayIso = now.toISOString().slice(0, 10);
+  const clientTimezone =
+    typeof body.timezone === "string" && body.timezone.trim()
+      ? body.timezone.trim()
+      : null;
+  // "Today" and "tomorrow" are resolved in the user's IANA timezone so an
+  // Auckland bettor saying "tomorrow" doesn't collide with Vercel's UTC
+  // idea of tomorrow.
+  const todayIso = userTodayIso(clientTimezone);
 
   // Pull this user's historical calibration so we can feed it back to the
   // model (self-improvement loop). Best-effort — if auth or DB lookup fails
@@ -744,6 +800,7 @@ export async function POST(request: NextRequest) {
         apiKey,
         query,
         todayIso,
+        clientTimezone,
       );
 
       const sport = sportFromHint(`${intent.sport} ${query}`);
@@ -773,13 +830,48 @@ export async function POST(request: NextRequest) {
       let realData: BettingRealData | null = null;
 
       if (sport && teamHint) {
-        const { start, end } = dateRangeForHint(intent.dateHint, now);
+        const { start, end } = dateRangeForHint(intent.dateHint, todayIso);
+        const windowLabel = `${start.toISOString().slice(0, 10)} → ${end.toISOString().slice(0, 10)}`;
+        send({
+          type: "thought",
+          stage: "fixture",
+          text: `Searching ESPN ${sport.label} scoreboard ${windowLabel}${clientTimezone ? ` (your zone: ${clientTimezone})` : ""} for "${teamHint}".`,
+        });
         espnFixture = await findFixture(sport.path, start, end, teamHint);
-        if (espnFixture) {
+
+        // Wide fallback — ESPN uses US Eastern day boundaries and the
+        // dateline can push NZ/EU calendars ±1 day off, so try a broader
+        // window before giving up.
+        if (!espnFixture) {
+          const wide = wideRange(todayIso);
           send({
             type: "thought",
             stage: "fixture",
-            text: `ESPN match: ${espnFixture.awayTeam.displayName} @ ${espnFixture.homeTeam.displayName} — ${new Date(espnFixture.date).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}${espnFixture.venue ? ` — ${espnFixture.venue.fullName}` : ""}.`,
+            text: `No hit in the narrow window — widening to ${wide.start.toISOString().slice(0, 10)} → ${wide.end.toISOString().slice(0, 10)} to absorb timezone drift…`,
+          });
+          espnFixture = await findFixture(
+            sport.path,
+            wide.start,
+            wide.end,
+            teamHint,
+          );
+        }
+
+        if (espnFixture) {
+          const kickoffLabel = clientTimezone
+            ? new Date(espnFixture.date).toLocaleString("en-US", {
+                timeZone: clientTimezone,
+                dateStyle: "medium",
+                timeStyle: "short",
+              })
+            : new Date(espnFixture.date).toLocaleString(undefined, {
+                dateStyle: "medium",
+                timeStyle: "short",
+              });
+          send({
+            type: "thought",
+            stage: "fixture",
+            text: `ESPN match: ${espnFixture.awayTeam.displayName} @ ${espnFixture.homeTeam.displayName} — ${kickoffLabel}${clientTimezone ? ` ${clientTimezone}` : ""}${espnFixture.venue ? ` — ${espnFixture.venue.fullName}` : ""}.`,
           });
           // Emit early fixture card.
           send({
@@ -881,6 +973,7 @@ export async function POST(request: NextRequest) {
         realData,
         todayIso,
         calibrationPrompt,
+        clientTimezone,
       );
 
       let transcript = "";

@@ -247,6 +247,10 @@ export interface BettingChatPayload {
   notes?: string | null;
   /** Optional bankroll (USD) to compute a dollar stake. */
   bankroll?: string | number | null;
+  /** Client's IANA timezone (e.g. "Pacific/Auckland"). Used so "today" and
+   *  "tomorrow" resolve to the user's local calendar day instead of the
+   *  server's UTC day — the difference can be >24h across the dateline. */
+  timezone?: string | null;
 }
 
 /* ── odds math (pure, used on both server and client) ─────────────────── */
