@@ -1534,41 +1534,63 @@ function ThinkingPanel({
         )}
       </div>
 
-      {fixture && (fixture.homeTeam || fixture.awayTeam) ? (
-        <div className="mt-4 rounded-xl border border-amber-500/30 bg-gradient-to-br from-amber-500/10 to-orange-500/5 p-3">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-[10px] font-semibold uppercase tracking-widest text-amber-700 dark:text-amber-300">
-                Fixture identified
-              </p>
-              <p className="mt-0.5 truncate text-sm font-bold text-foreground">
-                {fixture.homeTeam} vs {fixture.awayTeam}
-              </p>
-              <p className="truncate text-[11px] text-muted-foreground">
-                {fixture.competition || "competition tbd"}
-              </p>
-              <div className="mt-1 flex flex-wrap items-center gap-3 text-[10px] text-muted-foreground">
-                {fixture.kickoffIso ? (
-                  <span className="inline-flex items-center gap-1">
-                    <CalendarClock className="h-3 w-3" />
-                    {new Date(fixture.kickoffIso).toLocaleString(undefined, {
-                      dateStyle: "medium",
-                      timeStyle: "short",
-                    })}
-                  </span>
-                ) : null}
-                {fixture.venue ? (
-                  <span className="inline-flex items-center gap-1">
-                    <MapPin className="h-3 w-3" />
-                    {fixture.venue}
-                  </span>
-                ) : null}
+      {(() => {
+        // Defensive guard: never render the "Fixture identified" card unless
+        // we have two real team names. Filters the literal-"null" / "n/a"
+        // strings some LLMs emit for unknown fields.
+        const badStr = (s: string | null | undefined) =>
+          !s ||
+          /^(null|n\/a|na|none|tbd|tba|unknown|undefined)$/i.test(s.trim());
+        if (!fixture || badStr(fixture.homeTeam) || badStr(fixture.awayTeam)) {
+          return null;
+        }
+        const kickoffDate = fixture.kickoffIso
+          ? new Date(fixture.kickoffIso)
+          : null;
+        const validKickoff =
+          kickoffDate && !Number.isNaN(kickoffDate.getTime())
+            ? kickoffDate
+            : null;
+        const cleanVenue = badStr(fixture.venue) ? null : fixture.venue;
+        const cleanCompetition = badStr(fixture.competition)
+          ? null
+          : fixture.competition;
+        return (
+          <div className="mt-4 rounded-xl border border-amber-500/30 bg-gradient-to-br from-amber-500/10 to-orange-500/5 p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-amber-700 dark:text-amber-300">
+                  Fixture identified
+                </p>
+                <p className="mt-0.5 truncate text-sm font-bold text-foreground">
+                  {fixture.homeTeam} vs {fixture.awayTeam}
+                </p>
+                <p className="truncate text-[11px] text-muted-foreground">
+                  {cleanCompetition || "competition tbd"}
+                </p>
+                <div className="mt-1 flex flex-wrap items-center gap-3 text-[10px] text-muted-foreground">
+                  {validKickoff ? (
+                    <span className="inline-flex items-center gap-1">
+                      <CalendarClock className="h-3 w-3" />
+                      {validKickoff.toLocaleString(undefined, {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                      })}
+                    </span>
+                  ) : null}
+                  {cleanVenue ? (
+                    <span className="inline-flex items-center gap-1">
+                      <MapPin className="h-3 w-3" />
+                      {cleanVenue}
+                    </span>
+                  ) : null}
+                </div>
               </div>
+              <Zap className="h-5 w-5 shrink-0 text-amber-500" />
             </div>
-            <Zap className="h-5 w-5 shrink-0 text-amber-500" />
           </div>
-        </div>
-      ) : null}
+        );
+      })()}
 
       <div
         ref={logRef}

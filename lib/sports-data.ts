@@ -49,6 +49,33 @@ export function sportFromHint(hint: string): SportKey | null {
   return null;
 }
 
+/** Every soccer league ESPN exposes, in popularity order. Used when the
+ *  parser only knows "Soccer" generically — we probe each one and keep
+ *  the league that actually contains the requested fixture. */
+const SOCCER_LEAGUES: SportKey[] = SPORT_PATHS.filter((s) =>
+  s.path.startsWith("soccer/"),
+).map((s) => ({ path: s.path, label: s.label }));
+
+/**
+ * Return every candidate league we should probe for this request. Unlike
+ * `sportFromHint`, we never give up: when the LLM only knows "soccer" /
+ * "football" generically we fan out to all soccer leagues. If the hint
+ * contains no sport signal at all we still return [] so callers can fall
+ * back to qualitative mode cleanly.
+ */
+export function sportCandidatesFromHint(hint: string): SportKey[] {
+  const matched = SPORT_PATHS.filter((s) => s.match.test(hint)).map((s) => ({
+    path: s.path,
+    label: s.label,
+  }));
+  if (matched.length > 0) return matched;
+
+  if (/\b(soccer|football|futbol|fútbol|association football)\b/i.test(hint)) {
+    return SOCCER_LEAGUES;
+  }
+  return [];
+}
+
 export type EspnTeamLite = {
   id: string;
   displayName: string;

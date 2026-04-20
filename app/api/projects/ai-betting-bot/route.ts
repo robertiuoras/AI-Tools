@@ -26,11 +26,13 @@ import {
   getTeamInjuries,
   getTeamStyle,
   restDaysBefore,
+  sportCandidatesFromHint,
   sportFromHint,
   streakString,
   type EspnFixture,
   type EspnPastGame,
   type EspnInjury,
+  type SportKey,
 } from "@/lib/sports-data";
 import {
   buildCalibrationSummary,
@@ -1026,13 +1028,28 @@ export async function POST(request: NextRequest) {
         clientTimezone,
       );
 
-      const sport = sportFromHint(`${intent.sport} ${query}`);
+      // Candidate leagues to probe. If the LLM only knew "Soccer"/"football"
+      // we fan out to every soccer league rather than giving up.
+      const sportCandidates = sportCandidatesFromHint(
+        `${intent.sport} ${query}`,
+      );
+      // Headline sport: take the first specific league if any, else try to
+      // map from the intent alone, else null. Used only for labels/logs.
+      let sport: ReturnType<typeof sportFromHint> =
+        sportCandidates[0] ?? sportFromHint(`${intent.sport} ${query}`);
       const teamHint = intent.teams.join(" ") || intent.pickSide;
 
       send({
         type: "thought",
         stage: "parse",
-        text: `Detected ${sport?.label ?? (intent.sport || "sport unknown")} · teams: ${intent.teams.join(" & ") || "(unresolved)"} · when: ${intent.dateHint}.`,
+        text: `Detected ${sport?.label ?? (intent.sport || "sport unknown")}${
+          sportCandidates.length > 1
+            ? ` (probing ${sportCandidates.length} leagues: ${sportCandidates
+                .map((c) => c.label)
+                .slice(0, 4)
+                .join(", ")}${sportCandidates.length > 4 ? ", …" : ""})`
+            : ""
+        } · teams: ${intent.teams.join(" & ") || "(unresolved)"} · when: ${intent.dateHint}.`,
       });
 
       // Stage 2 — fixture lookup via ESPN.
@@ -1052,43 +1069,73 @@ export async function POST(request: NextRequest) {
       let espnFixture: EspnFixture | null = null;
       let realData: BettingRealData | null = null;
 
-      if (sport && teamHint) {
+      if (sportCandidates.length > 0 && teamHint) {
         const { start, end } = dateRangeForHint(intent.dateHint, todayIso);
         const windowLabel = `${start.toISOString().slice(0, 10)} → ${end.toISOString().slice(0, 10)}`;
+        const preferredIso = ymdToDate(todayIso).toISOString();
+
         send({
           type: "thought",
           stage: "fixture",
-          text: `Searching ESPN ${sport.label} scoreboard ${windowLabel}${clientTimezone ? ` (your zone: ${clientTimezone})` : ""} for "${teamHint}".`,
+          text: `Searching ESPN ${sportCandidates.length === 1 ? sportCandidates[0]!.label : `${sportCandidates.length} leagues`} ${windowLabel}${clientTimezone ? ` (your zone: ${clientTimezone})` : ""} for "${teamHint}".`,
         });
-        espnFixture = await findFixture(
-          sport.path,
-          start,
-          end,
-          teamHint,
-          intent.teams,
-          ymdToDate(todayIso).toISOString(),
-        );
+
+        // Probe every candidate league in parallel. The first match where
+        // BOTH teams line up wins (findFixture already enforces that when
+        // intent.teams has 2 entries).
+        const probeOnce = async (
+          window: { start: Date; end: Date },
+        ): Promise<{ sport: SportKey; fixture: EspnFixture } | null> => {
+          const results = await Promise.all(
+            sportCandidates.map(async (cand) => {
+              const fx = await findFixture(
+                cand.path,
+                window.start,
+                window.end,
+                teamHint,
+                intent.teams,
+                preferredIso,
+              );
+              return fx ? { sport: cand, fixture: fx } : null;
+            }),
+          );
+          const hits = results.filter(
+            (r): r is { sport: SportKey; fixture: EspnFixture } => r !== null,
+          );
+          if (hits.length === 0) return null;
+          // Closest to today wins when multiple leagues match (rare — same
+          // two team names across competitions).
+          hits.sort((a, b) => {
+            const ta = new Date(a.fixture.date).getTime();
+            const tb = new Date(b.fixture.date).getTime();
+            const ref = new Date(preferredIso).getTime();
+            return Math.abs(ta - ref) - Math.abs(tb - ref);
+          });
+          return hits[0]!;
+        };
+
+        let hit = await probeOnce({ start, end });
 
         // Wide fallback — ESPN uses US Eastern day boundaries and the
         // dateline can push NZ/EU calendars ±1 day off, so try a broader
         // window before giving up. Also picks up the next occurrence when
         // the user named a matchup without a date (e.g. "Crystal Palace vs
         // West Ham, both teams to score").
-        if (!espnFixture) {
+        if (!hit) {
           const wide = wideRange(todayIso);
           send({
             type: "thought",
             stage: "fixture",
             text: `No hit in the narrow window — widening to ${wide.start.toISOString().slice(0, 10)} → ${wide.end.toISOString().slice(0, 10)} to find the next scheduled meeting…`,
           });
-          espnFixture = await findFixture(
-            sport.path,
-            wide.start,
-            wide.end,
-            teamHint,
-            intent.teams,
-            ymdToDate(todayIso).toISOString(),
-          );
+          hit = await probeOnce(wide);
+        }
+
+        if (hit) {
+          espnFixture = hit.fixture;
+          // Lock in the resolved league as the canonical "sport" going
+          // forward (labels, calibration, collectRealData path, etc.).
+          sport = hit.sport;
         }
 
         if (espnFixture) {
@@ -1387,23 +1434,33 @@ export async function POST(request: NextRequest) {
             const jsonPart = line.slice("FIXTURE::".length).trim();
             try {
               const raw = JSON.parse(jsonPart) as Partial<BettingFixture>;
+              const cleanStr = (v: unknown): string => {
+                if (typeof v !== "string") return "";
+                const t = v.trim();
+                // LLMs sometimes emit the literal string "null" / "n/a" /
+                // "tbd" for unknown fields — treat those as empty.
+                if (!t) return "";
+                if (/^(null|n\/a|na|none|tbd|tba|unknown|undefined)$/i.test(t))
+                  return "";
+                return t;
+              };
+              const iso = cleanStr(raw.kickoffIso);
+              const kickoffIso =
+                iso && !Number.isNaN(new Date(iso).getTime()) ? iso : null;
               const fx: BettingFixture = {
-                homeTeam: String(raw.homeTeam ?? "").trim(),
-                awayTeam: String(raw.awayTeam ?? "").trim(),
-                competition: String(raw.competition ?? "").trim(),
-                kickoffIso:
-                  typeof raw.kickoffIso === "string" && raw.kickoffIso.trim()
-                    ? raw.kickoffIso.trim()
-                    : null,
-                venue:
-                  typeof raw.venue === "string" && raw.venue.trim()
-                    ? raw.venue.trim()
-                    : null,
+                homeTeam: cleanStr(raw.homeTeam),
+                awayTeam: cleanStr(raw.awayTeam),
+                competition: cleanStr(raw.competition),
+                kickoffIso,
+                venue: cleanStr(raw.venue) || null,
               };
               if (fx.homeTeam && fx.awayTeam) {
                 fixtureEvt = fx;
-                // Only re-emit if we didn't already send a fixture from ESPN.
-                if (!espnFixture) {
+                // Only re-emit if we didn't already send a fixture from
+                // ESPN AND the LLM's fixture actually carries usable data.
+                // Otherwise we'd show a card that reads "null / Invalid
+                // Date / null" — which is what the user reported.
+                if (!espnFixture && (fx.kickoffIso || fx.venue)) {
                   send({ type: "fixture", fixture: fx });
                 }
               }
