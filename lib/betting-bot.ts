@@ -148,6 +148,55 @@ export interface BettingFixture {
   venue: string | null;
 }
 
+/** Bundle of real, third-party-sourced context the UI renders alongside the
+ *  analysis. `null` here means "we couldn't fetch — treat the analysis as
+ *  qualitative". */
+export interface BettingRealDataPlayer {
+  name: string;
+  position: string | null;
+  status: string;
+  detail: string;
+  headshot: string | null;
+}
+
+export interface BettingRealDataTeam {
+  id: string;
+  displayName: string;
+  abbreviation: string;
+  logo: string | null;
+  record: string | null;
+  last10Streak: string;
+  pointsForAvg: number | null;
+  pointsAgainstAvg: number | null;
+  wins10: number;
+  losses10: number;
+  injuries: BettingRealDataPlayer[];
+  recentGames: Array<{
+    date: string;
+    opponentName: string;
+    opponentAbbr: string;
+    opponentLogo: string | null;
+    homeAway: "home" | "away";
+    teamScore: number | null;
+    oppScore: number | null;
+    result: "W" | "L" | "T" | null;
+  }>;
+}
+
+export interface BettingRealData {
+  source: "espn" | "none";
+  sportLabel: string | null;
+  homeTeam: BettingRealDataTeam | null;
+  awayTeam: BettingRealDataTeam | null;
+  marketOdds: {
+    provider: string | null;
+    spread: number | null;
+    overUnder: number | null;
+    homeMoneyline: number | null;
+    awayMoneyline: number | null;
+  } | null;
+}
+
 export interface BettingAnalysisResult {
   fixture: BettingFixture | null;
   pickSummary: string;
@@ -158,14 +207,14 @@ export interface BettingAnalysisResult {
   verdictLabel: string;
   verdictRationale: string;
   fairWinProbabilityPct: number;
-  bookImpliedProbabilityPct: number;
-  edgePct: number;
+  bookImpliedProbabilityPct: number | null;
+  edgePct: number | null;
   kelly: {
     fullPct: number;
     halfPct: number;
     quarterPct: number;
     recommendedStakeUsd: number | null;
-  };
+  } | null;
   confidencePct: number;
   confidenceBin: "low" | "moderate" | "high" | "elite";
   compositeScore: number;
@@ -173,6 +222,11 @@ export interface BettingAnalysisResult {
   summary: string;
   risks: string[];
   informationGaps: string[];
+  /** Real third-party data used to ground the analysis. */
+  realData: BettingRealData | null;
+  /** Set when the user didn't supply odds and we couldn't resolve them from
+   *  the fixture source. Edge/Kelly are null in this case. */
+  oddsMissing: boolean;
   generatedAt: string;
   cost: {
     model: string;

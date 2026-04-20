@@ -46,6 +46,7 @@ import {
   type BettingAnalysisResult,
   type BettingFixture,
   type BettingMetricScore,
+  type BettingRealDataTeam,
   type BettingStreamEvent,
   type ParsedOdds,
 } from "@/lib/betting-bot";
@@ -64,6 +65,24 @@ function fmt$(n: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(n);
+}
+/** Dollar formatter that keeps precision for tiny OpenAI costs ($0.0023). */
+function fmtCost(n: number): string {
+  if (!Number.isFinite(n)) return "$0";
+  if (n === 0) return "$0";
+  if (n < 0.01) return `$${n.toFixed(4)}`;
+  if (n < 1) return `$${n.toFixed(3)}`;
+  return fmt$(n);
+}
+function fmtGameDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    });
+  } catch {
+    return iso.slice(0, 10);
+  }
 }
 
 const VERDICT_STYLES: Record<
@@ -200,7 +219,7 @@ function ConfidenceGauge({ value }: { value: number }) {
   const span = endAngle - startAngle;
   const valueAngle = startAngle + (span * clamped) / 100;
   const cx = 110;
-  const cy = 110;
+  const cy = 120;
   const r = 82;
   const colour =
     clamped >= 72
@@ -212,26 +231,26 @@ function ConfidenceGauge({ value }: { value: number }) {
           : "#94a3b8";
 
   return (
-    <div className="relative mx-auto flex w-full max-w-[240px] flex-col items-center">
-      <svg viewBox="0 0 220 180" className="w-full">
+    <div className="relative mx-auto flex w-full max-w-[260px] flex-col items-center">
+      <svg viewBox="0 0 220 200" className="w-full">
         <defs>
           <linearGradient id="gauge-fg" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor={colour} stopOpacity="0.7" />
+            <stop offset="0%" stopColor={colour} stopOpacity="0.75" />
             <stop offset="100%" stopColor={colour} />
           </linearGradient>
         </defs>
         <path
           d={arcPath(cx, cy, r, startAngle, endAngle)}
           stroke="currentColor"
-          strokeOpacity="0.14"
-          strokeWidth="14"
+          strokeOpacity="0.16"
+          strokeWidth="16"
           fill="none"
           strokeLinecap="round"
         />
         <path
           d={arcPath(cx, cy, r, startAngle, valueAngle)}
           stroke="url(#gauge-fg)"
-          strokeWidth="14"
+          strokeWidth="16"
           fill="none"
           strokeLinecap="round"
         />
@@ -247,7 +266,7 @@ function ConfidenceGauge({ value }: { value: number }) {
               x2={p2.x}
               y2={p2.y}
               stroke="currentColor"
-              strokeOpacity={i % 5 === 0 ? 0.5 : 0.2}
+              strokeOpacity={i % 5 === 0 ? 0.55 : 0.22}
               strokeWidth={i % 5 === 0 ? 2 : 1}
             />
           );
@@ -257,32 +276,317 @@ function ConfidenceGauge({ value }: { value: number }) {
             x1={cx}
             y1={cy}
             x2={cx}
-            y2={cy - r + 10}
+            y2={cy - r + 12}
             stroke={colour}
             strokeWidth="3"
             strokeLinecap="round"
           />
-          <circle cx={cx} cy={cy} r="6" fill={colour} />
+          <circle cx={cx} cy={cy} r="6.5" fill={colour} />
         </g>
+        {/* Large, high-contrast value + unit, sitting under the dial */}
         <text
           x={cx}
-          y={cy + 20}
+          y={cy - 10}
           textAnchor="middle"
           className="fill-foreground"
-          style={{ fontSize: 26, fontWeight: 800 }}
+          style={{ fontSize: 48, fontWeight: 900, letterSpacing: -1 }}
         >
           {clamped.toFixed(0)}
+          <tspan
+            dx="2"
+            style={{ fontSize: 18, fontWeight: 700 }}
+            className="fill-muted-foreground"
+          >
+            %
+          </tspan>
         </text>
         <text
           x={cx}
-          y={cy + 38}
+          y={cy + 10}
           textAnchor="middle"
           className="fill-muted-foreground"
-          style={{ fontSize: 10, letterSpacing: 2 }}
+          style={{ fontSize: 10, letterSpacing: 3, fontWeight: 700 }}
         >
           CONFIDENCE
         </text>
       </svg>
+    </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/*  Real-data (ESPN) components                                               */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+function TeamHeader({
+  team,
+  side,
+}: {
+  team: BettingRealDataTeam;
+  side: "Home" | "Away";
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-background/60 ring-1 ring-border/60">
+        {team.logo ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={team.logo}
+            alt={team.displayName}
+            className="h-9 w-9 object-contain"
+            loading="lazy"
+            referrerPolicy="no-referrer"
+          />
+        ) : (
+          <span className="text-xs font-black text-muted-foreground">
+            {team.abbreviation || "?"}
+          </span>
+        )}
+      </div>
+      <div className="min-w-0">
+        <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+          {side}
+        </p>
+        <p className="truncate text-sm font-bold text-foreground">
+          {team.displayName}
+        </p>
+        <p className="text-[11px] text-muted-foreground">
+          {team.record ?? "record n/a"} · last-10{" "}
+          <span className="font-mono font-semibold text-foreground/80">
+            {team.last10Streak || "—"}
+          </span>
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function streakToColor(ch: string) {
+  if (ch === "W") return "bg-emerald-500/80 text-white";
+  if (ch === "L") return "bg-rose-500/80 text-white";
+  if (ch === "T") return "bg-amber-500/80 text-white";
+  return "bg-muted text-muted-foreground";
+}
+
+function FormStrip({ streak }: { streak: string }) {
+  const chars = streak.padEnd(10, " ").slice(0, 10).split("");
+  return (
+    <div className="flex gap-1">
+      {chars.map((c, i) => (
+        <span
+          key={i}
+          className={cn(
+            "flex h-5 w-5 items-center justify-center rounded text-[10px] font-black",
+            streakToColor(c.trim()),
+          )}
+        >
+          {c.trim() || "·"}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function InjuryList({
+  team,
+}: {
+  team: BettingRealDataTeam;
+}) {
+  if (!team.injuries.length) {
+    return (
+      <p className="rounded-lg border border-border/40 bg-background/40 px-3 py-2 text-[11px] text-muted-foreground">
+        No injuries listed.
+      </p>
+    );
+  }
+  return (
+    <ul className="space-y-2">
+      {team.injuries.map((p) => {
+        const status = p.status.toLowerCase();
+        const toneBg =
+          status.includes("out") || status.includes("ir") || status.includes("suspended")
+            ? "bg-rose-500/10 text-rose-600 dark:text-rose-300 border-rose-500/30"
+            : status.includes("question") ||
+                status.includes("probable") ||
+                status.includes("doubt")
+              ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30"
+              : status.includes("day")
+                ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30"
+                : "bg-slate-500/10 text-slate-600 dark:text-slate-300 border-slate-500/30";
+        return (
+          <li
+            key={p.name + p.status}
+            className="flex items-start gap-2.5 rounded-lg border border-border/40 bg-background/40 p-2.5"
+          >
+            <div className="h-10 w-10 shrink-0 overflow-hidden rounded-full bg-muted ring-1 ring-border/50">
+              {p.headshot ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={p.headshot}
+                  alt={p.name}
+                  className="h-full w-full object-cover"
+                  loading="lazy"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center text-[10px] font-bold text-muted-foreground">
+                  {p.name
+                    .split(" ")
+                    .map((w) => w[0])
+                    .slice(0, 2)
+                    .join("")}
+                </div>
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <p className="truncate text-[13px] font-semibold text-foreground">
+                  {p.name}
+                </p>
+                {p.position ? (
+                  <span className="rounded bg-muted px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide text-muted-foreground">
+                    {p.position}
+                  </span>
+                ) : null}
+                <span
+                  className={cn(
+                    "rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide",
+                    toneBg,
+                  )}
+                >
+                  {p.status}
+                </span>
+              </div>
+              {p.detail ? (
+                <p className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground">
+                  {p.detail}
+                </p>
+              ) : null}
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function RecentGamesList({ team }: { team: BettingRealDataTeam }) {
+  if (!team.recentGames.length) {
+    return (
+      <p className="rounded-lg border border-border/40 bg-background/40 px-3 py-2 text-[11px] text-muted-foreground">
+        No recent games found.
+      </p>
+    );
+  }
+  return (
+    <ul className="space-y-1">
+      {team.recentGames.slice(0, 10).map((g) => {
+        const tone =
+          g.result === "W"
+            ? "text-emerald-600 dark:text-emerald-400 border-emerald-500/40 bg-emerald-500/5"
+            : g.result === "L"
+              ? "text-rose-600 dark:text-rose-400 border-rose-500/40 bg-rose-500/5"
+              : "text-muted-foreground border-border/40 bg-background/40";
+        return (
+          <li
+            key={g.date + g.opponentAbbr}
+            className={cn(
+              "flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-[12px]",
+              tone,
+            )}
+          >
+            <span className="inline-flex items-center gap-2">
+              <span className="inline-flex h-5 w-5 items-center justify-center rounded bg-background/70 text-[9px] font-black ring-1 ring-border/40">
+                {g.result ?? "·"}
+              </span>
+              <span className="font-mono text-[11px] text-muted-foreground">
+                {fmtGameDate(g.date)}
+              </span>
+              <span className="text-muted-foreground">
+                {g.homeAway === "home" ? "vs" : "@"}
+              </span>
+              {g.opponentLogo ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={g.opponentLogo}
+                  alt={g.opponentName}
+                  className="h-4 w-4 object-contain"
+                  loading="lazy"
+                  referrerPolicy="no-referrer"
+                />
+              ) : null}
+              <span className="font-semibold">{g.opponentAbbr}</span>
+            </span>
+            <span className="font-mono tabular-nums">
+              {g.teamScore ?? "–"}
+              <span className="mx-0.5 text-muted-foreground">·</span>
+              {g.oppScore ?? "–"}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function TeamDataPanel({
+  team,
+  side,
+}: {
+  team: BettingRealDataTeam;
+  side: "Home" | "Away";
+}) {
+  return (
+    <div className="flex flex-col gap-4 rounded-2xl border border-border/60 bg-card/40 p-4">
+      <TeamHeader team={team} side={side} />
+
+      <div className="grid grid-cols-3 gap-2 rounded-xl border border-border/40 bg-background/40 p-3 text-center">
+        <div>
+          <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">
+            L10
+          </p>
+          <p className="text-sm font-black tabular-nums">
+            {team.wins10}-{team.losses10}
+          </p>
+        </div>
+        <div>
+          <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">
+            For avg
+          </p>
+          <p className="text-sm font-black tabular-nums">
+            {team.pointsForAvg ?? "—"}
+          </p>
+        </div>
+        <div>
+          <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">
+            Allowed
+          </p>
+          <p className="text-sm font-black tabular-nums">
+            {team.pointsAgainstAvg ?? "—"}
+          </p>
+        </div>
+      </div>
+
+      <div>
+        <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+          Last 10
+        </p>
+        <FormStrip streak={team.last10Streak} />
+      </div>
+
+      <div>
+        <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+          Injuries
+        </p>
+        <InjuryList team={team} />
+      </div>
+
+      <div>
+        <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+          Recent games
+        </p>
+        <RecentGamesList team={team} />
+      </div>
     </div>
   );
 }
@@ -1207,9 +1511,14 @@ export default function AiBettingBotPage() {
                   <div className="min-w-0">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
                       Fixture
+                      {result.realData?.source === "espn" ? (
+                        <span className="ml-2 inline-flex items-center gap-1 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">
+                          <CheckCircle2 className="h-2.5 w-2.5" /> Verified · ESPN
+                        </span>
+                      ) : null}
                     </p>
                     <h2 className="mt-1 text-xl font-bold md:text-2xl">
-                      {result.fixture.homeTeam} vs {result.fixture.awayTeam}
+                      {result.fixture.awayTeam} @ {result.fixture.homeTeam}
                     </h2>
                     <p className="mt-0.5 text-sm text-muted-foreground">
                       {result.fixture.competition}
@@ -1236,13 +1545,74 @@ export default function AiBettingBotPage() {
                             result.oddsUsed.american > 0 ? "+" : ""
                           }${result.oddsUsed.american})`
                         : ""}
-                      {result.oddsSource === "estimated-market" ? (
+                      {result.oddsMissing ? (
                         <span className="ml-1 rounded bg-amber-500/15 px-1 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-300">
-                          est · verify on betcha.co.nz
+                          odds needed
                         </span>
                       ) : null}
                     </p>
                   </div>
+                </div>
+              </section>
+            ) : null}
+
+            {/* Missing-odds banner */}
+            {result.oddsMissing ? (
+              <section className="flex items-start gap-3 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm">
+                <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
+                <div className="min-w-0 space-y-1">
+                  <p className="font-bold text-amber-800 dark:text-amber-200">
+                    Add odds to price the edge
+                  </p>
+                  <p className="text-[13px] leading-relaxed text-amber-900/80 dark:text-amber-100/80">
+                    Edge and Kelly stake can&apos;t be computed without a
+                    concrete price. Check the exact line on{" "}
+                    <a
+                      href="https://betcha.co.nz"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-semibold underline underline-offset-2"
+                    >
+                      betcha.co.nz
+                    </a>
+                    , then paste it into the Extras → Odds field above
+                    (decimal works, e.g. <code>1.91</code>). The fair
+                    probability, metrics and real-data panels below are
+                    still accurate.
+                  </p>
+                </div>
+              </section>
+            ) : null}
+
+            {/* Real data panels (ESPN-sourced) */}
+            {result.realData?.source === "espn" &&
+            (result.realData.homeTeam || result.realData.awayTeam) ? (
+              <section aria-labelledby="real-data-heading" className="space-y-4">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="h-5 w-5 text-emerald-500" />
+                  <h2
+                    id="real-data-heading"
+                    className="text-lg font-bold tracking-tight"
+                  >
+                    Verified data · injuries, form & recent games
+                  </h2>
+                  <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-300">
+                    ESPN
+                  </span>
+                </div>
+                <div className="grid gap-4 md:grid-cols-2">
+                  {result.realData.awayTeam ? (
+                    <TeamDataPanel
+                      team={result.realData.awayTeam}
+                      side="Away"
+                    />
+                  ) : null}
+                  {result.realData.homeTeam ? (
+                    <TeamDataPanel
+                      team={result.realData.homeTeam}
+                      side="Home"
+                    />
+                  ) : null}
                 </div>
               </section>
             ) : null}
@@ -1295,9 +1665,19 @@ export default function AiBettingBotPage() {
                   />
                   <MiniStat
                     label="Edge vs book"
-                    value={`${result.edgePct > 0 ? "+" : ""}${fmtPct(result.edgePct)}`}
+                    value={
+                      result.edgePct === null
+                        ? "—"
+                        : `${result.edgePct > 0 ? "+" : ""}${fmtPct(result.edgePct)}`
+                    }
                     icon={Scale}
-                    tone={result.edgePct > 0 ? "positive" : "negative"}
+                    tone={
+                      result.edgePct === null
+                        ? "neutral"
+                        : result.edgePct > 0
+                          ? "positive"
+                          : "negative"
+                    }
                   />
                   <MiniStat
                     label="Composite"
@@ -1307,12 +1687,19 @@ export default function AiBettingBotPage() {
                   />
                 </div>
 
-                <div className="mt-6">
-                  <EdgeBar
-                    fair={result.fairWinProbabilityPct}
-                    book={result.bookImpliedProbabilityPct}
-                  />
-                </div>
+                {result.bookImpliedProbabilityPct !== null ? (
+                  <div className="mt-6">
+                    <EdgeBar
+                      fair={result.fairWinProbabilityPct}
+                      book={result.bookImpliedProbabilityPct}
+                    />
+                  </div>
+                ) : (
+                  <div className="mt-6 rounded-xl border border-dashed border-border/50 bg-background/30 p-3 text-[12px] text-muted-foreground">
+                    Edge bar unlocks once you enter the book price. Fair win
+                    probability is calculated from the metrics below.
+                  </div>
+                )}
 
                 {result.verdictRationale ? (
                   <p className="mt-5 rounded-xl border border-border/40 bg-background/30 p-3 text-sm leading-relaxed text-foreground/90">
@@ -1354,37 +1741,46 @@ export default function AiBettingBotPage() {
                     </p>
                     <ShieldCheck className="h-4 w-4 text-muted-foreground/60" />
                   </div>
-                  <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-                    <KellyTile
-                      label="Full"
-                      value={fmtPct(result.kelly.fullPct, 2)}
-                      sub="high variance"
-                    />
-                    <KellyTile
-                      label="Half"
-                      value={fmtPct(result.kelly.halfPct, 2)}
-                      sub="recommended"
-                      emphasis
-                    />
-                    <KellyTile
-                      label="Quarter"
-                      value={fmtPct(result.kelly.quarterPct, 2)}
-                      sub="conservative"
-                    />
-                  </div>
-                  {result.kelly.recommendedStakeUsd !== null ? (
-                    <div className="mt-3 flex items-center justify-between rounded-lg bg-emerald-500/10 px-3 py-2 text-sm">
-                      <span className="font-medium text-emerald-700 dark:text-emerald-300">
-                        Suggested stake (half Kelly)
-                      </span>
-                      <span className="font-black tabular-nums text-emerald-700 dark:text-emerald-300">
-                        {fmt$(result.kelly.recommendedStakeUsd)}
-                      </span>
-                    </div>
+                  {result.kelly ? (
+                    <>
+                      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                        <KellyTile
+                          label="Full"
+                          value={fmtPct(result.kelly.fullPct, 2)}
+                          sub="high variance"
+                        />
+                        <KellyTile
+                          label="Half"
+                          value={fmtPct(result.kelly.halfPct, 2)}
+                          sub="recommended"
+                          emphasis
+                        />
+                        <KellyTile
+                          label="Quarter"
+                          value={fmtPct(result.kelly.quarterPct, 2)}
+                          sub="conservative"
+                        />
+                      </div>
+                      {result.kelly.recommendedStakeUsd !== null ? (
+                        <div className="mt-3 flex items-center justify-between rounded-lg bg-emerald-500/10 px-3 py-2 text-sm">
+                          <span className="font-medium text-emerald-700 dark:text-emerald-300">
+                            Suggested stake (half Kelly)
+                          </span>
+                          <span className="font-black tabular-nums text-emerald-700 dark:text-emerald-300">
+                            {fmt$(result.kelly.recommendedStakeUsd)}
+                          </span>
+                        </div>
+                      ) : (
+                        <p className="mt-3 text-[11px] text-muted-foreground/80">
+                          Add a bankroll above to see a dollar stake — we&apos;ll
+                          use half-Kelly by default.
+                        </p>
+                      )}
+                    </>
                   ) : (
-                    <p className="mt-3 text-[11px] text-muted-foreground/80">
-                      Add a bankroll above to see a dollar stake — we&apos;ll
-                      use half-Kelly by default.
+                    <p className="mt-3 rounded-lg border border-dashed border-border/50 bg-background/30 p-3 text-[11px] text-muted-foreground">
+                      Stake sizing unlocks once you enter odds — Kelly needs a
+                      concrete price.
                     </p>
                   )}
                 </div>
@@ -1518,9 +1914,13 @@ export default function AiBettingBotPage() {
               </div>
               {result.cost ? (
                 <div className="flex items-center gap-3 tabular-nums">
-                  <span>{result.cost.totalTokens} tokens</span>
+                  <span>
+                    {result.cost.totalTokens.toLocaleString()} tokens
+                  </span>
                   <span>·</span>
-                  <span>{fmt$(result.cost.totalCostUsd)}</span>
+                  <span title={`${result.cost.totalCostUsd.toFixed(6)} USD`}>
+                    {fmtCost(result.cost.totalCostUsd)}
+                  </span>
                 </div>
               ) : null}
             </section>

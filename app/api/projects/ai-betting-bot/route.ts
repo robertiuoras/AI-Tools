@@ -9,33 +9,50 @@ import {
   type BettingChatPayload,
   type BettingFixture,
   type BettingMetricScore,
+  type BettingRealData,
+  type BettingRealDataTeam,
   type BettingStreamEvent,
   type BettingVerdict,
   type ParsedOdds,
 } from "@/lib/betting-bot";
+import {
+  averageScore,
+  findFixture,
+  getRecentGames,
+  getTeamInjuries,
+  sportFromHint,
+  streakString,
+  type EspnFixture,
+  type EspnPastGame,
+  type EspnInjury,
+} from "@/lib/sports-data";
 
 /**
- * AI Betting Bot — streaming endpoint
- * -----------------------------------
- * The client posts a natural-language query ("Arsenal over 2.5 goals
- * tomorrow", "LeBron under 24.5 points vs Denver Friday"). We stream the
- * analysis back as SSE so the UI can render a live "AI thinking" log.
+ * AI Betting Bot — streaming endpoint, grounded in ESPN's public sports API
+ * -------------------------------------------------------------------------
+ * Pipeline per request:
  *
- * Flow:
- *   1. Rate limit + input check.
- *   2. Call OpenAI in streaming mode with a structured tag protocol:
- *        STAGE:: <id>
- *        THINK:: <one-sentence research note>
- *      We parse tokens as they arrive and emit per-stage SSE events.
- *   3. The model also emits FIXTURE:: <json> once it resolves teams/date.
- *   4. After the streaming call completes, we run a short non-streaming
- *      json_object call to produce the final structured verdict from the
- *      research transcript. This 2-call design keeps the thinking fluid
- *      while guaranteeing the final payload is valid JSON.
- *   5. Server recomputes edge/Kelly from the odds (provided or estimated)
- *      so the UI never drifts from the math.
+ *   1.  Rate-limit + validate the chat payload.
+ *   2.  Parse the natural-language query with a cheap LLM call into:
+ *         { sport, teams[], dateHint, marketHint, pickSide }
+ *       Today's date is always injected so "tomorrow" means *actual tomorrow*.
+ *   3.  Map sport → ESPN path, then query the scoreboard in a date window
+ *       around the user's hint and fuzzy-match the team name to find the
+ *       real fixture (home team, away team, kickoff, venue, optional odds).
+ *   4.  Pull injuries (per team) and the last 10 completed games (per team)
+ *       from ESPN — same source a professional bettor would open.
+ *   5.  Stream a *grounded* research transcript: the model sees the real
+ *       fixture / injuries / form and is explicitly told NOT to invent
+ *       stats. The UI renders each STAGE::/THINK:: line live.
+ *   6.  Run a non-streaming json_object call to produce the final verdict.
+ *   7.  Server recomputes edge / Kelly only when odds are present; otherwise
+ *       the UI shows a "Add odds to price the edge" state.
+ *
+ * The whole response is SSE (text/event-stream) so the client can light up
+ * stages the moment each piece arrives.
  */
 
+const MODEL_PARSE = "gpt-4o-mini";
 const MODEL_STREAM = "gpt-4o-mini";
 const MODEL_STRUCT = "gpt-4o-mini";
 
@@ -165,16 +182,288 @@ function costFor(
   };
 }
 
-/* ── prompts ──────────────────────────────────────────────────────────── */
+function combineUsage(
+  a: { prompt_tokens?: number; completion_tokens?: number } | undefined,
+  b: { prompt_tokens?: number; completion_tokens?: number } | undefined,
+  c?: { prompt_tokens?: number; completion_tokens?: number },
+): { prompt_tokens?: number; completion_tokens?: number } | undefined {
+  if (!a && !b && !c) return undefined;
+  return {
+    prompt_tokens:
+      (a?.prompt_tokens ?? 0) + (b?.prompt_tokens ?? 0) + (c?.prompt_tokens ?? 0),
+    completion_tokens:
+      (a?.completion_tokens ?? 0) +
+      (b?.completion_tokens ?? 0) +
+      (c?.completion_tokens ?? 0),
+  };
+}
+
+function encodeSse(obj: BettingStreamEvent): Uint8Array {
+  return new TextEncoder().encode(`data: ${JSON.stringify(obj)}\n\n`);
+}
+
+/* ── Intent parser (Call 0) ───────────────────────────────────────────── */
+
+interface ParsedIntent {
+  sport: string;
+  teams: string[];
+  dateHint: "today" | "tomorrow" | "this-weekend" | "next-7-days" | "past" | "unknown";
+  marketHint: string;
+  pickSide: string;
+}
+
+async function parseIntent(
+  apiKey: string,
+  query: string,
+  todayIso: string,
+): Promise<{
+  intent: ParsedIntent;
+  usage?: { prompt_tokens?: number; completion_tokens?: number };
+}> {
+  const prompt = `Today's real-world date is ${todayIso}. Extract the user's betting intent
+from their message. Return JSON only.
+
+Schema:
+{
+  "sport": "NBA|NFL|NHL|MLB|EPL|La Liga|Serie A|Bundesliga|Ligue 1|Champions League|MLS|WNBA|NCAAF|NCAAB|UFC/MMA|Tennis|Soccer|Other",
+  "teams": ["Team A", "Team B optional"],
+  "dateHint": "today" | "tomorrow" | "this-weekend" | "next-7-days" | "past" | "unknown",
+  "marketHint": "short description of the market/line, e.g. 'Over 2.5 goals' or 'Moneyline'",
+  "pickSide": "which side the user is asking about"
+}
+
+User message: "${query.replace(/"/g, '\\"')}"`;
+
+  try {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: MODEL_PARSE,
+        temperature: 0,
+        response_format: { type: "json_object" },
+        max_tokens: 250,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You extract sports-betting intent. Return compact JSON only.",
+          },
+          { role: "user", content: prompt },
+        ],
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      return { intent: fallbackIntent(query) };
+    }
+    const data = (await res.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+      model?: string;
+    };
+    if (data.usage && data.model) {
+      logOpenAIUsage(data.model, "ai_betting_bot_parse", {
+        prompt_tokens: data.usage.prompt_tokens ?? 0,
+        completion_tokens: data.usage.completion_tokens ?? 0,
+        total_tokens:
+          (data.usage.prompt_tokens ?? 0) +
+          (data.usage.completion_tokens ?? 0),
+      });
+    }
+    const raw = data.choices?.[0]?.message?.content ?? "{}";
+    const parsed = JSON.parse(raw) as Partial<ParsedIntent>;
+    return {
+      intent: {
+        sport: String(parsed.sport ?? "Other").trim(),
+        teams: Array.isArray(parsed.teams)
+          ? parsed.teams.map(String).map((s) => s.trim()).filter(Boolean).slice(0, 2)
+          : [],
+        dateHint: (["today", "tomorrow", "this-weekend", "next-7-days", "past", "unknown"].includes(
+          String(parsed.dateHint),
+        )
+          ? parsed.dateHint
+          : "unknown") as ParsedIntent["dateHint"],
+        marketHint: String(parsed.marketHint ?? "").trim() || "Unspecified",
+        pickSide: String(parsed.pickSide ?? "").trim() || "Unspecified",
+      },
+      usage: data.usage,
+    };
+  } catch {
+    return { intent: fallbackIntent(query) };
+  }
+}
+
+function fallbackIntent(query: string): ParsedIntent {
+  return {
+    sport: "Other",
+    teams: [],
+    dateHint: /tomorrow/i.test(query)
+      ? "tomorrow"
+      : /tonight|today/i.test(query)
+        ? "today"
+        : "unknown",
+    marketHint: "Unspecified",
+    pickSide: query,
+  };
+}
+
+function dateRangeForHint(
+  hint: ParsedIntent["dateHint"],
+  now: Date,
+): { start: Date; end: Date } {
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  switch (hint) {
+    case "today":
+      end.setHours(23, 59, 59, 999);
+      break;
+    case "tomorrow":
+      start.setDate(start.getDate() + 1);
+      end.setDate(start.getDate());
+      end.setHours(23, 59, 59, 999);
+      break;
+    case "this-weekend":
+      // Cover today → next Sunday inclusive.
+      end.setDate(start.getDate() + 6);
+      break;
+    case "next-7-days":
+      end.setDate(start.getDate() + 7);
+      break;
+    case "past":
+      start.setDate(start.getDate() - 7);
+      end.setHours(23, 59, 59, 999);
+      break;
+    case "unknown":
+    default:
+      // Broad window so we still find the fixture.
+      start.setDate(start.getDate() - 1);
+      end.setDate(start.getDate() + 7);
+      break;
+  }
+  return { start, end };
+}
+
+/* ── Real-data collection (Steps 3–4) ─────────────────────────────────── */
+
+async function collectRealData(
+  sportPath: string,
+  sportLabel: string,
+  fixture: EspnFixture,
+): Promise<BettingRealData> {
+  const [homeInjuries, awayInjuries, homeGames, awayGames] = await Promise.all([
+    getTeamInjuries(sportPath, fixture.homeTeam.id),
+    getTeamInjuries(sportPath, fixture.awayTeam.id),
+    getRecentGames(sportPath, fixture.homeTeam.id, 10),
+    getRecentGames(sportPath, fixture.awayTeam.id, 10),
+  ]);
+
+  return {
+    source: "espn",
+    sportLabel,
+    homeTeam: toRealDataTeam(fixture.homeTeam, homeInjuries, homeGames),
+    awayTeam: toRealDataTeam(fixture.awayTeam, awayInjuries, awayGames),
+    marketOdds: fixture.odds,
+  };
+}
+
+function toRealDataTeam(
+  team: EspnFixture["homeTeam"],
+  injuries: EspnInjury[],
+  games: EspnPastGame[],
+): BettingRealDataTeam {
+  const avg = averageScore(games);
+  return {
+    id: team.id,
+    displayName: team.displayName,
+    abbreviation: team.abbreviation,
+    logo: team.logo,
+    record: team.record,
+    last10Streak: streakString(games, 10),
+    pointsForAvg: avg.ppg,
+    pointsAgainstAvg: avg.opp,
+    wins10: avg.wins,
+    losses10: avg.losses,
+    injuries: injuries.map((i) => ({
+      name: i.playerName,
+      position: i.position,
+      status: i.status,
+      detail: i.detail,
+      headshot: i.headshot,
+    })),
+    recentGames: games.map((g) => ({
+      date: g.date,
+      opponentName: g.opponent.displayName,
+      opponentAbbr: g.opponent.abbreviation,
+      opponentLogo: g.opponent.logo,
+      homeAway: g.homeAway,
+      teamScore: g.teamScore,
+      oppScore: g.oppScore,
+      result: g.result,
+    })),
+  };
+}
+
+/* ── Prompt builders (use REAL data) ──────────────────────────────────── */
+
+function summariseRealData(data: BettingRealData | null): string {
+  if (!data || (!data.homeTeam && !data.awayTeam)) {
+    return "No live sports data could be fetched for this sport / fixture. Your analysis must rely on general knowledge and clearly flag where specific numbers are unknown.";
+  }
+  const part = (label: string, t: BettingRealDataTeam | null) => {
+    if (!t) return `${label}: (no data)`;
+    const inj = t.injuries.length
+      ? t.injuries
+          .map(
+            (i) =>
+              `${i.name} (${i.position ?? "?"}) — ${i.status}${
+                i.detail ? `: ${i.detail.slice(0, 160)}` : ""
+              }`,
+          )
+          .join("; ")
+      : "no listed injuries";
+    const recent = t.recentGames.length
+      ? t.recentGames
+          .slice(0, 10)
+          .map(
+            (g) =>
+              `${g.date.slice(0, 10)} ${g.homeAway === "home" ? "vs" : "@"} ${g.opponentAbbr}: ${g.teamScore}-${g.oppScore} (${g.result ?? "?"})`,
+          )
+          .join(" | ")
+      : "no recent games";
+    return `${label}: ${t.displayName} (${t.record ?? "record n/a"}) — last-10 ${t.last10Streak || "n/a"}, avg ${t.pointsForAvg ?? "?"} for / ${t.pointsAgainstAvg ?? "?"} against. Injuries: ${inj}. Recent games: ${recent}.`;
+  };
+  const bookLine = data.marketOdds
+    ? `Book odds (${data.marketOdds.provider ?? "ESPN feed"}): spread ${data.marketOdds.spread ?? "n/a"}, total ${data.marketOdds.overUnder ?? "n/a"}, ML home ${data.marketOdds.homeMoneyline ?? "n/a"} / away ${data.marketOdds.awayMoneyline ?? "n/a"}.`
+    : "";
+  return [
+    part("HOME", data.homeTeam),
+    part("AWAY", data.awayTeam),
+    bookLine,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
 
 function buildResearchPrompt(
   query: string,
   userOdds: ParsedOdds | null,
   notes: string,
+  fixture: EspnFixture | null,
+  realData: BettingRealData | null,
+  todayIso: string,
 ): string {
   const stageList = BETTING_STAGES.map((s) => `  - ${s.id}: ${s.label}`).join(
     "\n",
   );
+
+  const fixtureLine = fixture
+    ? `CONFIRMED FIXTURE (from ESPN): ${fixture.awayTeam.displayName} @ ${fixture.homeTeam.displayName} — ${fixture.date} — ${fixture.venue?.fullName ?? "venue tbd"}${fixture.venue?.city ? `, ${fixture.venue.city}` : ""}.`
+    : "NO CONFIRMED FIXTURE — ESPN did not return a match. Do not invent teams, venue or kickoff time.";
 
   const oddsLine = userOdds
     ? `User-supplied odds: ${userOdds.decimal.toFixed(2)} decimal (${
@@ -182,48 +471,46 @@ function buildResearchPrompt(
       }${userOdds.american} American) → book implied ${userOdds.impliedPct.toFixed(
         2,
       )}%.`
-    : "User did NOT supply odds. Estimate the likely market price (assume Betcha.co.nz NZ sportsbook pricing, which tracks Pinnacle/mainstream markets within ~2% juice) and flag that the user should verify the exact price at betcha.co.nz before placing.";
+    : "No odds supplied by the user. Do NOT invent a specific price. State that edge/Kelly cannot be computed without odds and recommend the user check Betcha.co.nz for the real price.";
 
-  return `You are an elite AI sports-betting analyst. The user is describing a bet
-conversationally. Your job is to (a) identify the fixture, (b) research
-the bet using your sports knowledge, and (c) think out loud in a
-structured stream the UI can render live.
+  return `You are an elite AI sports-betting analyst. You are grounded in VERIFIED
+real-world data below — never contradict it, never invent stats, teams,
+players or dates that contradict the verified block.
 
-STRICT OUTPUT PROTOCOL — EVERY LINE MUST FOLLOW ONE OF THESE SHAPES:
+TODAY'S REAL-WORLD DATE: ${todayIso}. If the user says "tomorrow", that is
+literally the day after ${todayIso}. Do NOT reason as if it were 2023.
 
-  STAGE:: <stage-id>
-  THINK:: <one-sentence research note, concrete and quantitative when possible>
-  FIXTURE:: {"homeTeam":"...","awayTeam":"...","competition":"...","kickoffIso":"YYYY-MM-DDTHH:MM:SSZ or null","venue":"... or null"}
+${fixtureLine}
 
-No other output. No bullet points, no markdown, no greetings, no JSON other
-than the single FIXTURE:: line. Every THINK:: must be one sentence.
+REAL DATA (injuries, last-10 games, records) — this is your authoritative
+source. Use specific names and numbers from here when you cite facts.
+${summariseRealData(realData)}
 
-STAGES (emit STAGE:: before the first THINK:: of that section, and only use
-these IDs, in this order — skip a stage only if it is genuinely irrelevant):
-${stageList}
-
-Rules for THINK:: lines:
-  - Cite concrete data when you know it: xG, goals per match, last-5 record,
-    injury names, referee card averages, H2H splits, home/away totals, etc.
-  - When you don't know a number, say "recent form suggests…" or similar —
-    NEVER invent a specific stat you aren't confident about.
-  - Keep each line short (<= 30 words). Emit 2–4 THINK:: lines per stage.
-  - For "odds" stage, reference the pricing information below.
-
-PRICING CONTEXT:
-${oddsLine}
-The user prefers Betcha.co.nz (New Zealand sportsbook). If you reference a
-market price, treat it as indicative — the user will verify on betcha.co.nz.
-
-RESEARCH NOTES FROM USER:
-${notes.trim() || "(none — user relied on you to do the research)"}
+USER NOTES:
+${notes.trim() || "(none)"}
 
 USER QUERY:
 "${query.replace(/"/g, '\\"')}"
 
-Emit FIXTURE:: as soon as you have resolved the teams/date, ideally during
-the "fixture" stage. After the last stage (synthesis), stop — do not emit a
-summary. The next call will produce the structured final report.`;
+${oddsLine}
+
+Emit your research as a STREAM using EXACTLY this protocol, one item per line:
+  STAGE:: <stage-id>        (starts a stage)
+  THINK:: <one sentence>    (a concrete research note — cite specific names /
+                             scores / stats from the real data above)
+  FIXTURE:: {"homeTeam":"...","awayTeam":"...","competition":"...","kickoffIso":"ISO or null","venue":"... or null"}
+
+Rules:
+  - No markdown, no bullets, no greetings.
+  - Emit FIXTURE:: once, immediately during the "fixture" stage, using the
+    CONFIRMED FIXTURE above verbatim if available.
+  - Every THINK:: that claims a stat must come from the real-data block.
+    When the real-data block doesn't have a number, say "no verified data"
+    rather than inventing one.
+  - Emit 2–4 THINK:: per stage, ordered exactly as:
+${stageList}
+
+Stop after STAGE:: synthesis. The next call produces the structured verdict.`;
 }
 
 function buildStructuredPrompt(
@@ -232,6 +519,8 @@ function buildStructuredPrompt(
   fixture: BettingFixture | null,
   parsedOdds: ParsedOdds | null,
   notes: string,
+  realData: BettingRealData | null,
+  todayIso: string,
 ): string {
   const rows = METRIC_FRAMEWORK.map(
     (m) => `- "${m.key}" (weight ${m.weight}/100): ${m.description}`,
@@ -241,61 +530,62 @@ function buildStructuredPrompt(
     ? `User provided odds: ${parsedOdds.decimal.toFixed(2)} decimal (${
         parsedOdds.american > 0 ? "+" : ""
       }${parsedOdds.american} American). Use this as the book price. Do NOT invent a different one.`
-    : `User did NOT provide odds. Estimate a realistic market price (Betcha.co.nz-style, ~2% juice). Put your estimated decimal price in "oddsDecimal" and set "oddsSource" = "estimated-market".`;
+    : `User did NOT provide odds. Set oddsDecimal = null and oddsSource = "unknown". Do NOT invent a market price. Verdict must reflect that edge cannot be priced — set verdict to "pass" UNLESS your fairWinProbability >= 60 AND confidence >= 55 (in which case it can be "lean"). Never "bet"/"strong_bet" without odds.`;
 
-  return `You wrote the research transcript below while analysing a sports bet.
-Now produce the final structured verdict as STRICT JSON.
+  return `Today is ${todayIso}. Produce the final verdict JSON for this bet.
 
 USER QUERY:
 "${query.replace(/"/g, '\\"')}"
 
-USER RESEARCH NOTES:
+USER NOTES:
 ${notes.trim() || "(none)"}
 
 FIXTURE (already resolved):
-${fixture ? JSON.stringify(fixture) : "(not confidently resolved — do your best from the transcript)"}
+${fixture ? JSON.stringify(fixture) : "(not resolved — analysis must be qualitative)"}
+
+REAL DATA CONTEXT:
+${summariseRealData(realData)}
 
 PRICING CONTEXT:
 ${oddsContext}
 
-RESEARCH TRANSCRIPT:
+RESEARCH TRANSCRIPT (your own notes):
 ${transcript.slice(0, 6000)}
 
-METRIC FRAMEWORK — score each on 0–10 (10 = maximum edge FOR the pick,
+METRIC FRAMEWORK — score each 0–10 (10 = maximum edge FOR the pick,
 5 = neutral, 0 = strongly against). Also score data confidence 0–10 per
-metric (how much real data you actually have for it).
+metric (how much real evidence you actually cited).
 
 ${rows}
 
 RULES:
-1. Never invent specific stats. If the transcript didn't surface a number,
-   say "qualitative read" or "insufficient data" in the reasoning and use
-   a confidence ≤ 3 for that metric.
-2. fairWinProbabilityPct must be 1–99 and must be internally consistent
-   with the 9 metric scores.
-3. confidencePct is 0–80 (cap at 80). If > 4 metrics have confidence ≤ 3,
-   cap confidencePct at 55.
-4. Verdict rules:
+1. Never invent specific stats. If the transcript / real-data block didn't
+   surface a number, mark the metric reasoning as "no verified data" and
+   set its confidence <= 3.
+2. fairWinProbabilityPct must be 1–99 and must be consistent with the
+   9 scores and the real-data picture (e.g. a favourite with injury-healthy
+   starters at home should typically price higher than 45%).
+3. confidencePct: 0–80 (cap 80). If > 4 metrics have confidence ≤ 3,
+   cap at 55.
+4. Verdict rules (ONLY when odds were provided):
    - edge ≥ +4% AND confidence ≥ 65 AND ≤ 2 against-metrics  → "strong_bet"
    - edge ≥ +2% AND confidence ≥ 55                           → "bet"
    - edge ≥ +1% AND confidence ≥ 45                           → "lean"
    - edge between −1% and +1% OR confidence < 45              → "pass"
    - edge ≤ −2% with high-confidence against metrics          → "fade"
-5. summary: 2–4 paragraphs separated by \\n\\n. First paragraph = the thesis.
-   Second = main risks. Third (optional) = market / price context. Fourth
-   (optional) = stake framing.
-6. risks: 3–5 distinct scenarios that would make this bet lose.
-7. informationGaps: 3–5 concrete things the user should still check
-   (e.g. "confirm starter at goal 90 min pre-match", "team news Friday morning").
+   When odds are NOT provided, follow the oddsContext rule above.
+5. summary: 2–4 paragraphs separated by \\n\\n. Reference specific players
+   / teams from the real data block. The first paragraph is the thesis.
+6. risks: 3–5 concrete losing scenarios, named where possible (e.g.
+   "if [Player X] is upgraded to active, the line shifts...").
+7. informationGaps: 3–5 concrete checks the user should still run.
 
 Return ONLY valid JSON in EXACTLY this shape:
 {
-  "pickSummary": "... one sentence describing the resolved pick ...",
-  "marketNormalized": "Over 2.5 goals | Moneyline | Over 9.5 corners | ...",
-  "oddsDecimal": <number or null>,
-  "oddsSource": "user" | "estimated-market" | "unknown",
-  "fairWinProbabilityPct": <number 1-99>,
-  "confidencePct": <number 0-80>,
+  "pickSummary": "one-sentence resolved pick",
+  "marketNormalized": "e.g. 'Moneyline - Away' / 'Over 9.5 corners'",
+  "fairWinProbabilityPct": <1-99>,
+  "confidencePct": <0-80>,
   "verdict": "strong_bet" | "bet" | "lean" | "pass" | "fade",
   "verdictRationale": "one sentence",
   "summary": "2-4 paragraphs separated by \\n\\n",
@@ -303,24 +593,19 @@ Return ONLY valid JSON in EXACTLY this shape:
   "informationGaps": ["...", "..."],
   "metrics": [
     { "key": "Recent form & momentum", "score": 0-10, "confidence": 0-10, "direction": "for|against|neutral", "reasoning": "..." }
-    // ...exactly 9 entries in framework order
+    /* exactly 9 entries in framework order */
   ]
 }`;
 }
 
-/* ── streaming helpers ────────────────────────────────────────────────── */
+/* ── Streaming helpers for the research call ──────────────────────────── */
 
-function encodeSse(obj: BettingStreamEvent): Uint8Array {
-  return new TextEncoder().encode(`data: ${JSON.stringify(obj)}\n\n`);
-}
-
-/**
- * Parses an OpenAI streaming chat response into token deltas.
- * OpenAI sends `data: {...}` lines; we yield each `choices[0].delta.content`.
- */
 async function* openAiTokenStream(
   res: Response,
-): AsyncGenerator<string, { usage?: { prompt_tokens?: number; completion_tokens?: number }; model?: string }> {
+): AsyncGenerator<
+  string,
+  { usage?: { prompt_tokens?: number; completion_tokens?: number }; model?: string }
+> {
   if (!res.body) return {};
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -360,7 +645,7 @@ async function* openAiTokenStream(
   return { usage: lastUsage, model: lastModel };
 }
 
-/* ── route handler ────────────────────────────────────────────────────── */
+/* ── Route handler ────────────────────────────────────────────────────── */
 
 export async function POST(request: NextRequest) {
   const limited = enforceApiRateLimit(request, "ai_betting_bot");
@@ -393,10 +678,10 @@ export async function POST(request: NextRequest) {
     );
   }
   const notes = String(body.notes ?? "").trim();
-  const parsedOdds = body.odds != null && String(body.odds).trim() !== ""
-    ? parseOdds(body.odds)
-    : null;
-
+  const parsedOdds =
+    body.odds != null && String(body.odds).trim() !== ""
+      ? parseOdds(body.odds)
+      : null;
   const bankroll =
     body.bankroll === null ||
     body.bankroll === undefined ||
@@ -404,13 +689,14 @@ export async function POST(request: NextRequest) {
       ? null
       : Number(body.bankroll);
 
-  const researchPrompt = buildResearchPrompt(query, parsedOdds, notes);
+  const now = new Date();
+  const todayIso = now.toISOString().slice(0, 10);
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const send = (ev: BettingStreamEvent) => controller.enqueue(encodeSse(ev));
 
-      // Emit initial stage so the UI gets something immediately.
+      // Stage 1 — parse.
       send({
         type: "stage",
         stage: "parse",
@@ -418,15 +704,156 @@ export async function POST(request: NextRequest) {
         status: "running",
       });
 
+      const { intent, usage: parseUsage } = await parseIntent(
+        apiKey,
+        query,
+        todayIso,
+      );
+
+      const sport = sportFromHint(`${intent.sport} ${query}`);
+      const teamHint = intent.teams.join(" ") || intent.pickSide;
+
+      send({
+        type: "thought",
+        stage: "parse",
+        text: `Detected ${sport?.label ?? (intent.sport || "sport unknown")} · teams: ${intent.teams.join(" & ") || "(unresolved)"} · when: ${intent.dateHint}.`,
+      });
+
+      // Stage 2 — fixture lookup via ESPN.
+      send({
+        type: "stage",
+        stage: "parse",
+        label: BETTING_STAGES[0]!.label,
+        status: "done",
+      });
+      send({
+        type: "stage",
+        stage: "fixture",
+        label: "Finding the fixture (ESPN)",
+        status: "running",
+      });
+
+      let espnFixture: EspnFixture | null = null;
+      let realData: BettingRealData | null = null;
+
+      if (sport && teamHint) {
+        const { start, end } = dateRangeForHint(intent.dateHint, now);
+        espnFixture = await findFixture(sport.path, start, end, teamHint);
+        if (espnFixture) {
+          send({
+            type: "thought",
+            stage: "fixture",
+            text: `ESPN match: ${espnFixture.awayTeam.displayName} @ ${espnFixture.homeTeam.displayName} — ${new Date(espnFixture.date).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}${espnFixture.venue ? ` — ${espnFixture.venue.fullName}` : ""}.`,
+          });
+          // Emit early fixture card.
+          send({
+            type: "fixture",
+            fixture: {
+              homeTeam: espnFixture.homeTeam.displayName,
+              awayTeam: espnFixture.awayTeam.displayName,
+              competition: sport.label,
+              kickoffIso: espnFixture.date || null,
+              venue: espnFixture.venue?.fullName ?? null,
+            },
+          });
+
+          // Stage 3 — real data collection.
+          send({
+            type: "stage",
+            stage: "fixture",
+            label: "Finding the fixture (ESPN)",
+            status: "done",
+          });
+          send({
+            type: "stage",
+            stage: "form",
+            label: "Pulling real injuries & last-10 games (ESPN)",
+            status: "running",
+          });
+
+          realData = await collectRealData(sport.path, sport.label, espnFixture);
+
+          if (realData.homeTeam) {
+            const h = realData.homeTeam;
+            send({
+              type: "thought",
+              stage: "form",
+              text: `${h.displayName} (${h.record ?? "record n/a"}) — last-10 ${h.last10Streak || "n/a"} avg ${h.pointsForAvg ?? "?"} for / ${h.pointsAgainstAvg ?? "?"} against.`,
+            });
+            if (h.injuries.length) {
+              send({
+                type: "thought",
+                stage: "injuries",
+                text: `${h.displayName} injuries: ${h.injuries
+                  .slice(0, 5)
+                  .map((i) => `${i.name} (${i.status})`)
+                  .join(", ")}.`,
+              });
+            }
+          }
+          if (realData.awayTeam) {
+            const a = realData.awayTeam;
+            send({
+              type: "thought",
+              stage: "form",
+              text: `${a.displayName} (${a.record ?? "record n/a"}) — last-10 ${a.last10Streak || "n/a"} avg ${a.pointsForAvg ?? "?"} for / ${a.pointsAgainstAvg ?? "?"} against.`,
+            });
+            if (a.injuries.length) {
+              send({
+                type: "thought",
+                stage: "injuries",
+                text: `${a.displayName} injuries: ${a.injuries
+                  .slice(0, 5)
+                  .map((i) => `${i.name} (${i.status})`)
+                  .join(", ")}.`,
+              });
+            }
+          }
+        } else {
+          send({
+            type: "thought",
+            stage: "fixture",
+            text: `No matching ${sport.label} fixture on ESPN for that window — falling back to qualitative analysis.`,
+          });
+          send({
+            type: "stage",
+            stage: "fixture",
+            label: "Finding the fixture (ESPN)",
+            status: "done",
+          });
+        }
+      } else {
+        send({
+          type: "thought",
+          stage: "fixture",
+          text: `No live data source for ${intent.sport} — analysis will be qualitative.`,
+        });
+        send({
+          type: "stage",
+          stage: "fixture",
+          label: "Finding the fixture (ESPN)",
+          status: "done",
+        });
+      }
+
+      // Stage 4 — research stream (grounded).
+      const researchPrompt = buildResearchPrompt(
+        query,
+        parsedOdds,
+        notes,
+        espnFixture,
+        realData,
+        todayIso,
+      );
+
       let transcript = "";
-      let currentStage = "parse";
-      let fixture: BettingFixture | null = null;
+      let currentStage = realData ? "form" : "parse";
+      let fixtureEvt: BettingFixture | null = null;
       let streamUsage:
         | { prompt_tokens?: number; completion_tokens?: number }
         | undefined;
       let streamModel: string | undefined;
 
-      // ── Call A: streaming research ────────────────────────────────
       try {
         const res = await fetch(
           "https://api.openai.com/v1/chat/completions",
@@ -440,13 +867,13 @@ export async function POST(request: NextRequest) {
               model: MODEL_STREAM,
               stream: true,
               stream_options: { include_usage: true },
-              temperature: 0.4,
+              temperature: 0.3,
               max_tokens: 1400,
               messages: [
                 {
                   role: "system",
                   content:
-                    "You are a professional sports-betting analyst. You emit research transcripts in the STAGE::/THINK::/FIXTURE:: protocol only. Never add markdown, bullets, or commentary outside the protocol.",
+                    "You are a professional sports-betting analyst. You emit research transcripts in the STAGE::/THINK::/FIXTURE:: protocol only. You never invent stats that aren't in the verified real-data block — when data is missing, you say 'no verified data'.",
                 },
                 { role: "user", content: researchPrompt },
               ],
@@ -486,10 +913,8 @@ export async function POST(request: NextRequest) {
             handleProtocolLine(rawLine);
           }
         }
-        // Flush trailing buffered line (rare — streams usually terminate with \n).
         if (pending.trim()) handleProtocolLine(pending);
 
-        // Mark the last live stage as done.
         send({
           type: "stage",
           stage: currentStage,
@@ -506,7 +931,6 @@ export async function POST(request: NextRequest) {
           if (line.startsWith("STAGE::")) {
             const next = line.slice("STAGE::".length).trim().toLowerCase();
             if (!next || next === currentStage) return;
-            // Close previous stage.
             send({
               type: "stage",
               stage: currentStage,
@@ -537,7 +961,7 @@ export async function POST(request: NextRequest) {
             const jsonPart = line.slice("FIXTURE::".length).trim();
             try {
               const raw = JSON.parse(jsonPart) as Partial<BettingFixture>;
-              fixture = {
+              const fx: BettingFixture = {
                 homeTeam: String(raw.homeTeam ?? "").trim(),
                 awayTeam: String(raw.awayTeam ?? "").trim(),
                 competition: String(raw.competition ?? "").trim(),
@@ -550,15 +974,18 @@ export async function POST(request: NextRequest) {
                     ? raw.venue.trim()
                     : null,
               };
-              if (fixture.homeTeam && fixture.awayTeam) {
-                send({ type: "fixture", fixture });
+              if (fx.homeTeam && fx.awayTeam) {
+                fixtureEvt = fx;
+                // Only re-emit if we didn't already send a fixture from ESPN.
+                if (!espnFixture) {
+                  send({ type: "fixture", fixture: fx });
+                }
               }
             } catch {
-              /* ignore malformed FIXTURE line */
+              /* ignore */
             }
             return;
           }
-          // Otherwise: free-form token noise (e.g. a stray period); ignore.
         }
       } catch (e) {
         send({
@@ -569,7 +996,6 @@ export async function POST(request: NextRequest) {
         return;
       }
 
-      // Log token usage from Call A.
       if (streamUsage && streamModel) {
         logOpenAIUsage(streamModel, "ai_betting_bot_research", {
           prompt_tokens: streamUsage.prompt_tokens ?? 0,
@@ -580,7 +1006,7 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      // ── Call B: structured final ──────────────────────────────────
+      // Stage 5 — structured final.
       send({
         type: "stage",
         stage: "synthesis",
@@ -588,12 +1014,26 @@ export async function POST(request: NextRequest) {
         status: "running",
       });
 
+      // Prefer ESPN's resolved fixture (more reliable); fall back to whatever
+      // the model emitted via FIXTURE::.
+      const authoritativeFixture: BettingFixture | null = espnFixture
+        ? {
+            homeTeam: espnFixture.homeTeam.displayName,
+            awayTeam: espnFixture.awayTeam.displayName,
+            competition: sport?.label ?? "",
+            kickoffIso: espnFixture.date || null,
+            venue: espnFixture.venue?.fullName ?? null,
+          }
+        : fixtureEvt;
+
       const structuredPrompt = buildStructuredPrompt(
         query,
         transcript,
-        fixture,
+        authoritativeFixture,
         parsedOdds,
         notes,
+        realData,
+        todayIso,
       );
 
       let finalContent: Record<string, unknown>;
@@ -612,14 +1052,14 @@ export async function POST(request: NextRequest) {
             },
             body: JSON.stringify({
               model: MODEL_STRUCT,
-              temperature: 0.2,
+              temperature: 0.15,
               response_format: { type: "json_object" },
               max_tokens: 1600,
               messages: [
                 {
                   role: "system",
                   content:
-                    "You are a professional sports-betting analyst. Always return valid JSON. Never invent specific numeric stats; when unsure, say 'insufficient data' and drop confidence. Cap claimed confidence at 80/100.",
+                    "You are a professional sports-betting analyst. Return valid JSON only. You never fabricate specific stats not supported by the provided real-data block. If odds are missing you must reflect that the edge is unknown.",
                 },
                 { role: "user", content: structuredPrompt },
               ],
@@ -676,34 +1116,36 @@ export async function POST(request: NextRequest) {
         99,
       );
 
-      let oddsUsed: ParsedOdds | null = parsedOdds;
-      let oddsSource: BettingAnalysisResult["oddsSource"] = parsedOdds
+      const oddsMissing = !parsedOdds;
+      const oddsUsed: ParsedOdds | null = parsedOdds;
+      const oddsSource: BettingAnalysisResult["oddsSource"] = parsedOdds
         ? "user"
         : "unknown";
 
-      if (!oddsUsed) {
-        const modelOdds = (finalContent as { oddsDecimal?: number }).oddsDecimal;
-        if (typeof modelOdds === "number" && modelOdds > 1.01) {
-          oddsUsed = parseOdds(modelOdds);
-          oddsSource = "estimated-market";
-        }
-        const declaredSource = String(
-          (finalContent as { oddsSource?: string }).oddsSource ?? "",
-        ).toLowerCase();
-        if (declaredSource === "estimated-market") oddsSource = "estimated-market";
-      }
+      const bookImpliedProbabilityPct = oddsUsed ? oddsUsed.impliedPct : null;
+      const edgePct =
+        oddsUsed && bookImpliedProbabilityPct !== null
+          ? modelFairPct - bookImpliedProbabilityPct
+          : null;
 
-      const bookImpliedProbabilityPct = oddsUsed ? oddsUsed.impliedPct : 50;
-      const decimal = oddsUsed ? oddsUsed.decimal : 2;
-      const edgePct = modelFairPct - bookImpliedProbabilityPct;
-
-      const fullKelly = kellyFraction(modelFairPct / 100, decimal);
-      const halfKelly = fullKelly * 0.5;
-      const quarterKelly = fullKelly * 0.25;
-
-      const recommendedStakeUsd =
-        bankroll !== null && Number.isFinite(bankroll) && bankroll > 0
-          ? Math.max(0, halfKelly * bankroll)
+      const kelly =
+        oddsUsed !== null
+          ? (() => {
+              const full = kellyFraction(modelFairPct / 100, oddsUsed.decimal);
+              const half = full * 0.5;
+              const quarter = full * 0.25;
+              const recommended =
+                bankroll !== null && Number.isFinite(bankroll) && bankroll > 0
+                  ? Math.max(0, half * bankroll)
+                  : null;
+              return {
+                fullPct: Number((full * 100).toFixed(2)),
+                halfPct: Number((half * 100).toFixed(2)),
+                quarterPct: Number((quarter * 100).toFixed(2)),
+                recommendedStakeUsd:
+                  recommended === null ? null : Number(recommended.toFixed(2)),
+              };
+            })()
           : null;
 
       const rawConfidence = clamp(
@@ -714,14 +1156,23 @@ export async function POST(request: NextRequest) {
         80,
       );
       const hasUserNotes = notes.length >= 40;
-      const confidencePct = hasUserNotes
-        ? rawConfidence
-        : Math.min(rawConfidence, 65);
+      const hasRealData = !!(
+        realData &&
+        (realData.homeTeam || realData.awayTeam)
+      );
+      // When we have real ESPN data, we allow the raw ceiling; otherwise
+      // clamp because the model was operating on memory alone.
+      const baseCeiling = hasRealData ? 80 : hasUserNotes ? 65 : 55;
+      const confidencePct = Math.min(rawConfidence, baseCeiling);
 
-      const verdict = normaliseVerdict(finalContent.verdict);
+      // Force verdict to "pass" when no odds — we cannot price an edge.
+      let verdict = normaliseVerdict(finalContent.verdict);
+      if (oddsMissing && (verdict === "bet" || verdict === "strong_bet")) {
+        verdict = modelFairPct >= 60 && confidencePct >= 55 ? "lean" : "pass";
+      }
 
       const result: BettingAnalysisResult = {
-        fixture,
+        fixture: authoritativeFixture,
         pickSummary:
           typeof finalContent.pickSummary === "string"
             ? finalContent.pickSummary.trim()
@@ -732,6 +1183,7 @@ export async function POST(request: NextRequest) {
             : "Unspecified market",
         oddsUsed,
         oddsSource,
+        oddsMissing,
         verdict,
         verdictLabel: verdictLabelFor(verdict),
         verdictRationale:
@@ -739,17 +1191,12 @@ export async function POST(request: NextRequest) {
             ? finalContent.verdictRationale
             : "",
         fairWinProbabilityPct: Number(modelFairPct.toFixed(2)),
-        bookImpliedProbabilityPct: Number(bookImpliedProbabilityPct.toFixed(2)),
-        edgePct: Number(edgePct.toFixed(2)),
-        kelly: {
-          fullPct: Number((fullKelly * 100).toFixed(2)),
-          halfPct: Number((halfKelly * 100).toFixed(2)),
-          quarterPct: Number((quarterKelly * 100).toFixed(2)),
-          recommendedStakeUsd:
-            recommendedStakeUsd === null
-              ? null
-              : Number(recommendedStakeUsd.toFixed(2)),
-        },
+        bookImpliedProbabilityPct:
+          bookImpliedProbabilityPct !== null
+            ? Number(bookImpliedProbabilityPct.toFixed(2))
+            : null,
+        edgePct: edgePct !== null ? Number(edgePct.toFixed(2)) : null,
+        kelly,
         confidencePct: Number(confidencePct.toFixed(1)),
         confidenceBin: confidenceBinFor(confidencePct),
         compositeScore: Number(compositeScore.toFixed(1)),
@@ -771,8 +1218,12 @@ export async function POST(request: NextRequest) {
               .filter(Boolean)
               .slice(0, 8)
           : [],
+        realData,
         generatedAt: new Date().toISOString(),
-        cost: costFor(MODEL_STRUCT, combineUsage(streamUsage, structUsage)),
+        cost: costFor(
+          MODEL_STRUCT,
+          combineUsage(parseUsage, streamUsage, structUsage),
+        ),
       };
 
       send({
@@ -795,16 +1246,4 @@ export async function POST(request: NextRequest) {
       "X-Accel-Buffering": "no",
     },
   });
-}
-
-function combineUsage(
-  a: { prompt_tokens?: number; completion_tokens?: number } | undefined,
-  b: { prompt_tokens?: number; completion_tokens?: number } | undefined,
-): { prompt_tokens?: number; completion_tokens?: number } | undefined {
-  if (!a && !b) return undefined;
-  return {
-    prompt_tokens: (a?.prompt_tokens ?? 0) + (b?.prompt_tokens ?? 0),
-    completion_tokens:
-      (a?.completion_tokens ?? 0) + (b?.completion_tokens ?? 0),
-  };
 }
