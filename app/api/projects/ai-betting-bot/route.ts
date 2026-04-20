@@ -389,20 +389,28 @@ function dateRangeForHint(
       break;
     case "unknown":
     default:
-      start.setUTCDate(start.getUTCDate() - 1);
-      end.setUTCDate(end.getUTCDate() + 7);
+      // When the user doesn't specify a date, look at yesterday + the next
+      // ~6 weeks. For season sports (EPL, NBA, NFL) the same two teams only
+      // meet a handful of times a year, so we need a wide horizon to catch
+      // the *next* occurrence of the requested matchup. findFixture()
+      // tie-breaks by date proximity to today, so the closest upcoming
+      // match still wins inside this wide window.
+      start.setUTCDate(start.getUTCDate() - 2);
+      end.setUTCDate(end.getUTCDate() + 45);
       break;
   }
   return { start, end };
 }
 
-/** Fallback window when the narrow search misses — spans most of the week. */
+/** Fallback window when the narrow search misses — spans ~10 weeks so a
+ *  specific fixture named without a date can still be resolved to its next
+ *  scheduled occurrence even if it's over a month out. */
 function wideRange(todayIsoLocal: string): { start: Date; end: Date } {
   const today = ymdToDate(todayIsoLocal);
   const start = new Date(today);
   const end = new Date(today);
-  start.setUTCDate(start.getUTCDate() - 4);
-  end.setUTCDate(end.getUTCDate() + 9);
+  start.setUTCDate(start.getUTCDate() - 14);
+  end.setUTCDate(end.getUTCDate() + 60);
   return { start, end };
 }
 
@@ -1052,23 +1060,34 @@ export async function POST(request: NextRequest) {
           stage: "fixture",
           text: `Searching ESPN ${sport.label} scoreboard ${windowLabel}${clientTimezone ? ` (your zone: ${clientTimezone})` : ""} for "${teamHint}".`,
         });
-        espnFixture = await findFixture(sport.path, start, end, teamHint);
+        espnFixture = await findFixture(
+          sport.path,
+          start,
+          end,
+          teamHint,
+          intent.teams,
+          ymdToDate(todayIso).toISOString(),
+        );
 
         // Wide fallback — ESPN uses US Eastern day boundaries and the
         // dateline can push NZ/EU calendars ±1 day off, so try a broader
-        // window before giving up.
+        // window before giving up. Also picks up the next occurrence when
+        // the user named a matchup without a date (e.g. "Crystal Palace vs
+        // West Ham, both teams to score").
         if (!espnFixture) {
           const wide = wideRange(todayIso);
           send({
             type: "thought",
             stage: "fixture",
-            text: `No hit in the narrow window — widening to ${wide.start.toISOString().slice(0, 10)} → ${wide.end.toISOString().slice(0, 10)} to absorb timezone drift…`,
+            text: `No hit in the narrow window — widening to ${wide.start.toISOString().slice(0, 10)} → ${wide.end.toISOString().slice(0, 10)} to find the next scheduled meeting…`,
           });
           espnFixture = await findFixture(
             sport.path,
             wide.start,
             wide.end,
             teamHint,
+            intent.teams,
+            ymdToDate(todayIso).toISOString(),
           );
         }
 

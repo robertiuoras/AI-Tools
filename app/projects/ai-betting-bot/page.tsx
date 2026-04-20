@@ -227,13 +227,17 @@ function arcPath(
 
 function ConfidenceGauge({ value }: { value: number }) {
   const clamped = Math.max(0, Math.min(100, value));
-  const startAngle = -120;
-  const endAngle = 120;
+  // Half-dial: the arc spans the UPPER semicircle and the needle pivots at
+  // the bottom. This guarantees the needle always points upward, so the
+  // label text positioned BELOW the pivot can never be crossed by the
+  // needle — fixing the overlay we used to see at low confidence values.
+  const startAngle = -90;
+  const endAngle = 90;
   const span = endAngle - startAngle;
   const valueAngle = startAngle + (span * clamped) / 100;
   const cx = 110;
-  const cy = 120;
-  const r = 82;
+  const cy = 118;
+  const r = 88;
   const colour =
     clamped >= 72
       ? "#10b981"
@@ -245,7 +249,7 @@ function ConfidenceGauge({ value }: { value: number }) {
 
   return (
     <div className="relative mx-auto flex w-full max-w-[260px] flex-col items-center">
-      <svg viewBox="0 0 220 200" className="w-full">
+      <svg viewBox="0 0 220 170" className="w-full">
         <defs>
           <linearGradient id="gauge-fg" x1="0" y1="0" x2="1" y2="0">
             <stop offset="0%" stopColor={colour} stopOpacity="0.75" />
@@ -256,14 +260,14 @@ function ConfidenceGauge({ value }: { value: number }) {
           d={arcPath(cx, cy, r, startAngle, endAngle)}
           stroke="currentColor"
           strokeOpacity="0.16"
-          strokeWidth="16"
+          strokeWidth="14"
           fill="none"
           strokeLinecap="round"
         />
         <path
           d={arcPath(cx, cy, r, startAngle, valueAngle)}
           stroke="url(#gauge-fg)"
-          strokeWidth="16"
+          strokeWidth="14"
           fill="none"
           strokeLinecap="round"
         />
@@ -289,40 +293,35 @@ function ConfidenceGauge({ value }: { value: number }) {
             x1={cx}
             y1={cy}
             x2={cx}
-            y2={cy - r + 12}
+            y2={cy - r + 10}
             stroke={colour}
             strokeWidth="3"
             strokeLinecap="round"
           />
           <circle cx={cx} cy={cy} r="6.5" fill={colour} />
         </g>
-        {/* Large, high-contrast value + unit, sitting under the dial */}
-        <text
-          x={cx}
-          y={cy - 10}
-          textAnchor="middle"
-          className="fill-foreground"
-          style={{ fontSize: 48, fontWeight: 900, letterSpacing: -1 }}
-        >
-          {clamped.toFixed(0)}
-          <tspan
-            dx="2"
+      </svg>
+      {/* Label sits BELOW the dial (outside the needle's swept area) so the
+          pointer and the numeric value can never overlay one another. */}
+      <div className="-mt-2 flex flex-col items-center leading-none">
+        <div className="flex items-baseline gap-1 text-foreground">
+          <span style={{ fontSize: 42, fontWeight: 900, letterSpacing: -1 }}>
+            {clamped.toFixed(0)}
+          </span>
+          <span
+            className="text-muted-foreground"
             style={{ fontSize: 18, fontWeight: 700 }}
-            className="fill-muted-foreground"
           >
             %
-          </tspan>
-        </text>
-        <text
-          x={cx}
-          y={cy + 10}
-          textAnchor="middle"
-          className="fill-muted-foreground"
+          </span>
+        </div>
+        <div
+          className="mt-1 text-muted-foreground"
           style={{ fontSize: 10, letterSpacing: 3, fontWeight: 700 }}
         >
           CONFIDENCE
-        </text>
-      </svg>
+        </div>
+      </div>
     </div>
   );
 }

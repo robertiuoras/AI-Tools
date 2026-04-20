@@ -195,16 +195,48 @@ function toFixture(event: RawEvent): EspnFixture | null {
   };
 }
 
+function tokenise(s: string): string[] {
+  return s
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 3);
+}
+
+function teamNameTokens(t: EspnTeamLite): string[] {
+  return tokenise(`${t.displayName} ${t.shortName} ${t.abbreviation}`);
+}
+
+function tokenOverlap(hintTokens: string[], nameTokens: string[]): number {
+  if (!hintTokens.length || !nameTokens.length) return 0;
+  const set = new Set(nameTokens);
+  let hits = 0;
+  for (const tok of hintTokens) {
+    if (set.has(tok)) hits += 1;
+  }
+  return hits;
+}
+
 /**
  * Search the scoreboard over an inclusive date range and return the best
- * event matching one or both of the team hints. Hints are free-text
- * snippets like "Arsenal" or "Lakers Chiefs".
+ * event matching the team hint(s).
+ *
+ * When `teams` has 2 names we require EACH of them to match a different
+ * competitor (home/away) — this prevents generic-token collisions like
+ * "West Ham United" vs "Crystal Palace" grabbing a different "…United"
+ * fixture (Leeds, Manchester, Newcastle, Sheffield, …) just because
+ * "united" is a hint token.
+ *
+ * When only one team is given (or we fall back to token mode) we keep the
+ * older loose scoring but still tie-break by distance from `preferredIso`
+ * so the next closest occurrence of that matchup wins.
  */
 export async function findFixture(
   sportPath: string,
   startDate: Date,
   endDate: Date,
   teamHint: string,
+  teams?: string[],
+  preferredIso?: string | null,
 ): Promise<EspnFixture | null> {
   const start = yyyymmdd(startDate);
   const end = yyyymmdd(endDate);
@@ -214,32 +246,78 @@ export async function findFixture(
   );
   if (!data?.events?.length) return null;
 
-  const hintTokens = teamHint
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((t) => t.length >= 3);
+  const hintTokens = tokenise(teamHint);
+  const perTeamTokens = (teams ?? [])
+    .map((t) => tokenise(t))
+    .filter((toks) => toks.length > 0)
+    .slice(0, 2);
 
-  let best: { fx: EspnFixture; score: number } | null = null;
+  const referenceMs = preferredIso
+    ? new Date(preferredIso).getTime()
+    : Date.now();
+
+  let best:
+    | { fx: EspnFixture; score: number; bothTeamsMatched: boolean; dateDelta: number }
+    | null = null;
   for (const event of data.events) {
     const fx = toFixture(event);
     if (!fx) continue;
-    const names = [
-      fx.homeTeam.displayName,
-      fx.homeTeam.shortName,
-      fx.homeTeam.abbreviation,
-      fx.awayTeam.displayName,
-      fx.awayTeam.shortName,
-      fx.awayTeam.abbreviation,
-    ]
-      .map((s) => s.toLowerCase())
-      .join(" ");
+    const homeTokens = teamNameTokens(fx.homeTeam);
+    const awayTokens = teamNameTokens(fx.awayTeam);
 
     let score = 0;
-    for (const tok of hintTokens) {
-      if (names.includes(tok)) score += 2;
+    let bothTeamsMatched = false;
+
+    if (perTeamTokens.length === 2) {
+      const [tA, tB] = perTeamTokens as [string[], string[]];
+      const aHome = tokenOverlap(tA, homeTokens);
+      const aAway = tokenOverlap(tA, awayTokens);
+      const bHome = tokenOverlap(tB, homeTokens);
+      const bAway = tokenOverlap(tB, awayTokens);
+      const scenario1 = aHome > 0 && bAway > 0 ? aHome + bAway : 0;
+      const scenario2 = aAway > 0 && bHome > 0 ? aAway + bHome : 0;
+      const dualScore = Math.max(scenario1, scenario2);
+      if (dualScore > 0) {
+        // Dual match beats any single-team fallback decisively.
+        score = dualScore + 100;
+        bothTeamsMatched = true;
+      } else {
+        // Fallback: single-team best overlap (treated as "maybe", never wins
+        // vs a real dual match because of the +100 bonus above).
+        score =
+          Math.max(aHome, aAway, bHome, bAway) > 0
+            ? Math.max(aHome, aAway) + Math.max(bHome, bAway)
+            : 0;
+      }
+    } else if (perTeamTokens.length === 1) {
+      const [tA] = perTeamTokens as [string[]];
+      score = Math.max(tokenOverlap(tA, homeTokens), tokenOverlap(tA, awayTokens));
+    } else {
+      const names = [...homeTokens, ...awayTokens];
+      score = tokenOverlap(hintTokens, names);
     }
+
     if (score === 0) continue;
-    if (!best || score > best.score) best = { fx, score };
+
+    const eventMs = new Date(fx.date).getTime();
+    const dateDelta = Number.isFinite(eventMs)
+      ? Math.abs(eventMs - referenceMs)
+      : Number.POSITIVE_INFINITY;
+
+    if (
+      !best ||
+      score > best.score ||
+      (score === best.score && dateDelta < best.dateDelta)
+    ) {
+      best = { fx, score, bothTeamsMatched, dateDelta };
+    }
+  }
+
+  // Safety net: if the caller asked for two specific teams and we never
+  // matched both, refuse the wrong-fixture candidate rather than returning
+  // it — the caller will widen the window / fall back to qualitative mode.
+  if (perTeamTokens.length === 2 && best && !best.bothTeamsMatched) {
+    return null;
   }
   return best?.fx ?? null;
 }
