@@ -362,6 +362,52 @@ async function fetchYouTubeTranscript(
     if (!text) return null;
     return { text, language: null };
   } catch {
+    // Fall through to InnerTube caption track fallback.
+  }
+
+  try {
+    const innertube = await getInnertube();
+    const info = await innertube.getInfo(videoId, { client: "WEB" });
+    const tracks = info.captions?.caption_tracks ?? [];
+    if (tracks.length === 0) return null;
+
+    // Prefer regular captions over ASR; if only ASR exists, use that.
+    const selected =
+      tracks.find((t) => t.kind !== "asr" && typeof t.base_url === "string") ??
+      tracks.find((t) => typeof t.base_url === "string");
+    const baseUrl = selected?.base_url;
+    if (!baseUrl) return null;
+
+    const captionRes = await fetchWithRetries(
+      baseUrl.includes("fmt=") ? baseUrl : `${baseUrl}&fmt=srv3`,
+      { method: "GET", headers: { ...YT_HLS_FALLBACK_HEADERS } },
+      20000,
+      3,
+    );
+    if (!captionRes?.ok) return null;
+    const xml = await captionRes.text();
+    if (!xml) return null;
+
+    const decodeHtml = (s: string): string =>
+      s
+        .replace(/&#39;/g, "'")
+        .replace(/&quot;/g, '"')
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)));
+
+    const chunks = Array.from(xml.matchAll(/<text[^>]*>([\s\S]*?)<\/text>/g))
+      .map((m) => decodeHtml(m[1] ?? "").replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+    const text = chunks.join(" ").replace(/\s+/g, " ").trim();
+    if (!text) return null;
+
+    return {
+      text,
+      language: selected?.language_code ?? null,
+    };
+  } catch {
     return null;
   }
 }
