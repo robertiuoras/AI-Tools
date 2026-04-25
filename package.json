@@ -22,6 +22,7 @@
     ]
   },
   "dependencies": {
+    "@distube/ytdl-core": "^4.16.12",
     "@excalidraw/excalidraw": "^0.18.0",
     "@liveblocks/client": "^3.18.3",
     "@liveblocks/node": "^3.18.3",

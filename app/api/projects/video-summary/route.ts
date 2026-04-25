@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import ytdl from "@distube/ytdl-core";
 import { YoutubeTranscript } from "youtube-transcript";
 import { enforceApiRateLimit } from "@/lib/api-rate-limit";
 import { logOpenAIUsage } from "@/lib/openai-usage";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 /**
  * AI Video Summariser
@@ -15,8 +16,8 @@ export const maxDuration = 60;
  * - hierarchical outline (sections → bullets) suitable for slides / docs
  *
  * Strategy:
- * - YouTube → fetch captions via `youtube-transcript`, then summarise the
- *   transcript with OpenAI gpt-4o-mini.
+ * - YouTube → fetch captions via `youtube-transcript`; if unavailable, download
+ *   the audio stream, transcribe it with OpenAI, then summarise the transcript.
  * - Uploads → transcribe audio/video with OpenAI, then summarise the transcript.
  * - Metadata is used only as context. It never replaces real transcript content.
  *
@@ -76,7 +77,8 @@ const MODEL_PRICING_PER_MTOK: Record<string, { input: number; output: number }> 
   "gpt-4o-2024-08-06": { input: 2.5, output: 10 },
 };
 
-const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 24 * 1024 * 1024;
+const MAX_TRANSCRIPTION_BYTES = MAX_UPLOAD_BYTES;
 const SUPPORTED_UPLOAD_TYPES = [
   "audio/flac",
   "audio/m4a",
@@ -92,6 +94,19 @@ const SUPPORTED_UPLOAD_TYPES = [
   "video/quicktime",
   "video/webm",
 ];
+
+type UrlAudioResult =
+  | {
+      ok: true;
+      file: File;
+      formatDescription: string;
+      byteLength: number;
+    }
+  | {
+      ok: false;
+      reason: "too-large" | "unavailable";
+      message: string;
+    };
 
 function computeCost(
   model: string,
@@ -248,6 +263,95 @@ async function transcribeUploadedFile(
     };
   } catch {
     return null;
+  }
+}
+
+function formatMimeType(format: ytdl.videoFormat): string {
+  const mime = format.mimeType?.split(";")[0]?.trim();
+  if (mime) return mime;
+  if (format.container === "webm") return "audio/webm";
+  if (format.container === "mp4") return "audio/mp4";
+  return "audio/mpeg";
+}
+
+async function streamToFileWithLimit(
+  stream: NodeJS.ReadableStream,
+  args: { maxBytes: number; fileName: string; mimeType: string },
+): Promise<File | null> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+
+  for await (const chunk of stream) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buffer.byteLength;
+    if (total > args.maxBytes) {
+      (stream as { destroy?: () => void }).destroy?.();
+      return null;
+    }
+    chunks.push(buffer);
+  }
+
+  if (total === 0) return null;
+  return new File([Buffer.concat(chunks)], args.fileName, {
+    type: args.mimeType,
+  });
+}
+
+async function fetchYouTubeAudioForTranscription(url: string): Promise<UrlAudioResult> {
+  try {
+    const info = await ytdl.getInfo(url, {
+      playerClients: ["WEB", "ANDROID", "IOS"],
+    });
+    const audioFormats = ytdl.filterFormats(info.formats, "audioonly");
+    const format = ytdl.chooseFormat(audioFormats, {
+      quality: "lowestaudio",
+      filter: "audioonly",
+    });
+    const contentLength = Number.parseInt(format.contentLength || "0", 10);
+    if (contentLength > MAX_TRANSCRIPTION_BYTES) {
+      return {
+        ok: false,
+        reason: "too-large",
+        message:
+          "The video's lowest available audio stream is larger than the transcription API limit.",
+      };
+    }
+
+    const mimeType = formatMimeType(format);
+    const fileExtension = format.container === "mp4" ? "m4a" : format.container;
+    const stream = ytdl.downloadFromInfo(info, {
+      filter: "audioonly",
+      quality: "lowestaudio",
+      highWaterMark: 1024 * 1024,
+    });
+    const file = await streamToFileWithLimit(stream, {
+      maxBytes: MAX_TRANSCRIPTION_BYTES,
+      fileName: `youtube-audio.${fileExtension}`,
+      mimeType,
+    });
+    if (!file) {
+      return {
+        ok: false,
+        reason: "too-large",
+        message:
+          "The video's audio stream exceeded the transcription API limit while downloading.",
+      };
+    }
+
+    return {
+      ok: true,
+      file,
+      formatDescription: `${format.container.toUpperCase()} audio${
+        format.audioBitrate ? `, ${format.audioBitrate}kbps` : ""
+      }`,
+      byteLength: file.size,
+    };
+  } catch {
+    return {
+      ok: false,
+      reason: "unavailable",
+      message: "Couldn't extract an audio stream from this YouTube URL.",
+    };
   }
 }
 
@@ -627,7 +731,7 @@ export async function POST(request: NextRequest) {
           {
             error: "Unsupported URL.",
             hint:
-              "Only YouTube URLs with captions can be summarized by URL. For captionless videos, upload the audio/video file so it can be transcribed first.",
+              "Use a YouTube URL, or upload the audio/video file so it can be transcribed first.",
           },
           { status: 400 },
         );
@@ -639,7 +743,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error: "File is too large.",
-          hint: "Upload an audio/video file under 25 MB, or compress/trim it first.",
+          hint: "Upload an audio/video file under 24 MB, or compress/trim it first.",
         },
         { status: 413 },
       );
@@ -710,13 +814,39 @@ export async function POST(request: NextRequest) {
         transcriptText = transcript.text;
         language = transcript.language;
       } else {
-        return NextResponse.json(
-          {
-            error: "No real transcript is available for this URL.",
-            hint:
-              "I won't generate a metadata-only summary. Upload the video/audio file so the app can transcribe it and summarize the actual spoken content.",
-          },
-          { status: 422 },
+        warnings.push(
+          "No captions were available, so the app generated its own transcript from the YouTube audio stream.",
+        );
+        const audio = await fetchYouTubeAudioForTranscription(
+          `https://www.youtube.com/watch?v=${videoId}`,
+        );
+        if (!audio.ok) {
+          return NextResponse.json(
+            {
+              error: "Couldn't create a transcript for this URL.",
+              hint:
+                audio.reason === "too-large"
+                  ? `${audio.message} Upload a shorter/compressed audio or video file instead.`
+                  : `${audio.message} Upload the audio/video file instead so it can be transcribed directly.`,
+            },
+            { status: audio.reason === "too-large" ? 413 : 422 },
+          );
+        }
+        const transcription = await transcribeUploadedFile(audio.file);
+        if (!transcription) {
+          return NextResponse.json(
+            {
+              error: "Couldn't transcribe this video's audio.",
+              hint:
+                "The audio was extracted, but OpenAI transcription failed. Try again, or upload the audio/video file directly.",
+            },
+            { status: 502 },
+          );
+        }
+        transcriptText = transcription.text;
+        language = transcription.language;
+        warnings.push(
+          `Transcribed ${audio.formatDescription} (${(audio.byteLength / 1024 / 1024).toFixed(1)} MB) with ${transcription.model}.`,
         );
       }
     } else {

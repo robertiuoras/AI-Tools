@@ -400,9 +400,9 @@ export default function AiVideoSummariserPage() {
             <span>Summariser</span>
           </h1>
           <p className="mt-2 max-w-2xl text-base text-muted-foreground">
-            Paste a captioned YouTube URL or upload an audio/video file. Get a
-            concise transcript-grounded summary, key points, commands, action
-            items, detailed notes, and exports.
+            Paste a YouTube URL or upload an audio/video file. If captions are
+            missing, the app creates its own transcript from the audio before
+            summarising.
           </p>
         </header>
 
@@ -468,7 +468,7 @@ export default function AiVideoSummariserPage() {
               htmlFor="video-file"
               className="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
             >
-              Upload audio/video when captions are missing
+              Optional audio/video upload
             </Label>
             <Input
               id="video-file"
@@ -490,12 +490,12 @@ export default function AiVideoSummariserPage() {
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground/80">
             <p>
               Results stay saved in this browser while you move between Notes
-              and the summariser. Captionless URLs require an upload so the app
-              can create a real transcript first.
+              and the summariser. Captionless YouTube URLs are transcribed from
+              audio automatically; uploads are best for large or blocked videos.
             </p>
             <span
               className="inline-flex items-center gap-1 rounded-full border border-border/40 bg-muted/40 px-2 py-0.5 font-medium"
-              title="Estimated OpenAI summary cost using gpt-4o-mini ($0.15/M input, $0.60/M output tokens). Upload transcription cost is separate."
+              title="Estimated OpenAI summary cost using gpt-4o-mini ($0.15/M input, $0.60/M output tokens). Auto-transcription cost is separate."
             >
               <Coins className="h-3 w-3" />
               Est. cost: ~$0.0003 – $0.005 per video
