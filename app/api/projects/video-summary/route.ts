@@ -105,6 +105,34 @@ const YT_HLS_HEADERS: Record<string, string> = {
   Origin: "https://www.youtube.com",
 };
 
+const YT_HLS_FALLBACK_HEADERS: Record<string, string> = {
+  Accept: "*/*",
+  Referer: "https://www.youtube.com/",
+  Origin: "https://www.youtube.com",
+};
+
+async function fetchWithRetries(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  attempts = 3,
+): Promise<Response | null> {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(url, {
+        ...init,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (res.ok) return res;
+      // Retry only transient classes; return deterministic failures quickly.
+      if (res.status !== 429 && res.status < 500) return res;
+    } catch {
+      // timeout/network/transient errors: retry
+    }
+  }
+  return null;
+}
+
 function hlsClenFromMediaUri(uri: string): number {
   const m = uri.match(/sgoap%2Fclen%3D(\d+)/) ?? uri.match(/sgoap\/clen%3D(\d+)/);
   return m?.[1] ? Number(m[1]) : Number.POSITIVE_INFINITY;
@@ -142,12 +170,19 @@ async function downloadHlsAudioToBuffer(
   initialPlaylistUrl: string,
   maxBytes: number,
 ): Promise<Uint8Array | null> {
-  const res0 = await fetch(initialPlaylistUrl, {
-    method: "GET",
-    headers: { ...YT_HLS_HEADERS },
-    signal: AbortSignal.timeout(30000),
-  });
-  if (!res0.ok) return null;
+  // Two request profiles: iOS app-like headers first, then a neutral fallback.
+  const headerProfiles = [YT_HLS_HEADERS, YT_HLS_FALLBACK_HEADERS];
+  let res0: Response | null = null;
+  for (const h of headerProfiles) {
+    res0 = await fetchWithRetries(
+      initialPlaylistUrl,
+      { method: "GET", headers: { ...h } },
+      30000,
+      3,
+    );
+    if (res0?.ok) break;
+  }
+  if (!res0?.ok) return null;
   const playlist = await res0.text();
   const segments = listHlsSegmentUrls(playlist);
   if (segments.length === 0) return null;
@@ -156,12 +191,17 @@ async function downloadHlsAudioToBuffer(
   let n = 0;
   for (const seg of segments) {
     if (n >= maxBytes) return null;
-    const r = await fetch(seg, {
-      method: "GET",
-      headers: { ...YT_HLS_HEADERS },
-      signal: AbortSignal.timeout(120000),
-    });
-    if (!r.ok) return null;
+    let r: Response | null = null;
+    for (const h of headerProfiles) {
+      r = await fetchWithRetries(
+        seg,
+        { method: "GET", headers: { ...h } },
+        120000,
+        3,
+      );
+      if (r?.ok) break;
+    }
+    if (!r?.ok) return null;
     const part = new Uint8Array(await r.arrayBuffer());
     if (part.byteLength === 0) return null;
     if (n + part.byteLength > maxBytes) return null;
@@ -380,13 +420,27 @@ async function fetchYouTubeAudioForTranscription(
           "YouTube did not return an HLS manifest for this video, so the audio could not be downloaded in segments.",
       };
     }
-    const master = await (
-      await fetch(masterUrl, {
-        method: "GET",
-        headers: { ...YT_HLS_HEADERS },
-        signal: AbortSignal.timeout(25000),
-      })
-    ).text();
+    const masterRes =
+      (await fetchWithRetries(
+        masterUrl,
+        { method: "GET", headers: { ...YT_HLS_HEADERS } },
+        25000,
+        3,
+      )) ??
+      (await fetchWithRetries(
+        masterUrl,
+        { method: "GET", headers: { ...YT_HLS_FALLBACK_HEADERS } },
+        25000,
+        2,
+      ));
+    if (!masterRes?.ok) {
+      return {
+        ok: false,
+        reason: "unavailable",
+        message: "Could not download YouTube's HLS manifest for this video.",
+      };
+    }
+    const master = await masterRes.text();
     const audioPlaylist = pickAudioMediaPlaylistFromMasterManifest(master);
     if (!audioPlaylist) {
       return {
