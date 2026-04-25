@@ -142,7 +142,7 @@ function hlsClenFromMediaUri(uri: string): number {
  * Picks a low-bitrate *audio* rendition from a master m3u8 (InnerTube iOS: `#EXT-X-MEDIA` lines).
  * Prefer the explicit small `itag/233` playlist when present.
  */
-function pickAudioMediaPlaylistFromMasterManifest(masterText: string): string | null {
+function pickAudioMediaPlaylistsFromMasterManifest(masterText: string): string[] {
   const lines = masterText.split("\n");
   const mediaRows = lines
     .filter((l) => l.startsWith("#EXT-X-MEDIA:") && l.includes("TYPE=AUDIO") && l.includes("URI="))
@@ -151,12 +151,13 @@ function pickAudioMediaPlaylistFromMasterManifest(masterText: string): string | 
       return m?.[1] ? m[1] : null;
     })
     .filter((u): u is string => Boolean(u));
-  if (mediaRows.length === 0) return null;
+  if (mediaRows.length === 0) return [];
   const byItag233 = mediaRows.find((u) => u.includes("/itag/233/"));
-  if (byItag233) return byItag233;
-  return [...mediaRows].sort(
+  const sorted = [...mediaRows].sort(
     (a, b) => hlsClenFromMediaUri(a) - hlsClenFromMediaUri(b),
-  )[0]!;
+  );
+  if (!byItag233) return sorted;
+  return [byItag233, ...sorted.filter((u) => u !== byItag233)];
 }
 
 function listHlsSegmentUrls(playlistText: string): string[] {
@@ -487,51 +488,46 @@ async function fetchYouTubeAudioForTranscription(
       };
     }
     const master = await masterRes.text();
-    const audioPlaylist = pickAudioMediaPlaylistFromMasterManifest(master);
-    if (!audioPlaylist) {
+    const audioPlaylists = pickAudioMediaPlaylistsFromMasterManifest(master);
+    if (audioPlaylists.length === 0) {
       return {
         ok: false,
         reason: "unavailable",
         message: "Could not find an HLS audio playlist in YouTube’s manifest for this video.",
       };
     }
+    let lastTooLarge = false;
+    for (const audioPlaylist of audioPlaylists) {
+      const clen = hlsClenFromMediaUri(audioPlaylist);
+      if (clen !== Number.POSITIVE_INFINITY && clen > MAX_TRANSCRIPTION_BYTES) {
+        lastTooLarge = true;
+        continue;
+      }
 
-    const clen = hlsClenFromMediaUri(audioPlaylist);
-    if (clen !== Number.POSITIVE_INFINITY && clen > MAX_TRANSCRIPTION_BYTES) {
+      const buf = await downloadHlsAudioToBuffer(audioPlaylist, MAX_TRANSCRIPTION_BYTES);
+      if (!buf || buf.byteLength === 0) {
+        continue;
+      }
+
+      // Concatenated HLS media segments (MPEG-TS). Transcription still accepts this as a generic
+      // audio container when labeled as mpeg; filename extension helps the API.
+      const file = new File([new Uint8Array(buf)], "youtube-audio.mpeg", {
+        type: "audio/mpeg",
+      });
       return {
-        ok: false,
-        reason: "too-large",
-        message:
-          "The HLS stream’s reported audio size is larger than the transcription API limit.",
+        ok: true,
+        file,
+        formatDescription: "HLS (iOS client) · MPEG-TS audio segments",
+        byteLength: file.size,
       };
     }
 
-    const buf = await downloadHlsAudioToBuffer(audioPlaylist, MAX_TRANSCRIPTION_BYTES);
-    if (!buf) {
-      return {
-        ok: false,
-        reason: "unavailable",
-        message: "Couldn’t download the HLS audio segments for this YouTube video.",
-      };
-    }
-    if (buf.byteLength === 0) {
-      return {
-        ok: false,
-        reason: "unavailable",
-        message: "Downloaded an empty audio stream from YouTube.",
-      };
-    }
-
-    // Concatenated HLS media segments (MPEG-TS). Transcription still accepts this as a generic
-    // audio container when labeled as mpeg; filename extension helps the API.
-    const file = new File([new Uint8Array(buf)], "youtube-audio.mpeg", {
-      type: "audio/mpeg",
-    });
     return {
-      ok: true,
-      file,
-      formatDescription: "HLS (iOS client) · MPEG-TS audio segments",
-      byteLength: file.size,
+      ok: false,
+      reason: lastTooLarge ? "too-large" : "unavailable",
+      message: lastTooLarge
+        ? "The HLS audio renditions are larger than the transcription API limit."
+        : "Couldn’t download any available HLS audio rendition for this YouTube video.",
     };
   } catch {
     return {
@@ -1006,16 +1002,26 @@ export async function POST(request: NextRequest) {
         );
         const audio = await fetchYouTubeAudioForTranscription(videoId);
         if (!audio.ok) {
-          warnings.push(
-            audio.reason === "too-large"
-              ? `${audio.message} Falling back to metadata/page-description summarisation.`
-              : `${audio.message} Falling back to metadata/page-description summarisation.`,
+          return NextResponse.json(
+            {
+              error: "Couldn't create a transcript for this URL.",
+              hint:
+                audio.reason === "too-large"
+                  ? `${audio.message} Upload a shorter/compressed audio or video file instead.`
+                  : `${audio.message} Upload the audio/video file instead so it can be transcribed directly.`,
+            },
+            { status: audio.reason === "too-large" ? 413 : 422 },
           );
         } else {
           const transcription = await transcribeUploadedFile(audio.file);
           if (!transcription) {
-            warnings.push(
-              "Audio extraction succeeded, but transcription failed. Falling back to metadata/page-description summarisation.",
+            return NextResponse.json(
+              {
+                error: "Couldn't transcribe this video's audio.",
+                hint:
+                  "The audio was extracted, but OpenAI transcription failed. Try again, or upload the audio/video file directly.",
+              },
+              { status: 502 },
             );
           } else {
             transcriptText = transcription.text;
