@@ -1006,33 +1006,25 @@ export async function POST(request: NextRequest) {
         );
         const audio = await fetchYouTubeAudioForTranscription(videoId);
         if (!audio.ok) {
-          return NextResponse.json(
-            {
-              error: "Couldn't create a transcript for this URL.",
-              hint:
-                audio.reason === "too-large"
-                  ? `${audio.message} Upload a shorter/compressed audio or video file instead.`
-                  : `${audio.message} Upload the audio/video file instead so it can be transcribed directly.`,
-            },
-            { status: audio.reason === "too-large" ? 413 : 422 },
+          warnings.push(
+            audio.reason === "too-large"
+              ? `${audio.message} Falling back to metadata/page-description summarisation.`
+              : `${audio.message} Falling back to metadata/page-description summarisation.`,
           );
+        } else {
+          const transcription = await transcribeUploadedFile(audio.file);
+          if (!transcription) {
+            warnings.push(
+              "Audio extraction succeeded, but transcription failed. Falling back to metadata/page-description summarisation.",
+            );
+          } else {
+            transcriptText = transcription.text;
+            language = transcription.language;
+            warnings.push(
+              `Transcribed ${audio.formatDescription} (${(audio.byteLength / 1024 / 1024).toFixed(1)} MB) with ${transcription.model}.`,
+            );
+          }
         }
-        const transcription = await transcribeUploadedFile(audio.file);
-        if (!transcription) {
-          return NextResponse.json(
-            {
-              error: "Couldn't transcribe this video's audio.",
-              hint:
-                "The audio was extracted, but OpenAI transcription failed. Try again, or upload the audio/video file directly.",
-            },
-            { status: 502 },
-          );
-        }
-        transcriptText = transcription.text;
-        language = transcription.language;
-        warnings.push(
-          `Transcribed ${audio.formatDescription} (${(audio.byteLength / 1024 / 1024).toFixed(1)} MB) with ${transcription.model}.`,
-        );
       }
     } else {
       return NextResponse.json(
