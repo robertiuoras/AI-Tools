@@ -3,10 +3,13 @@ import { YoutubeTranscript } from "youtube-transcript";
 import { enforceApiRateLimit } from "@/lib/api-rate-limit";
 import { logOpenAIUsage } from "@/lib/openai-usage";
 
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
 /**
  * AI Video Summariser
  * --------------------
- * Accepts a YouTube or TikTok URL and returns a structured summary:
+ * Accepts a YouTube URL, or an uploaded audio/video file, and returns a structured summary:
  * - one-paragraph TL;DR
  * - 5–10 key points
  * - hierarchical outline (sections → bullets) suitable for slides / docs
@@ -14,8 +17,8 @@ import { logOpenAIUsage } from "@/lib/openai-usage";
  * Strategy:
  * - YouTube → fetch captions via `youtube-transcript`, then summarise the
  *   transcript with OpenAI gpt-4o-mini.
- * - TikTok  → no transcript; fall back to oEmbed (title + author) and let
- *   the model produce a metadata-based summary with a clear caveat.
+ * - Uploads → transcribe audio/video with OpenAI, then summarise the transcript.
+ * - Metadata is used only as context. It never replaces real transcript content.
  *
  * Failure modes are surfaced as `{ error, hint }` JSON, never as 500s, so the
  * UI can render an actionable message (e.g. "captions disabled by uploader").
@@ -23,11 +26,13 @@ import { logOpenAIUsage } from "@/lib/openai-usage";
 
 const SOURCE_YOUTUBE = "youtube" as const;
 const SOURCE_TIKTOK = "tiktok" as const;
-type Source = typeof SOURCE_YOUTUBE | typeof SOURCE_TIKTOK;
+const SOURCE_UPLOAD = "upload" as const;
+type Source = typeof SOURCE_YOUTUBE | typeof SOURCE_TIKTOK | typeof SOURCE_UPLOAD;
 
 interface SummaryResponse {
   source: Source;
   videoUrl: string;
+  fileName: string | null;
   title: string | null;
   author: string | null;
   thumbnailUrl: string | null;
@@ -70,6 +75,23 @@ const MODEL_PRICING_PER_MTOK: Record<string, { input: number; output: number }> 
   "gpt-4o": { input: 2.5, output: 10 },
   "gpt-4o-2024-08-06": { input: 2.5, output: 10 },
 };
+
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+const SUPPORTED_UPLOAD_TYPES = [
+  "audio/flac",
+  "audio/m4a",
+  "audio/mp3",
+  "audio/mp4",
+  "audio/mpeg",
+  "audio/ogg",
+  "audio/wav",
+  "audio/webm",
+  "video/mp4",
+  "video/mpeg",
+  "video/ogg",
+  "video/quicktime",
+  "video/webm",
+];
 
 function computeCost(
   model: string,
@@ -188,6 +210,42 @@ async function fetchYouTubeTranscript(
       .trim();
     if (!text) return null;
     return { text, language: null };
+  } catch {
+    return null;
+  }
+}
+
+async function transcribeUploadedFile(
+  file: File,
+): Promise<{ text: string; language: string | null; model: string } | null> {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key?.startsWith("sk-")) return null;
+
+  const form = new FormData();
+  form.append("model", "gpt-4o-mini-transcribe");
+  form.append("response_format", "json");
+  form.append("file", file, file.name || "uploaded-video");
+
+  try {
+    const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}` },
+      body: form,
+      signal: AbortSignal.timeout(55000),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      text?: string;
+      language?: string;
+      model?: string;
+    };
+    const text = typeof data.text === "string" ? data.text.trim() : "";
+    if (!text) return null;
+    return {
+      text,
+      language: typeof data.language === "string" ? data.language : null,
+      model: data.model ?? "gpt-4o-mini-transcribe",
+    };
   } catch {
     return null;
   }
@@ -427,12 +485,12 @@ async function summariseWithOpenAi(args: {
   );
 
   const systemPrompt = [
-    "You are a precise study/notes assistant. Summarise online videos for a busy reader who wants every useful detail without fluff.",
+    "You are a precise study/notes assistant. Summarise online videos for a busy reader who wants accurate detail without fluff.",
     "You MUST reply with a single JSON object and nothing else (no markdown fences).",
     "Schema:",
-    '  "summary": string  (2–4 sentence TL;DR, plain prose, no bullets)',
-    '  "keyPoints": string[]  (8–15 standalone takeaways, full sentences, ordered by importance)',
-    '  "detailedNotes": Array<{ "section": string, "bullets": string[] }>  (4–8 sections covering the actual teaching, claims, examples, numbers, tools, and caveats)',
+    '  "summary": string  (3–5 concise sentences covering the topic, speaker if known, and main conclusion)',
+    '  "keyPoints": string[]  (6–12 standalone takeaways, full sentences, ordered by importance)',
+    '  "detailedNotes": Array<{ "section": string, "bullets": string[] }>  (4–7 sections covering the actual teaching, claims, examples, numbers, tools, and caveats)',
     '  "importantCommands": string[]  (commands, code, URLs, settings, keyboard shortcuts, formulas, prompts, named tools, or step sequences; exact wording when available; [] if none)',
     '  "actionItems": string[]  (practical next steps the viewer can take; [] if the video is purely informational)',
     '  "outline": Array<{ "section": string, "bullets": string[] }>  (3–6 sections, each with 2–6 short bullets — suitable for slides)',
@@ -440,6 +498,8 @@ async function summariseWithOpenAi(args: {
     "- Be specific. Prefer concrete claims, numbers, names, examples from the source.",
     "- Extract commands and setup steps aggressively; these are more important than generic prose.",
     "- If the speaker lists a process, preserve the order.",
+    "- Include quantitative details such as costs, time windows, message counts, percentages, and named examples.",
+    "- Be more brief than a full transcript-derived article: compress repetition, but keep every distinct useful fact.",
     "- Never invent facts that aren't in the source. If something is uncertain, omit it.",
     "- Each key point should make sense without context.",
     "- Section titles should be short Title Case (3–6 words).",
@@ -466,13 +526,9 @@ async function summariseWithOpenAi(args: {
           : "(complete)"
       }:\n${transcriptContext.text}`,
     );
-  } else if (args.description) {
-    userParts.push(
-      "(no spoken transcript was available — base the summary on the author's description above; if a fact isn't directly supported by it, omit it. Include in keyPoints a brief note that this summary is built from the description, not the spoken audio.)",
-    );
   } else {
     userParts.push(
-      "(no transcript or description available — produce the most useful summary you can from the title alone, and add to keyPoints a clear caveat that nothing beyond the title was available)",
+      "(no spoken transcript was available — do not summarise metadata as if it were the video content.)",
     );
   }
 
@@ -539,21 +595,66 @@ export async function POST(request: NextRequest) {
     const limited = enforceApiRateLimit(request, "video_summary");
     if (limited) return limited;
 
-    const body = (await request.json().catch(() => ({}))) as { url?: string };
-    const url = typeof body.url === "string" ? body.url.trim() : "";
-    if (!url) {
+    const contentType = request.headers.get("content-type") ?? "";
+    let url = "";
+    let uploadedFile: File | null = null;
+
+    if (contentType.includes("multipart/form-data")) {
+      const form = await request.formData();
+      const file = form.get("file");
+      if (file instanceof File) {
+        uploadedFile = file;
+      }
+      const formUrl = form.get("url");
+      url = typeof formUrl === "string" ? formUrl.trim() : "";
+    } else {
+      const body = (await request.json().catch(() => ({}))) as { url?: string };
+      url = typeof body.url === "string" ? body.url.trim() : "";
+    }
+
+    if (!url && !uploadedFile) {
       return NextResponse.json(
-        { error: "Provide a YouTube or TikTok URL." },
+        { error: "Provide a YouTube URL or upload an audio/video file." },
         { status: 400 },
       );
     }
 
-    const source = detectSource(url);
-    if (!source) {
+    let source: Source = SOURCE_UPLOAD;
+    if (url) {
+      const detectedSource = detectSource(url);
+      if (!detectedSource) {
+        return NextResponse.json(
+          {
+            error: "Unsupported URL.",
+            hint:
+              "Only YouTube URLs with captions can be summarized by URL. For captionless videos, upload the audio/video file so it can be transcribed first.",
+          },
+          { status: 400 },
+        );
+      }
+      source = detectedSource;
+    }
+
+    if (uploadedFile && uploadedFile.size > MAX_UPLOAD_BYTES) {
       return NextResponse.json(
         {
-          error: "Unsupported URL.",
-          hint: "Only YouTube and TikTok URLs are supported right now.",
+          error: "File is too large.",
+          hint: "Upload an audio/video file under 25 MB, or compress/trim it first.",
+        },
+        { status: 413 },
+      );
+    }
+
+    if (
+      uploadedFile &&
+      uploadedFile.type &&
+      !SUPPORTED_UPLOAD_TYPES.includes(uploadedFile.type)
+    ) {
+      return NextResponse.json(
+        {
+          error: "Unsupported file type.",
+          hint:
+            "Upload a common audio/video file such as MP3, MP4, M4A, WAV, WEBM, MPEG, or MOV.",
         },
         { status: 400 },
       );
@@ -567,8 +668,27 @@ export async function POST(request: NextRequest) {
     let language: string | null = null;
     let descriptionText: string | null = null;
     let descriptionExtra: string[] = [];
+    let fileName: string | null = uploadedFile?.name || null;
 
-    if (source === SOURCE_YOUTUBE) {
+    if (uploadedFile) {
+      title = uploadedFile.name || "Uploaded video";
+      const transcription = await transcribeUploadedFile(uploadedFile);
+      if (!transcription) {
+        return NextResponse.json(
+          {
+            error: "Couldn't transcribe this file.",
+            hint:
+              "Make sure OPENAI_API_KEY is set and upload a clear audio/video file under 25 MB.",
+          },
+          { status: 502 },
+        );
+      }
+      transcriptText = transcription.text;
+      language = transcription.language;
+      warnings.push(
+        `Transcribed uploaded file with ${transcription.model}; summary is grounded in the generated transcript.`,
+      );
+    } else if (source === SOURCE_YOUTUBE) {
       const videoId = getYouTubeVideoId(url);
       if (!videoId) {
         return NextResponse.json(
@@ -589,34 +709,25 @@ export async function POST(request: NextRequest) {
       if (transcript) {
         transcriptText = transcript.text;
         language = transcript.language;
-      } else if (descriptionText) {
-        warnings.push(
-          "No captions available — summary is built from the author's description and metadata, not the spoken audio.",
-        );
       } else {
-        warnings.push(
-          "No captions or description available — summary is generated from the title only and may be vague.",
+        return NextResponse.json(
+          {
+            error: "No real transcript is available for this URL.",
+            hint:
+              "I won't generate a metadata-only summary. Upload the video/audio file so the app can transcribe it and summarize the actual spoken content.",
+          },
+          { status: 422 },
         );
       }
     } else {
-      const [meta, page] = await Promise.all([
-        fetchTikTokOembed(url),
-        fetchVideoPageDescription(url),
-      ]);
-      title = meta?.title ?? null;
-      author = meta?.author_name ?? null;
-      thumbnailUrl = meta?.thumbnail_url ?? null;
-      descriptionText = page?.description ?? null;
-      descriptionExtra = page?.extra ?? [];
-      if (descriptionText) {
-        warnings.push(
-          "TikTok doesn't expose spoken transcripts — this summary is grounded in the post caption, hashtags, and metadata.",
-        );
-      } else {
-        warnings.push(
-          "TikTok summaries use only the post title and author — TikTok does not expose transcripts to third-party apps.",
-        );
-      }
+      return NextResponse.json(
+        {
+          error: "TikTok URLs don't expose real transcripts.",
+          hint:
+            "Upload the TikTok audio/video file instead so the app can create its own transcript and summarize real spoken content.",
+        },
+        { status: 422 },
+      );
     }
 
     const ai = await summariseWithOpenAi({
@@ -652,6 +763,7 @@ export async function POST(request: NextRequest) {
     const payload: SummaryResponse = {
       source,
       videoUrl: url,
+      fileName,
       title,
       author,
       thumbnailUrl,

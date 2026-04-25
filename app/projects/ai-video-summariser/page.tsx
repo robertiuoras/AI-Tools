@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -25,8 +25,9 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 
 interface SummaryResult {
-  source: "youtube" | "tiktok";
+  source: "youtube" | "tiktok" | "upload";
   videoUrl: string;
+  fileName: string | null;
   title: string | null;
   author: string | null;
   thumbnailUrl: string | null;
@@ -57,6 +58,14 @@ interface SummaryResult {
   } | null;
 }
 
+const SAVED_RESULT_KEY = "ai-video-summariser:last-result";
+
+function sourceLabel(source: SummaryResult["source"]): string {
+  if (source === "youtube") return "YouTube";
+  if (source === "tiktok") return "TikTok";
+  return "Uploaded file";
+}
+
 /** Format a USD amount that's typically a fraction of a cent. */
 function formatUsd(value: number): string {
   if (value === 0) return "$0.00";
@@ -72,15 +81,22 @@ function buildMarkdown(s: SummaryResult): string {
   lines.push(`# ${s.title ?? "Video summary"}`);
   if (s.author) lines.push(`*by ${s.author}*`);
   lines.push("");
-  lines.push(`**Source:** ${s.source === "youtube" ? "YouTube" : "TikTok"}  `);
-  lines.push(`**URL:** ${s.videoUrl}  `);
+  lines.push(`**Source:** ${sourceLabel(s.source)}  `);
+  if (s.videoUrl) lines.push(`**URL:** ${s.videoUrl}  `);
+  if (s.fileName) lines.push(`**File:** ${s.fileName}  `);
   lines.push(
     `**Generated:** ${new Date(s.generatedAt).toLocaleString()}  `,
   );
   if (s.hasTranscript) {
-    lines.push(`**Transcript:** ${s.transcriptCharCount.toLocaleString()} chars`);
+    lines.push(
+      `**Transcript:** ${
+        s.transcriptCoverage.mode === "excerpted"
+          ? `${s.transcriptCoverage.analyzedCharCount.toLocaleString()} / ${s.transcriptCoverage.inputCharCount.toLocaleString()} chars analyzed`
+          : `${s.transcriptCharCount.toLocaleString()} chars`
+      }`,
+    );
   } else {
-    lines.push(`**Transcript:** unavailable (summary from metadata only)`);
+    lines.push(`**Transcript:** unavailable`);
   }
   if (s.cost) {
     lines.push(
@@ -160,7 +176,7 @@ async function downloadPdf(s: SummaryResult): Promise<void> {
   writeWrapped(s.title ?? "Video summary", { size: 22, bold: true, gap: 8 });
   if (s.author) writeWrapped(`by ${s.author}`, { size: 11, gap: 4 });
   writeWrapped(
-    `${s.source === "youtube" ? "YouTube" : "TikTok"}  •  ${s.videoUrl}`,
+    [sourceLabel(s.source), s.videoUrl || s.fileName].filter(Boolean).join("  •  "),
     { size: 9, gap: 18 },
   );
 
@@ -253,6 +269,7 @@ function detectPlatform(url: string): "youtube" | "tiktok" | null {
 
 export default function AiVideoSummariserPage() {
   const [url, setUrl] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<{ message: string; hint?: string } | null>(
     null,
@@ -262,20 +279,60 @@ export default function AiVideoSummariserPage() {
 
   const detected = detectPlatform(url.trim());
 
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(SAVED_RESULT_KEY);
+      if (!saved) return;
+      const parsed = JSON.parse(saved) as {
+        url?: string;
+        result?: SummaryResult;
+      };
+      if (parsed.result?.generatedAt) {
+        setResult(parsed.result);
+        setUrl(parsed.url ?? parsed.result.videoUrl ?? "");
+      }
+    } catch {
+      window.localStorage.removeItem(SAVED_RESULT_KEY);
+    }
+  }, []);
+
+  const saveResult = useCallback((nextResult: SummaryResult, nextUrl: string) => {
+    setResult(nextResult);
+    try {
+      window.localStorage.setItem(
+        SAVED_RESULT_KEY,
+        JSON.stringify({ url: nextUrl, result: nextResult }),
+      );
+    } catch {
+      // Ignore storage quota/private browsing failures; the live result still renders.
+    }
+  }, []);
+
   const onSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
       const trimmed = url.trim();
-      if (!trimmed) return;
+      if (!trimmed && !selectedFile) return;
       setLoading(true);
       setError(null);
-      setResult(null);
       try {
-        const res = await fetch("/api/projects/video-summary", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: trimmed }),
-        });
+        const request =
+          selectedFile != null
+            ? (() => {
+                const form = new FormData();
+                form.append("file", selectedFile);
+                if (trimmed) form.append("url", trimmed);
+                return fetch("/api/projects/video-summary", {
+                  method: "POST",
+                  body: form,
+                });
+              })()
+            : fetch("/api/projects/video-summary", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ url: trimmed }),
+              });
+        const res = await request;
         const data = (await res.json().catch(() => null)) as
           | (SummaryResult & { error?: undefined })
           | { error: string; hint?: string }
@@ -289,7 +346,7 @@ export default function AiVideoSummariserPage() {
           });
           return;
         }
-        setResult(data);
+        saveResult(data, trimmed);
       } catch (err) {
         setError({
           message:
@@ -299,7 +356,7 @@ export default function AiVideoSummariserPage() {
         setLoading(false);
       }
     },
-    [url],
+    [saveResult, selectedFile, url],
   );
 
   const onCopyMarkdown = async () => {
@@ -343,9 +400,9 @@ export default function AiVideoSummariserPage() {
             <span>Summariser</span>
           </h1>
           <p className="mt-2 max-w-2xl text-base text-muted-foreground">
-            Paste a YouTube or TikTok URL. Get a TL;DR, key points and a
-            slide-ready outline, plus commands, practical steps, and detailed
-            notes you can export to Markdown or PDF.
+            Paste a captioned YouTube URL or upload an audio/video file. Get a
+            concise transcript-grounded summary, key points, commands, action
+            items, detailed notes, and exports.
           </p>
         </header>
 
@@ -365,10 +422,9 @@ export default function AiVideoSummariserPage() {
                 id="video-url"
                 type="url"
                 inputMode="url"
-                placeholder="https://www.youtube.com/watch?v=… or https://www.tiktok.com/@user/video/…"
+                placeholder="https://www.youtube.com/watch?v=…"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                required
                 className="pr-24"
               />
               {detected && (
@@ -391,7 +447,7 @@ export default function AiVideoSummariserPage() {
             </div>
             <Button
               type="submit"
-              disabled={loading || !url.trim()}
+              disabled={loading || (!url.trim() && !selectedFile)}
               className="gap-1.5 bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white hover:from-violet-700 hover:to-fuchsia-700"
             >
               {loading ? (
@@ -402,19 +458,44 @@ export default function AiVideoSummariserPage() {
               ) : (
                 <>
                   <Wand2 className="h-4 w-4" />
-                  Summarise
+                  {selectedFile ? "Transcribe & summarise" : "Summarise"}
                 </>
               )}
             </Button>
           </div>
+          <div className="mt-4 rounded-xl border border-dashed border-border/70 bg-background/50 p-4">
+            <Label
+              htmlFor="video-file"
+              className="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
+            >
+              Upload audio/video when captions are missing
+            </Label>
+            <Input
+              id="video-file"
+              type="file"
+              accept="audio/*,video/mp4,video/webm,video/quicktime,video/mpeg"
+              className="mt-2"
+              onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
+            />
+            {selectedFile && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Selected:{" "}
+                <span className="font-medium text-foreground">
+                  {selectedFile.name}
+                </span>{" "}
+                ({(selectedFile.size / 1024 / 1024).toFixed(1)} MB)
+              </p>
+            )}
+          </div>
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground/80">
             <p>
-              YouTube uses captions when available. If captions are missing, it
-              falls back to the video description, caption, hashtags, and metadata.
+              Results stay saved in this browser while you move between Notes
+              and the summariser. Captionless URLs require an upload so the app
+              can create a real transcript first.
             </p>
             <span
               className="inline-flex items-center gap-1 rounded-full border border-border/40 bg-muted/40 px-2 py-0.5 font-medium"
-              title="Estimated OpenAI cost per summarisation using gpt-4o-mini ($0.15/M input, $0.60/M output tokens). Most short videos land in this band; very long lectures (>1h) can reach ~$0.01."
+              title="Estimated OpenAI summary cost using gpt-4o-mini ($0.15/M input, $0.60/M output tokens). Upload transcription cost is separate."
             >
               <Coins className="h-3 w-3" />
               Est. cost: ~$0.0003 – $0.005 per video
@@ -463,7 +544,7 @@ export default function AiVideoSummariserPage() {
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <span className="rounded-full bg-muted px-2 py-0.5 font-semibold uppercase tracking-wider">
-                    {result.source}
+                    {sourceLabel(result.source)}
                   </span>
                   {result.hasTranscript ? (
                     <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
@@ -475,7 +556,7 @@ export default function AiVideoSummariserPage() {
                   ) : (
                     <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
                       <AlertTriangle className="h-3.5 w-3.5" />
-                      Metadata only
+                      Transcript unavailable
                     </span>
                   )}
                   {result.cost && (
@@ -494,6 +575,11 @@ export default function AiVideoSummariserPage() {
                 {result.author && (
                   <p className="text-sm text-muted-foreground">
                     by {result.author}
+                  </p>
+                )}
+                {result.fileName && (
+                  <p className="text-sm text-muted-foreground">
+                    file: {result.fileName}
                   </p>
                 )}
                 <div className="mt-4 flex flex-wrap gap-2">
