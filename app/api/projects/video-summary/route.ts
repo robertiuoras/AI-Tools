@@ -36,7 +36,15 @@ interface SummaryResponse {
   transcriptCharCount: number;
   summary: string;
   keyPoints: string[];
+  detailedNotes: Array<{ section: string; bullets: string[] }>;
+  importantCommands: string[];
+  actionItems: string[];
   outline: Array<{ section: string; bullets: string[] }>;
+  transcriptCoverage: {
+    mode: "full" | "excerpted" | "metadata";
+    inputCharCount: number;
+    analyzedCharCount: number;
+  };
   generatedAt: string;
   warnings: string[];
   /** Token usage + USD cost for this single summarisation (gpt-4o-mini). */
@@ -274,6 +282,9 @@ async function fetchVideoPageDescription(
 interface OpenAiSummary {
   summary: string;
   keyPoints: string[];
+  detailedNotes: Array<{ section: string; bullets: string[] }>;
+  importantCommands: string[];
+  actionItems: string[];
   outline: Array<{ section: string; bullets: string[] }>;
 }
 
@@ -281,6 +292,116 @@ interface OpenAiUsage {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+}
+
+function buildTranscriptContext(
+  transcript: string | null,
+  budget: number,
+): {
+  text: string;
+  mode: SummaryResponse["transcriptCoverage"]["mode"];
+  inputCharCount: number;
+  analyzedCharCount: number;
+} {
+  if (!transcript) {
+    return { text: "", mode: "metadata", inputCharCount: 0, analyzedCharCount: 0 };
+  }
+
+  if (transcript.length <= budget) {
+    return {
+      text: transcript,
+      mode: "full",
+      inputCharCount: transcript.length,
+      analyzedCharCount: transcript.length,
+    };
+  }
+
+  const firstSize = Math.floor(budget * 0.4);
+  const middleSize = Math.floor(budget * 0.35);
+  const finalSize = budget - firstSize - middleSize;
+  const middleStart = Math.max(
+    firstSize,
+    Math.floor(transcript.length / 2 - middleSize / 2),
+  );
+  const finalStart = Math.max(middleStart + middleSize, transcript.length - finalSize);
+  const sections = [
+    `[Beginning excerpt]\n${transcript.slice(0, firstSize)}`,
+    `[Middle excerpt]\n${transcript.slice(middleStart, middleStart + middleSize)}`,
+    `[Final excerpt]\n${transcript.slice(finalStart)}`,
+  ];
+  const text = sections.join("\n\n[... transcript excerpted for length ...]\n\n");
+
+  return {
+    text,
+    mode: "excerpted",
+    inputCharCount: transcript.length,
+    analyzedCharCount: firstSize + middleSize + finalSize,
+  };
+}
+
+function parseSummaryObject(raw: unknown): OpenAiSummary | null {
+  const obj = raw as Partial<OpenAiSummary>;
+  const summary = typeof obj.summary === "string" ? obj.summary.trim() : "";
+  const keyPoints = Array.isArray(obj.keyPoints)
+    ? obj.keyPoints.map((p) => String(p).trim()).filter(Boolean).slice(0, 15)
+    : [];
+  const detailedNotes = Array.isArray(obj.detailedNotes)
+    ? obj.detailedNotes
+        .map((s) => ({
+          section: String((s as { section?: unknown }).section ?? "").trim(),
+          bullets: Array.isArray((s as { bullets?: unknown }).bullets)
+            ? ((s as { bullets: unknown[] }).bullets)
+                .map((b) => String(b).trim())
+                .filter(Boolean)
+                .slice(0, 10)
+            : [],
+        }))
+        .filter((s) => s.section && s.bullets.length > 0)
+        .slice(0, 8)
+    : [];
+  const importantCommands = Array.isArray(obj.importantCommands)
+    ? obj.importantCommands
+        .map((p) => String(p).trim())
+        .filter(Boolean)
+        .slice(0, 20)
+    : [];
+  const actionItems = Array.isArray(obj.actionItems)
+    ? obj.actionItems.map((p) => String(p).trim()).filter(Boolean).slice(0, 12)
+    : [];
+  const outline = Array.isArray(obj.outline)
+    ? obj.outline
+        .map((s) => ({
+          section: String((s as { section?: unknown }).section ?? "").trim(),
+          bullets: Array.isArray((s as { bullets?: unknown }).bullets)
+            ? ((s as { bullets: unknown[] }).bullets)
+                .map((b) => String(b).trim())
+                .filter(Boolean)
+                .slice(0, 8)
+            : [],
+        }))
+        .filter((s) => s.section && s.bullets.length > 0)
+        .slice(0, 8)
+    : [];
+
+  if (
+    !summary &&
+    keyPoints.length === 0 &&
+    detailedNotes.length === 0 &&
+    importantCommands.length === 0 &&
+    actionItems.length === 0 &&
+    outline.length === 0
+  ) {
+    return null;
+  }
+
+  return {
+    summary,
+    keyPoints,
+    detailedNotes,
+    importantCommands,
+    actionItems,
+    outline,
+  };
 }
 
 async function summariseWithOpenAi(args: {
@@ -294,23 +415,31 @@ async function summariseWithOpenAi(args: {
   data: OpenAiSummary;
   modelUsed: string;
   usage: OpenAiUsage | null;
+  transcriptCoverage: SummaryResponse["transcriptCoverage"];
 } | null> {
   const key = process.env.OPENAI_API_KEY;
   if (!key?.startsWith("sk-")) return null;
 
-  const TRANSCRIPT_CHAR_BUDGET = 28000;
-  const transcriptSnippet = (args.transcript ?? "").slice(0, TRANSCRIPT_CHAR_BUDGET);
-  const truncated = (args.transcript?.length ?? 0) > TRANSCRIPT_CHAR_BUDGET;
+  const TRANSCRIPT_CHAR_BUDGET = 110000;
+  const transcriptContext = buildTranscriptContext(
+    args.transcript,
+    TRANSCRIPT_CHAR_BUDGET,
+  );
 
   const systemPrompt = [
-    "You are a precise study/notes assistant. Summarise online videos for a busy reader.",
+    "You are a precise study/notes assistant. Summarise online videos for a busy reader who wants every useful detail without fluff.",
     "You MUST reply with a single JSON object and nothing else (no markdown fences).",
     "Schema:",
-    '  "summary": string  (1–3 sentence TL;DR, plain prose, no bullets)',
-    '  "keyPoints": string[]  (5–10 standalone takeaways, full sentences, ordered by importance)',
+    '  "summary": string  (2–4 sentence TL;DR, plain prose, no bullets)',
+    '  "keyPoints": string[]  (8–15 standalone takeaways, full sentences, ordered by importance)',
+    '  "detailedNotes": Array<{ "section": string, "bullets": string[] }>  (4–8 sections covering the actual teaching, claims, examples, numbers, tools, and caveats)',
+    '  "importantCommands": string[]  (commands, code, URLs, settings, keyboard shortcuts, formulas, prompts, named tools, or step sequences; exact wording when available; [] if none)',
+    '  "actionItems": string[]  (practical next steps the viewer can take; [] if the video is purely informational)',
     '  "outline": Array<{ "section": string, "bullets": string[] }>  (3–6 sections, each with 2–6 short bullets — suitable for slides)',
     "Style rules:",
     "- Be specific. Prefer concrete claims, numbers, names, examples from the source.",
+    "- Extract commands and setup steps aggressively; these are more important than generic prose.",
+    "- If the speaker lists a process, preserve the order.",
     "- Never invent facts that aren't in the source. If something is uncertain, omit it.",
     "- Each key point should make sense without context.",
     "- Section titles should be short Title Case (3–6 words).",
@@ -329,9 +458,13 @@ async function summariseWithOpenAi(args: {
   }
   for (const x of args.extra) userParts.push(x);
 
-  if (transcriptSnippet) {
+  if (transcriptContext.text) {
     userParts.push(
-      `Transcript${truncated ? " (truncated to fit context — summarise everything provided, ignore that this is a partial)" : ""}:\n${transcriptSnippet}`,
+      `Transcript ${
+        transcriptContext.mode === "excerpted"
+          ? "(long video excerpted across beginning, middle, and end; analyze only the provided excerpts and avoid pretending this is complete)"
+          : "(complete)"
+      }:\n${transcriptContext.text}`,
     );
   } else if (args.description) {
     userParts.push(
@@ -357,7 +490,7 @@ async function summariseWithOpenAi(args: {
           { role: "user", content: userParts.join("\n\n") },
         ],
         response_format: { type: "json_object" },
-        max_tokens: 1400,
+        max_tokens: 2400,
         temperature: 0.3,
       }),
       signal: AbortSignal.timeout(45000),
@@ -384,28 +517,18 @@ async function summariseWithOpenAi(args: {
     } catch {
       return null;
     }
-    const obj = parsed as Partial<OpenAiSummary>;
-    const summary =
-      typeof obj.summary === "string" ? obj.summary.trim() : "";
-    const keyPoints = Array.isArray(obj.keyPoints)
-      ? obj.keyPoints.map((p) => String(p).trim()).filter(Boolean).slice(0, 12)
-      : [];
-    const outline = Array.isArray(obj.outline)
-      ? obj.outline
-          .map((s) => ({
-            section: String((s as { section?: unknown }).section ?? "").trim(),
-            bullets: Array.isArray((s as { bullets?: unknown }).bullets)
-              ? ((s as { bullets: unknown[] }).bullets)
-                  .map((b) => String(b).trim())
-                  .filter(Boolean)
-                  .slice(0, 8)
-              : [],
-          }))
-          .filter((s) => s.section && s.bullets.length > 0)
-          .slice(0, 8)
-      : [];
-    if (!summary && keyPoints.length === 0 && outline.length === 0) return null;
-    return { data: { summary, keyPoints, outline }, modelUsed, usage };
+    const summary = parseSummaryObject(parsed);
+    if (!summary) return null;
+    return {
+      data: summary,
+      modelUsed,
+      usage,
+      transcriptCoverage: {
+        mode: transcriptContext.mode,
+        inputCharCount: transcriptContext.inputCharCount,
+        analyzedCharCount: transcriptContext.analyzedCharCount,
+      },
+    };
   } catch {
     return null;
   }
@@ -520,6 +643,12 @@ export async function POST(request: NextRequest) {
       ? computeCost(ai.modelUsed, ai.usage.prompt_tokens, ai.usage.completion_tokens)
       : null;
 
+    if (ai.transcriptCoverage.mode === "excerpted") {
+      warnings.push(
+        `Very long transcript — analyzed ${ai.transcriptCoverage.analyzedCharCount.toLocaleString()} of ${ai.transcriptCoverage.inputCharCount.toLocaleString()} characters across the beginning, middle, and end.`,
+      );
+    }
+
     const payload: SummaryResponse = {
       source,
       videoUrl: url,
@@ -531,7 +660,11 @@ export async function POST(request: NextRequest) {
       transcriptCharCount: transcriptText?.length ?? 0,
       summary: ai.data.summary,
       keyPoints: ai.data.keyPoints,
+      detailedNotes: ai.data.detailedNotes,
+      importantCommands: ai.data.importantCommands,
+      actionItems: ai.data.actionItems,
       outline: ai.data.outline,
+      transcriptCoverage: ai.transcriptCoverage,
       generatedAt: new Date().toISOString(),
       warnings,
       cost,

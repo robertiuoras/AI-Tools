@@ -35,7 +35,15 @@ interface SummaryResult {
   transcriptCharCount: number;
   summary: string;
   keyPoints: string[];
+  detailedNotes: Array<{ section: string; bullets: string[] }>;
+  importantCommands: string[];
+  actionItems: string[];
   outline: Array<{ section: string; bullets: string[] }>;
+  transcriptCoverage: {
+    mode: "full" | "excerpted" | "metadata";
+    inputCharCount: number;
+    analyzedCharCount: number;
+  };
   generatedAt: string;
   warnings: string[];
   cost: {
@@ -90,6 +98,24 @@ function buildMarkdown(s: SummaryResult): string {
   lines.push("## Key points");
   s.keyPoints.forEach((k) => lines.push(`- ${k}`));
   lines.push("");
+  if (s.importantCommands.length > 0) {
+    lines.push("## Important commands and useful details");
+    s.importantCommands.forEach((k) => lines.push(`- ${k}`));
+    lines.push("");
+  }
+  if (s.actionItems.length > 0) {
+    lines.push("## Action items");
+    s.actionItems.forEach((k) => lines.push(`- ${k}`));
+    lines.push("");
+  }
+  if (s.detailedNotes.length > 0) {
+    lines.push("## Detailed notes");
+    s.detailedNotes.forEach((sec) => {
+      lines.push(`### ${sec.section}`);
+      sec.bullets.forEach((b) => lines.push(`- ${b}`));
+      lines.push("");
+    });
+  }
   lines.push("## Outline");
   s.outline.forEach((sec) => {
     lines.push(`### ${sec.section}`);
@@ -153,6 +179,38 @@ async function downloadPdf(s: SummaryResult): Promise<void> {
     writeWrapped(`• ${k}`, { size: 11, gap: 2 });
   }
   y += 12;
+
+  if (s.importantCommands.length > 0) {
+    writeWrapped("Important commands and useful details", {
+      size: 14,
+      bold: true,
+      gap: 6,
+    });
+    for (const k of s.importantCommands) {
+      writeWrapped(`• ${k}`, { size: 11, gap: 2 });
+    }
+    y += 12;
+  }
+
+  if (s.actionItems.length > 0) {
+    writeWrapped("Action items", { size: 14, bold: true, gap: 6 });
+    for (const k of s.actionItems) {
+      writeWrapped(`• ${k}`, { size: 11, gap: 2 });
+    }
+    y += 12;
+  }
+
+  if (s.detailedNotes.length > 0) {
+    writeWrapped("Detailed notes", { size: 14, bold: true, gap: 6 });
+    for (const sec of s.detailedNotes) {
+      writeWrapped(sec.section, { size: 12, bold: true, gap: 4 });
+      for (const b of sec.bullets) {
+        writeWrapped(`• ${b}`, { size: 11, gap: 2 });
+      }
+      y += 8;
+    }
+    y += 12;
+  }
 
   writeWrapped("Outline", { size: 14, bold: true, gap: 6 });
   for (const sec of s.outline) {
@@ -286,8 +344,8 @@ export default function AiVideoSummariserPage() {
           </h1>
           <p className="mt-2 max-w-2xl text-base text-muted-foreground">
             Paste a YouTube or TikTok URL. Get a TL;DR, key points and a
-            slide-ready outline you can export to Markdown or PDF — like a tiny
-            NotebookLM for short videos.
+            slide-ready outline, plus commands, practical steps, and detailed
+            notes you can export to Markdown or PDF.
           </p>
         </header>
 
@@ -351,8 +409,8 @@ export default function AiVideoSummariserPage() {
           </div>
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground/80">
             <p>
-              YouTube uses captions when available. TikTok summarises from
-              title + author only (no public transcripts).
+              YouTube uses captions when available. If captions are missing, it
+              falls back to the video description, caption, hashtags, and metadata.
             </p>
             <span
               className="inline-flex items-center gap-1 rounded-full border border-border/40 bg-muted/40 px-2 py-0.5 font-medium"
@@ -410,8 +468,9 @@ export default function AiVideoSummariserPage() {
                   {result.hasTranscript ? (
                     <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
                       <CheckCircle2 className="h-3.5 w-3.5" />
-                      Transcript • {result.transcriptCharCount.toLocaleString()}{" "}
-                      chars
+                      {result.transcriptCoverage.mode === "excerpted"
+                        ? `Transcript excerpted • ${result.transcriptCoverage.analyzedCharCount.toLocaleString()} / ${result.transcriptCoverage.inputCharCount.toLocaleString()} chars`
+                        : `Transcript • ${result.transcriptCharCount.toLocaleString()} chars`}
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
@@ -517,6 +576,60 @@ export default function AiVideoSummariserPage() {
                 ))}
               </ol>
             </section>
+
+            {result.importantCommands.length > 0 && (
+              <section className="rounded-2xl border border-border/50 bg-card/90 p-5 shadow-md backdrop-blur-sm">
+                <h3 className="mb-3 inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-muted-foreground">
+                  <FileText className="h-4 w-4 text-violet-500" />
+                  Commands & useful details
+                </h3>
+                <ul className="list-disc space-y-2 pl-5 text-sm leading-relaxed marker:text-muted-foreground/60">
+                  {result.importantCommands.map((item, i) => (
+                    <li key={i}>{item}</li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            {result.actionItems.length > 0 && (
+              <section className="rounded-2xl border border-border/50 bg-card/90 p-5 shadow-md backdrop-blur-sm">
+                <h3 className="mb-3 inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-muted-foreground">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                  Action items
+                </h3>
+                <ul className="list-disc space-y-2 pl-5 text-sm leading-relaxed marker:text-muted-foreground/60">
+                  {result.actionItems.map((item, i) => (
+                    <li key={i}>{item}</li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            {result.detailedNotes.length > 0 && (
+              <section className="rounded-2xl border border-border/50 bg-card/90 p-5 shadow-md backdrop-blur-sm">
+                <h3 className="mb-3 inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-muted-foreground">
+                  <FileText className="h-4 w-4 text-cyan-500" />
+                  Detailed notes
+                </h3>
+                <div className="space-y-4">
+                  {result.detailedNotes.map((sec, i) => (
+                    <div
+                      key={i}
+                      className="rounded-xl border border-border/40 bg-background/50 p-4"
+                    >
+                      <h4 className="mb-2 text-sm font-semibold tracking-tight">
+                        {sec.section}
+                      </h4>
+                      <ul className="list-disc space-y-1 pl-5 text-sm leading-relaxed text-muted-foreground marker:text-muted-foreground/60">
+                        {sec.bullets.map((b, j) => (
+                          <li key={j}>{b}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
 
             <section className="rounded-2xl border border-border/50 bg-card/90 p-5 shadow-md backdrop-blur-sm">
               <h3 className="mb-3 inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-muted-foreground">
