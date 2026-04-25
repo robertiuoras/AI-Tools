@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import ytdl from "@distube/ytdl-core";
+import Innertube, { UniversalCache } from "youtubei.js";
 import { YoutubeTranscript } from "youtube-transcript";
 import { enforceApiRateLimit } from "@/lib/api-rate-limit";
 import { logOpenAIUsage } from "@/lib/openai-usage";
@@ -95,6 +95,92 @@ const SUPPORTED_UPLOAD_TYPES = [
   "video/webm",
 ];
 
+/** iOS HLS: each segment is a full GET; avoids googlevideo 403s on follow-up `range=` / Range requests. */
+const YT_HLS_HEADERS: Record<string, string> = {
+  "User-Agent":
+    "com.google.ios.youtube/19.12.3 (iPhone15,2; U; CPU iOS 16_5 like Mac OS X; en_US)",
+  Accept: "*/*",
+  "Accept-Language": "en-US,en;q=0.9",
+  Referer: "https://www.youtube.com/",
+  Origin: "https://www.youtube.com",
+};
+
+function hlsClenFromMediaUri(uri: string): number {
+  const m = uri.match(/sgoap%2Fclen%3D(\d+)/) ?? uri.match(/sgoap\/clen%3D(\d+)/);
+  return m?.[1] ? Number(m[1]) : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Picks a low-bitrate *audio* rendition from a master m3u8 (InnerTube iOS: `#EXT-X-MEDIA` lines).
+ * Prefer the explicit small `itag/233` playlist when present.
+ */
+function pickAudioMediaPlaylistFromMasterManifest(masterText: string): string | null {
+  const lines = masterText.split("\n");
+  const mediaRows = lines
+    .filter((l) => l.startsWith("#EXT-X-MEDIA:") && l.includes("TYPE=AUDIO") && l.includes("URI="))
+    .map((row) => {
+      const m = row.match(/URI="([^"]+)"/);
+      return m?.[1] ? m[1] : null;
+    })
+    .filter((u): u is string => Boolean(u));
+  if (mediaRows.length === 0) return null;
+  const byItag233 = mediaRows.find((u) => u.includes("/itag/233/"));
+  if (byItag233) return byItag233;
+  return [...mediaRows].sort(
+    (a, b) => hlsClenFromMediaUri(a) - hlsClenFromMediaUri(b),
+  )[0]!;
+}
+
+function listHlsSegmentUrls(playlistText: string): string[] {
+  return playlistText
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0 && !l.startsWith("#") && l.startsWith("https://"));
+}
+
+async function downloadHlsAudioToBuffer(
+  initialPlaylistUrl: string,
+  maxBytes: number,
+): Promise<Uint8Array | null> {
+  const res0 = await fetch(initialPlaylistUrl, {
+    method: "GET",
+    headers: { ...YT_HLS_HEADERS },
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!res0.ok) return null;
+  const playlist = await res0.text();
+  const segments = listHlsSegmentUrls(playlist);
+  if (segments.length === 0) return null;
+
+  const out: Uint8Array[] = [];
+  let n = 0;
+  for (const seg of segments) {
+    if (n >= maxBytes) return null;
+    const r = await fetch(seg, {
+      method: "GET",
+      headers: { ...YT_HLS_HEADERS },
+      signal: AbortSignal.timeout(120000),
+    });
+    if (!r.ok) return null;
+    const part = new Uint8Array(await r.arrayBuffer());
+    if (part.byteLength === 0) return null;
+    if (n + part.byteLength > maxBytes) return null;
+    out.push(part);
+    n += part.byteLength;
+  }
+  return mergeUint8Arrays(out, n);
+}
+
+function mergeUint8Arrays(chunks: Uint8Array[], total: number): Uint8Array {
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    out.set(c, off);
+    off += c.byteLength;
+  }
+  return out;
+}
+
 type UrlAudioResult =
   | {
       ok: true;
@@ -107,6 +193,16 @@ type UrlAudioResult =
       reason: "too-large" | "unavailable";
       message: string;
     };
+
+let innertubeClient: Awaited<ReturnType<typeof Innertube.create>> | null = null;
+async function getInnertube() {
+  if (!innertubeClient) {
+    innertubeClient = await Innertube.create({
+      cache: new UniversalCache(true),
+    });
+  }
+  return innertubeClient;
+}
 
 function computeCost(
   model: string,
@@ -266,84 +362,75 @@ async function transcribeUploadedFile(
   }
 }
 
-function formatMimeType(format: ytdl.videoFormat): string {
-  const mime = format.mimeType?.split(";")[0]?.trim();
-  if (mime) return mime;
-  if (format.container === "webm") return "audio/webm";
-  if (format.container === "mp4") return "audio/mp4";
-  return "audio/mpeg";
-}
-
-async function streamToFileWithLimit(
-  stream: NodeJS.ReadableStream,
-  args: { maxBytes: number; fileName: string; mimeType: string },
-): Promise<File | null> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-
-  for await (const chunk of stream) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    total += buffer.byteLength;
-    if (total > args.maxBytes) {
-      (stream as { destroy?: () => void }).destroy?.();
-      return null;
-    }
-    chunks.push(buffer);
-  }
-
-  if (total === 0) return null;
-  return new File([Buffer.concat(chunks)], args.fileName, {
-    type: args.mimeType,
-  });
-}
-
-async function fetchYouTubeAudioForTranscription(url: string): Promise<UrlAudioResult> {
+async function fetchYouTubeAudioForTranscription(
+  videoId: string,
+): Promise<UrlAudioResult> {
   try {
-    const info = await ytdl.getInfo(url, {
-      playerClients: ["WEB", "ANDROID", "IOS"],
-    });
-    const audioFormats = ytdl.filterFormats(info.formats, "audioonly");
-    const format = ytdl.chooseFormat(audioFormats, {
-      quality: "lowestaudio",
-      filter: "audioonly",
-    });
-    const contentLength = Number.parseInt(format.contentLength || "0", 10);
-    if (contentLength > MAX_TRANSCRIPTION_BYTES) {
+    const innertube = await getInnertube();
+    // `ANDROID` direct URLs are often limited to a single `range=` / Range window; follow-up
+    // requests 403. The `IOS` client exposes a master HLS URL; we fetch the small audio
+    // playlist and concatenate segment GETs (each returns 200) into one buffer.
+    const info = await innertube.getInfo(videoId, { client: "IOS" });
+    const masterUrl = info.streaming_data?.hls_manifest_url;
+    if (!masterUrl) {
+      return {
+        ok: false,
+        reason: "unavailable",
+        message:
+          "YouTube did not return an HLS manifest for this video, so the audio could not be downloaded in segments.",
+      };
+    }
+    const master = await (
+      await fetch(masterUrl, {
+        method: "GET",
+        headers: { ...YT_HLS_HEADERS },
+        signal: AbortSignal.timeout(25000),
+      })
+    ).text();
+    const audioPlaylist = pickAudioMediaPlaylistFromMasterManifest(master);
+    if (!audioPlaylist) {
+      return {
+        ok: false,
+        reason: "unavailable",
+        message: "Could not find an HLS audio playlist in YouTube’s manifest for this video.",
+      };
+    }
+
+    const clen = hlsClenFromMediaUri(audioPlaylist);
+    if (clen !== Number.POSITIVE_INFINITY && clen > MAX_TRANSCRIPTION_BYTES) {
       return {
         ok: false,
         reason: "too-large",
         message:
-          "The video's lowest available audio stream is larger than the transcription API limit.",
+          "The HLS stream’s reported audio size is larger than the transcription API limit.",
       };
     }
 
-    const mimeType = formatMimeType(format);
-    const fileExtension = format.container === "mp4" ? "m4a" : format.container;
-    const stream = ytdl.downloadFromInfo(info, {
-      filter: "audioonly",
-      quality: "lowestaudio",
-      highWaterMark: 1024 * 1024,
-    });
-    const file = await streamToFileWithLimit(stream, {
-      maxBytes: MAX_TRANSCRIPTION_BYTES,
-      fileName: `youtube-audio.${fileExtension}`,
-      mimeType,
-    });
-    if (!file) {
+    const buf = await downloadHlsAudioToBuffer(audioPlaylist, MAX_TRANSCRIPTION_BYTES);
+    if (!buf) {
       return {
         ok: false,
-        reason: "too-large",
-        message:
-          "The video's audio stream exceeded the transcription API limit while downloading.",
+        reason: "unavailable",
+        message: "Couldn’t download the HLS audio segments for this YouTube video.",
+      };
+    }
+    if (buf.byteLength === 0) {
+      return {
+        ok: false,
+        reason: "unavailable",
+        message: "Downloaded an empty audio stream from YouTube.",
       };
     }
 
+    // Concatenated HLS media segments (MPEG-TS). Transcription still accepts this as a generic
+    // audio container when labeled as mpeg; filename extension helps the API.
+    const file = new File([new Uint8Array(buf)], "youtube-audio.mpeg", {
+      type: "audio/mpeg",
+    });
     return {
       ok: true,
       file,
-      formatDescription: `${format.container.toUpperCase()} audio${
-        format.audioBitrate ? `, ${format.audioBitrate}kbps` : ""
-      }`,
+      formatDescription: "HLS (iOS client) · MPEG-TS audio segments",
       byteLength: file.size,
     };
   } catch {
@@ -782,7 +869,7 @@ export async function POST(request: NextRequest) {
           {
             error: "Couldn't transcribe this file.",
             hint:
-              "Make sure OPENAI_API_KEY is set and upload a clear audio/video file under 25 MB.",
+              "Make sure OPENAI_API_KEY is set and upload a clear audio/video file under 24 MB.",
           },
           { status: 502 },
         );
@@ -817,9 +904,7 @@ export async function POST(request: NextRequest) {
         warnings.push(
           "No captions were available, so the app generated its own transcript from the YouTube audio stream.",
         );
-        const audio = await fetchYouTubeAudioForTranscription(
-          `https://www.youtube.com/watch?v=${videoId}`,
-        );
+        const audio = await fetchYouTubeAudioForTranscription(videoId);
         if (!audio.ok) {
           return NextResponse.json(
             {
