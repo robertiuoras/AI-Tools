@@ -1,55 +1,55 @@
-import { NextRequest, NextResponse } from "next/server";
-import { fetchDiscordNews, getDiscordNewsConfig } from "@/lib/discord-news";
+import { google } from "googleapis";
+import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
-/**
- * GET /api/news
- *
- * Returns the latest messages from the configured Discord channel
- * (DISCORD_NEWS_CHANNEL_ID) so the /news page can render them as a
- * news feed. Server-side cached (default 60s) so we never hit Discord
- * rate limits even with many tabs polling.
- *
- * Query params:
- *   ?force=1   — bypass the cache (dev only; returns fresh data)
- */
-export async function GET(request: NextRequest) {
-  const force = request.nextUrl.searchParams.get("force") === "1";
-  const cfg = getDiscordNewsConfig();
+interface NewsRow {
+  content: string;
+  timestamp: string;
+}
 
-  if (!cfg.configured) {
-    return NextResponse.json(
-      {
-        configured: false,
-        items: [],
-        channelName: null,
-        fetchedAt: Date.now(),
-        cached: false,
-        setupHint:
-          "Set DISCORD_BOT_TOKEN and DISCORD_NEWS_CHANNEL_ID in your environment, then reload.",
+export async function GET() {
+  try {
+    const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+    const privateKey = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n");
+    const sheetId = process.env.GOOGLE_SHEET_ID;
+
+    if (!clientEmail || !privateKey || !sheetId) {
+      return NextResponse.json(
+        { error: "Google Sheets environment variables are missing." },
+        { status: 500 },
+      );
+    }
+
+    const auth = new google.auth.GoogleAuth({
+      credentials: {
+        client_email: clientEmail,
+        private_key: privateKey,
       },
-      { status: 200 },
+      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+    });
+
+    const sheets = google.sheets({ version: "v4", auth });
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: sheetId,
+      range: "Sheet1!A:B",
+    });
+
+    const rows = response.data.values ?? [];
+    const items: NewsRow[] = rows
+      .filter((row) => row.length > 0 && String(row[0] ?? "").trim() !== "")
+      .map((row) => ({
+        content: String(row[0] ?? "").trim(),
+        timestamp: String(row[1] ?? "").trim(),
+      }))
+      .reverse();
+
+    return NextResponse.json(items);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return NextResponse.json(
+      { error: `Failed to load Google Sheet news: ${message}` },
+      { status: 500 },
     );
   }
-
-  const result = await fetchDiscordNews({ force });
-  return NextResponse.json(
-    {
-      configured: true,
-      items: result.items,
-      channelName: result.channelName ?? null,
-      fetchedAt: result.fetchedAt,
-      cached: result.cached,
-      ...(result.error ? { error: result.error } : {}),
-    },
-    {
-      status: result.ok ? 200 : 502,
-      headers: {
-        // Tell browsers/CDNs not to keep their own copy beyond our
-        // server cache TTL; we already deduplicate at the source.
-        "Cache-Control": `public, max-age=0, s-maxage=${Math.max(15, Math.floor(cfg.cacheMs / 1000) - 5)}, stale-while-revalidate=60`,
-      },
-    },
-  );
 }
