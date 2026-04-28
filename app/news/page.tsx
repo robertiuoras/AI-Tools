@@ -274,33 +274,26 @@ function safeDate(value: string): Date | null {
 }
 
 function formatHumanTimestamp(date: Date): string {
-  const now = new Date();
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const startOfInput = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const msPerDay = 86_400_000;
-  const dayDiff = Math.floor(
-    (startOfToday.getTime() - startOfInput.getTime()) / msPerDay,
-  );
-
+  const day = date.getDate();
+  const dayWithOrdinal = `${day}${getOrdinalSuffix(day)}`;
+  const month = date.toLocaleDateString([], { month: "long" });
+  const weekday = date.toLocaleDateString([], { weekday: "long" });
   const time = date.toLocaleTimeString([], {
     hour: "numeric",
     minute: "2-digit",
   });
-  const fullDate = date.toLocaleDateString([], {
-    weekday: "long",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-
-  if (dayDiff === 0) return `Today at ${time}`;
-  if (dayDiff > 0 && dayDiff < 7) {
-    const dayName = date.toLocaleDateString([], { weekday: "long" });
-    return `${dayName}, ${time}`;
-  }
-  return `${fullDate} at ${time}`;
+  return `${dayWithOrdinal} ${month}, ${weekday} at ${time}`;
 }
 
 function formatShortTime(date: Date): string {
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function getOrdinalSuffix(day: number): string {
+  if (day >= 11 && day <= 13) return "th";
+  const last = day % 10;
+  if (last === 1) return "st";
+  if (last === 2) return "nd";
+  if (last === 3) return "rd";
+  return "th";
 }
