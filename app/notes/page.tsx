@@ -1155,6 +1155,13 @@ function NotesPageInner() {
     const s = sharedNotes.find((x) => x.note.id === selectedNoteId);
     return s?.permission ?? null;
   }, [sharedNotes, selectedNoteId]);
+  // Shared notes should open in normal layout (not forced focus/fullscreen),
+  // so users always keep the side panels + clear navigation controls visible.
+  useEffect(() => {
+    if (isSharedNoteSelected && focusMode) {
+      setFocusMode(false);
+    }
+  }, [isSharedNoteSelected, focusMode]);
   /** Open Share dialog state. */
   const [shareDialog, setShareDialog] = useState<
     | { noteId: string; noteTitle: string }
@@ -4688,7 +4695,7 @@ function NotesPageInner() {
                           className="min-w-0 flex-1 text-left"
                           onClick={() => {
                             setSelectedNoteId(note.id);
-                            setFocusMode(true);
+                            setFocusMode(false);
                           }}
                           title={`Shared by ${ownerLabel}`}
                         >
