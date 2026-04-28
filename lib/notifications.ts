@@ -12,7 +12,8 @@ export type NotificationType =
   | "note_share_permission_changed"
   | "whiteboard_shared"
   | "whiteboard_unshared"
-  | "whiteboard_share_permission_changed";
+  | "whiteboard_share_permission_changed"
+  | "news_daily_digest";
 
 export interface CreateNotificationParams {
   userId: string;
