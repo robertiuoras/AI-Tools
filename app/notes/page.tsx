@@ -61,8 +61,8 @@ import {
   Palette,
   Highlighter,
   Type,
-  Maximize2,
-  Minimize2,
+  Download,
+  Upload,
   ImagePlus,
   Bold,
   Italic,
@@ -125,6 +125,15 @@ import { LiveblocksRoomProvider } from "@/components/LiveblocksRoomProvider";
 import { CollaborativeNoteEditor } from "@/components/CollaborativeNoteEditor";
 import { NoteVersionHistory } from "@/components/NoteVersionHistory";
 import { History } from "lucide-react";
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 
 function parseInsetClipFromImg(img: HTMLImageElement): {
   top: number;
@@ -1238,7 +1247,7 @@ function NotesPageInner() {
   const [newPageTitle, setNewPageTitle] = useState("");
   const [newNoteTitle, setNewNoteTitle] = useState("");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [noteBodyFullscreen, setNoteBodyFullscreen] = useState(false);
+  const noteTextImportInputRef = useRef<HTMLInputElement | null>(null);
   /** Bumps every minute so "last edited" relative labels stay fresh. */
   const [editedNowMs, setEditedNowMs] = useState(() => Date.now());
   const [allNotesForMentions, setAllNotesForMentions] = useState<Note[]>([]);
@@ -1483,15 +1492,11 @@ function NotesPageInner() {
   }, [selectedNoteId, token, isSharedNoteSelected, notes]);
 
   /**
-   * The Tiptap-based editor is the canonical editor for every note now —
-   * shared or solo. Solo notes still spin up a single-user Liveblocks room
-   * so the same toolbar, right-click menu, prose styles, and autosave
-   * pipeline are used everywhere (no jarring "design change" between read
-   * and edit mode, no two competing toolbars). The room cost is trivial
-   * (1 connection per active tab) and presence cleanly upgrades the
-   * moment the note is shared.
+   * Shared notes (or owned notes that are actively shared) use the
+   * collaborative editor. Solo notes stay on the legacy local editor for
+   * instant open and no "connecting" handshake.
    */
-  const useCollaborativeEditor = true;
+  const useCollaborativeEditor = isSharedNoteSelected || selectedOwnedShareCount > 0;
 
   /** Whether the current user can write to the note (edit-permission share or owner). */
   const canEditSelectedNote = useMemo(() => {
@@ -1615,10 +1620,6 @@ function NotesPageInner() {
   }, [userId, refreshSharedNotes, selectedPageId]);
 
   useEffect(() => {
-    setNoteBodyFullscreen(false);
-  }, [selectedNoteId]);
-
-  useEffect(() => {
     if (!selectedNote?.updatedAt) {
       setLastSavedAtMs(null);
       return;
@@ -1633,13 +1634,13 @@ function NotesPageInner() {
   }, []);
 
   useEffect(() => {
-    if (!noteBodyFullscreen) return;
+    if (!focusMode) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = prev;
     };
-  }, [noteBodyFullscreen]);
+  }, [focusMode]);
 
   useEffect(() => {
     if (!userId) return;
@@ -1666,16 +1667,16 @@ function NotesPageInner() {
   }, [userId]);
 
   useEffect(() => {
-    if (!noteBodyFullscreen) return;
+    if (!focusMode) return;
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        setNoteBodyFullscreen(false);
+        setFocusMode(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [noteBodyFullscreen]);
+  }, [focusMode]);
 
   const updateFormatMenuPosition = useCallback(() => {
     const btn = formatMenuButtonRef.current;
@@ -4311,7 +4312,7 @@ function NotesPageInner() {
     setMentionPickerOpen(false);
     setFindInNoteOpen(false);
     setContextMenu((s) => ({ ...s, open: false }));
-    setNoteBodyFullscreen(false);
+    setFocusMode(false);
   }, [notesSubView]);
 
   const showInitialNotesWorkspaceLoader =
@@ -5374,7 +5375,7 @@ function NotesPageInner() {
                 <div
                   className={cn(
                     "flex min-h-0 min-w-0 flex-1 flex-col space-y-2",
-                    noteBodyFullscreen &&
+                    focusMode &&
                       "fixed inset-0 z-[100] box-border flex h-[100dvh] max-h-[100dvh] flex-col overflow-hidden bg-background p-4 shadow-2xl sm:p-6",
                   )}
                 >
@@ -5383,44 +5384,42 @@ function NotesPageInner() {
                       <Label className="shrink-0 text-xs text-muted-foreground">
                         Note body
                       </Label>
-                      {isEditing ? (
-                        <div className="flex min-h-7 min-w-[10.5rem] items-center gap-1.5 text-xs text-muted-foreground">
-                          {autoSaveState === "saving" ? (
-                            <>
-                              <Loader2
-                                className="h-3.5 w-3.5 shrink-0 animate-spin"
-                                aria-label="Saving"
-                              />
-                              <span className="tabular-nums">Saving…</span>
-                            </>
-                          ) : autoSaveState === "saved" ? (
-                            <span className="inline-flex items-center gap-1 font-medium text-emerald-600 tabular-nums dark:text-emerald-400">
-                              <Check className="h-3.5 w-3.5" aria-hidden />
-                              Saved
-                            </span>
-                          ) : lastSavedAtMs != null ? (
-                            <span
-                              className="tabular-nums"
-                              title={
-                                lastSavedAtMs
-                                  ? new Date(lastSavedAtMs).toLocaleString()
-                                  : undefined
-                              }
-                            >
-                              Saved{" "}
-                              {new Date(lastSavedAtMs).toLocaleTimeString(
-                                undefined,
-                                {
-                                  hour: "numeric",
-                                  minute: "2-digit",
-                                },
-                              )}
-                            </span>
-                          ) : (
-                            <span className="opacity-70">Autosave on</span>
-                          )}
-                        </div>
-                      ) : null}
+                      <div className="flex min-h-7 min-w-[10.5rem] items-center gap-1.5 text-xs text-muted-foreground">
+                        {autoSaveState === "saving" ? (
+                          <>
+                            <Loader2
+                              className="h-3.5 w-3.5 shrink-0 animate-spin"
+                              aria-label="Saving"
+                            />
+                            <span className="tabular-nums">Saving…</span>
+                          </>
+                        ) : autoSaveState === "saved" ? (
+                          <span className="inline-flex items-center gap-1 font-medium text-emerald-600 tabular-nums dark:text-emerald-400">
+                            <Check className="h-3.5 w-3.5" aria-hidden />
+                            Saved
+                          </span>
+                        ) : lastSavedAtMs != null ? (
+                          <span
+                            className="tabular-nums"
+                            title={
+                              lastSavedAtMs
+                                ? new Date(lastSavedAtMs).toLocaleString()
+                                : undefined
+                            }
+                          >
+                            Saved{" "}
+                            {new Date(lastSavedAtMs).toLocaleTimeString(
+                              undefined,
+                              {
+                                hour: "numeric",
+                                minute: "2-digit",
+                              },
+                            )}
+                          </span>
+                        ) : (
+                          <span className="opacity-70">Autosave on</span>
+                        )}
+                      </div>
                     </div>
                     <div className="flex w-full min-w-0 flex-col items-stretch gap-2 sm:w-auto sm:items-end">
                       <div className="flex flex-wrap items-center justify-end gap-1">
@@ -5454,6 +5453,98 @@ function NotesPageInner() {
                             </>
                           )}
                         </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 text-xs"
+                          title="Export note as .txt"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => {
+                            if (!selectedNote) return;
+                            const src = selectedNote.content ?? "";
+                            const plain = isProbablyHtml(src) ? htmlToPlainText(src) : src;
+                            const blob = new Blob([plain], {
+                              type: "text/plain;charset=utf-8",
+                            });
+                            const safeBase = (selectedNote.title || "note")
+                              .replace(/[\\/:*?\"<>|]+/g, " ")
+                              .trim()
+                              .replace(/\s+/g, "-")
+                              .slice(0, 80) || "note";
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement("a");
+                            a.href = url;
+                            a.download = `${safeBase}.txt`;
+                            document.body.appendChild(a);
+                            a.click();
+                            a.remove();
+                            URL.revokeObjectURL(url);
+                          }}
+                        >
+                          <Download className="h-3.5 w-3.5 mr-1" />
+                          Export .txt
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 text-xs"
+                          title={
+                            useCollaborativeEditor
+                              ? "Import is available in solo notes"
+                              : "Import note from .txt"
+                          }
+                          onMouseDown={(e) => e.preventDefault()}
+                          disabled={!canEditSelectedNote || useCollaborativeEditor}
+                          onClick={() => noteTextImportInputRef.current?.click()}
+                        >
+                          <Upload className="h-3.5 w-3.5 mr-1" />
+                          Import .txt
+                        </Button>
+                        <input
+                          ref={noteTextImportInputRef}
+                          type="file"
+                          accept=".txt,text/plain"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            e.currentTarget.value = "";
+                            if (!file || !selectedNote || !canEditSelectedNote) return;
+                            void (async () => {
+                              const text = await file.text();
+                              const html = text
+                                .split(/\r?\n/)
+                                .map((line) =>
+                                  line.trim().length === 0
+                                    ? "<p><br /></p>"
+                                    : `<p>${escapeHtml(line)}</p>`,
+                                )
+                                .join("");
+                              setNotes((prev) =>
+                                sortNotesFavoritesFirst(
+                                  prev.map((n) =>
+                                    n.id === selectedNote.id ? { ...n, content: html } : n,
+                                  ),
+                                ),
+                              );
+                              lastAutoSavedBodyRef.current = normalizeNoteHtmlForSave(html);
+                              setLastSavedAtMs(Date.now());
+                              setAutoSaveState("saved");
+                              window.setTimeout(() => setAutoSaveState("idle"), 1200);
+                              await updateNoteRef.current(
+                                selectedNote.id,
+                                { content: html },
+                                { silent: true },
+                              );
+                              // Refresh legacy editor content immediately when visible.
+                              if (!useCollaborativeEditor && editorRef.current) {
+                                editorRef.current.innerHTML = html;
+                                editorRef.current.dispatchEvent(new Event("input", { bubbles: true }));
+                              }
+                            })();
+                          }}
+                        />
 
                         {/* Find-in-note targeted the legacy contenteditable.
                             With every note now on the Tiptap collab editor
@@ -6218,30 +6309,6 @@ function NotesPageInner() {
                             </span>
                           </>
                         )}
-                        <Button
-                          type="button"
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7 shrink-0"
-                          title={
-                            noteBodyFullscreen
-                              ? "Exit expanded view"
-                              : "Expand note body"
-                          }
-                          aria-pressed={noteBodyFullscreen}
-                          onClick={() => setNoteBodyFullscreen((open) => !open)}
-                        >
-                          {noteBodyFullscreen ? (
-                            <Minimize2 className="h-3.5 w-3.5" aria-hidden />
-                          ) : (
-                            <Maximize2 className="h-3.5 w-3.5" aria-hidden />
-                          )}
-                          <span className="sr-only">
-                            {noteBodyFullscreen
-                              ? "Exit expanded view"
-                              : "Expand note body"}
-                          </span>
-                        </Button>
                       </div>
                       {findInNoteOpen && (
                         <div
@@ -6322,7 +6389,7 @@ function NotesPageInner() {
                         <div
                           className={cn(
                             "relative w-full overflow-y-auto rounded-xl border border-border/60 bg-card shadow-sm ring-1 ring-black/5 [overflow-wrap:anywhere]",
-                            noteBodyFullscreen
+                            focusMode
                               ? "min-h-0 flex-1"
                               : "min-h-[420px] sm:min-h-[480px]",
                           )}
@@ -6351,6 +6418,10 @@ function NotesPageInner() {
                         noteId={selectedNote.id}
                         initialHtml={selectedNote.content || ""}
                         canEdit={canEditSelectedNote}
+                        onSaveStateChange={(state) => {
+                          setAutoSaveState(state);
+                          if (state === "saved") setLastSavedAtMs(Date.now());
+                        }}
                         placeholder={
                           isSharedNoteSelected || selectedOwnedShareCount > 0
                             ? "Start typing… others will see your edits live."
@@ -6358,7 +6429,7 @@ function NotesPageInner() {
                         }
                         className={cn(
                           "w-full min-w-0 max-w-full flex-1 [overflow-wrap:anywhere]",
-                          noteBodyFullscreen
+                          focusMode
                             ? "min-h-0 flex-1"
                             : "min-h-[420px] sm:min-h-[480px]",
                         )}
@@ -6375,7 +6446,7 @@ function NotesPageInner() {
                       className={cn(
                         "note-html-scroll w-full min-w-0 max-w-full flex-1 cursor-text overflow-x-hidden overflow-y-auto rounded-lg bg-muted/30 px-3 py-2 text-sm text-foreground !space-y-0 outline-none [contain:layout] [overflow-wrap:anywhere] focus-visible:ring-2 focus-visible:ring-ring",
                         NOTE_HTML_VIEW_CLASS,
-                        noteBodyFullscreen
+                        focusMode
                           ? "min-h-0 flex-1 max-h-none sm:min-h-0"
                           : "min-h-[200px] max-h-[min(65vh,520px)] sm:min-h-[240px] sm:max-h-[min(70vh,560px)]",
                       )}
@@ -6420,7 +6491,7 @@ function NotesPageInner() {
                       onContextMenu={openContextMenuFromReadBody}
                       className={cn(
                         "note-html-scroll w-full min-w-0 max-w-full flex-1 cursor-pointer select-text overflow-x-hidden overflow-y-auto rounded-lg bg-muted/30 px-3 py-2 text-sm text-foreground [overflow-wrap:anywhere]",
-                        noteBodyFullscreen
+                        focusMode
                           ? "min-h-0 flex-1 max-h-none sm:min-h-0"
                           : "min-h-[200px] max-h-[min(65vh,520px)] sm:min-h-[240px] sm:max-h-[min(70vh,560px)]",
                       )}

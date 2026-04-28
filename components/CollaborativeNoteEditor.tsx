@@ -83,6 +83,8 @@ interface CollaborativeNoteEditorProps {
   canEdit: boolean;
   /** Called after a successful save so the parent can refresh side panels. */
   onSaved?: (html: string) => void;
+  /** Emits save indicator state to parent chrome. */
+  onSaveStateChange?: (state: "saving" | "saved" | "idle") => void;
   /** Optional placeholder text shown when the doc is empty. */
   placeholder?: string;
   /** Optional class name forwarded to the root scroll container. */
@@ -90,7 +92,15 @@ interface CollaborativeNoteEditorProps {
 }
 
 export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
-  const { noteId, initialHtml, canEdit, onSaved, placeholder, className } = props;
+  const {
+    noteId,
+    initialHtml,
+    canEdit,
+    onSaved,
+    onSaveStateChange,
+    placeholder,
+    className,
+  } = props;
   const room = useRoom();
   const self = useSelf();
   const { accessToken } = useAuthSession();
@@ -352,6 +362,7 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
     saveAbort.current = ctrl;
 
     try {
+      onSaveStateChange?.("saving");
       const res = await fetch(`/api/notes/${noteId}`, {
         method: "PUT",
         signal: ctrl.signal,
@@ -361,13 +372,20 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
         },
         body: JSON.stringify({ content: html }),
       });
-      if (res.ok) onSaved?.(html);
+      if (res.ok) {
+        onSaved?.(html);
+        onSaveStateChange?.("saved");
+        window.setTimeout(() => onSaveStateChange?.("idle"), 1200);
+      } else {
+        onSaveStateChange?.("idle");
+      }
     } catch (err) {
       if ((err as any)?.name !== "AbortError") {
         console.error("[collab] save failed", err);
       }
+      onSaveStateChange?.("idle");
     }
-  }, [accessToken, canEdit, editor, noteId, onSaved, providerSynced]);
+  }, [accessToken, canEdit, editor, noteId, onSaved, onSaveStateChange, providerSynced]);
 
   useEffect(() => {
     if (!editor) return;
