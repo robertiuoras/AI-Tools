@@ -3,10 +3,22 @@ import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
+interface LinkPreview {
+  url: string;
+  title: string;
+  description: string;
+  image?: string;
+  siteName?: string;
+}
+
 interface NewsRow {
   content: string;
   timestamp: string;
+  links: LinkPreview[];
 }
+
+const LINK_PREVIEW_CACHE_MS = 10 * 60 * 1000;
+const linkPreviewCache = new Map<string, { expiresAt: number; data: LinkPreview }>();
 
 export async function GET() {
   try {
@@ -32,17 +44,32 @@ export async function GET() {
     const sheets = google.sheets({ version: "v4", auth });
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: sheetId,
-      range: "Sheet1!A:B",
+      range: "Sheet1!A:C",
     });
 
     const rows = response.data.values ?? [];
-    const items: NewsRow[] = rows
+    const baseItems = rows
       .filter((row) => row.length > 0 && String(row[0] ?? "").trim() !== "")
       .map((row) => ({
         content: String(row[0] ?? "").trim(),
-        timestamp: String(row[1] ?? "").trim(),
-      }))
-      .reverse();
+        // Column C is the timestamp field; fall back to B when needed.
+        timestamp: String(row[2] ?? row[1] ?? "").trim(),
+      }));
+
+    const items: NewsRow[] = await Promise.all(
+      baseItems
+        .reverse()
+        .map(async (item) => {
+          const cleaned = normalizeNewsItem(item.content, item.timestamp);
+          const urls = extractUrls(cleaned.content).slice(0, 3);
+          const links = await Promise.all(urls.map((url) => getLinkPreview(url)));
+          return {
+            content: cleaned.content,
+            timestamp: cleaned.timestamp,
+            links: links.filter((link): link is LinkPreview => link !== null),
+          };
+        }),
+    );
 
     return NextResponse.json(items);
   } catch (error) {
@@ -52,4 +79,179 @@ export async function GET() {
       { status: 500 },
     );
   }
+}
+
+function normalizeNewsItem(
+  rawContent: string,
+  rawTimestamp: string,
+): { content: string; timestamp: string } {
+  const lines = rawContent.split(/\r?\n/);
+  const firstContentLine = lines.find((line) => line.trim().length > 0) ?? "";
+  const inferredFromLine = parseDateLikeLine(firstContentLine);
+
+  const hasTimestamp = !Number.isNaN(new Date(rawTimestamp).getTime());
+  const shouldDropFirstLine = inferredFromLine !== null;
+  const content = shouldDropFirstLine
+    ? dropFirstNonEmptyLine(lines).join("\n").trim()
+    : rawContent.trim();
+
+  return {
+    content,
+    timestamp: hasTimestamp
+      ? rawTimestamp
+      : inferredFromLine?.toISOString() ?? rawTimestamp,
+  };
+}
+
+function dropFirstNonEmptyLine(lines: string[]): string[] {
+  const next = [...lines];
+  const idx = next.findIndex((line) => line.trim().length > 0);
+  if (idx >= 0) next.splice(idx, 1);
+  return next;
+}
+
+function parseDateLikeLine(value: string): Date | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const cleaned = trimmed
+    .replace(/(\d+)(st|nd|rd|th)\b/gi, "$1")
+    .replace(/,$/, "");
+
+  const direct = new Date(cleaned);
+  if (!Number.isNaN(direct.getTime())) return direct;
+
+  const now = new Date();
+  const withYear = new Date(`${cleaned} ${now.getFullYear()}`);
+  if (!Number.isNaN(withYear.getTime())) return withYear;
+
+  if (/^yesterday$/i.test(cleaned)) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - 1);
+    return d;
+  }
+
+  if (/^today$/i.test(cleaned)) {
+    return now;
+  }
+
+  return null;
+}
+
+function extractUrls(input: string): string[] {
+  const matches = input.match(/https?:\/\/[^\s<>"'`]+/g) ?? [];
+  const cleaned = matches.map((url) => url.replace(/[),.;!?]+$/, ""));
+  return Array.from(new Set(cleaned));
+}
+
+async function getLinkPreview(url: string): Promise<LinkPreview | null> {
+  const cached = linkPreviewCache.get(url);
+  if (cached && cached.expiresAt > Date.now()) return cached.data;
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+      },
+    });
+    clearTimeout(timeout);
+
+    if (!res.ok) return null;
+
+    const contentType = res.headers.get("content-type") ?? "";
+    if (!contentType.includes("text/html")) {
+      const fallback = {
+        url,
+        title: url,
+        description: "",
+        siteName: safeHostname(url),
+      };
+      linkPreviewCache.set(url, {
+        expiresAt: Date.now() + LINK_PREVIEW_CACHE_MS,
+        data: fallback,
+      });
+      return fallback;
+    }
+
+    const html = await res.text();
+    const title =
+      extractMetaTag(html, "property", "og:title") ??
+      extractMetaTag(html, "name", "twitter:title") ??
+      extractTitle(html) ??
+      url;
+    const description =
+      extractMetaTag(html, "property", "og:description") ??
+      extractMetaTag(html, "name", "description") ??
+      extractMetaTag(html, "name", "twitter:description") ??
+      "";
+    const image =
+      extractMetaTag(html, "property", "og:image") ??
+      extractMetaTag(html, "name", "twitter:image");
+    const siteName =
+      extractMetaTag(html, "property", "og:site_name") ??
+      extractMetaTag(html, "name", "application-name") ??
+      safeHostname(url);
+
+    const data: LinkPreview = {
+      url,
+      title: cleanText(title),
+      description: cleanText(description),
+      image: image ? absolutizeUrl(url, image) : undefined,
+      siteName: cleanText(siteName),
+    };
+
+    linkPreviewCache.set(url, {
+      expiresAt: Date.now() + LINK_PREVIEW_CACHE_MS,
+      data,
+    });
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function extractMetaTag(html: string, attr: "property" | "name", key: string): string | null {
+  const regex = new RegExp(
+    `<meta[^>]*${attr}=["']${escapeRegex(key)}["'][^>]*content=["']([^"']+)["'][^>]*>`,
+    "i",
+  );
+  const reverseRegex = new RegExp(
+    `<meta[^>]*content=["']([^"']+)["'][^>]*${attr}=["']${escapeRegex(key)}["'][^>]*>`,
+    "i",
+  );
+  const match = html.match(regex) ?? html.match(reverseRegex);
+  return match?.[1] ?? null;
+}
+
+function extractTitle(html: string): string | null {
+  const match = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+  return match?.[1] ?? null;
+}
+
+function cleanText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function safeHostname(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+function absolutizeUrl(baseUrl: string, maybeRelative: string): string {
+  try {
+    return new URL(maybeRelative, baseUrl).toString();
+  } catch {
+    return maybeRelative;
+  }
+}
+
+function escapeRegex(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

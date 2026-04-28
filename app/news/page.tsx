@@ -6,6 +6,15 @@ import { Newspaper, RefreshCw } from "lucide-react";
 interface NewsItem {
   content: string;
   timestamp: string;
+  links?: LinkPreview[];
+}
+
+interface LinkPreview {
+  url: string;
+  title: string;
+  description: string;
+  image?: string;
+  siteName?: string;
 }
 
 const REFRESH_MS = 60_000;
@@ -148,17 +157,60 @@ function NewsItemCard({ item, isLatest }: { item: NewsItem; isLatest: boolean })
           </span>
         ) : null}
 
-        <p className="mb-2 pr-16 text-xs font-medium text-muted-foreground">
+        <p className="mb-3 pr-16 text-base font-bold text-foreground md:text-lg">
           <time dateTime={item.timestamp}>
-            {ts ? formatHumanTimestamp(ts) : "Unknown time"}
+            {ts ? formatHumanTimestamp(ts) : "Date unavailable"}
           </time>
         </p>
 
         <p className="whitespace-pre-wrap break-words text-[15px] leading-7 text-foreground/95 md:text-base">
           {item.content}
         </p>
+
+        {item.links && item.links.length > 0 ? (
+          <div className="mt-4 space-y-3">
+            {item.links.map((link) => (
+              <LinkPreviewCard key={link.url} link={link} />
+            ))}
+          </div>
+        ) : null}
       </article>
     </li>
+  );
+}
+
+function LinkPreviewCard({ link }: { link: LinkPreview }) {
+  return (
+    <a
+      href={link.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="block overflow-hidden rounded-xl border border-border/80 bg-card shadow-sm transition-colors hover:bg-muted/40"
+    >
+      {link.image ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={link.image}
+          alt={link.title}
+          className="h-44 w-full object-cover"
+          loading="lazy"
+          referrerPolicy="no-referrer"
+        />
+      ) : null}
+      <div className="p-4">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {link.siteName || "Link preview"}
+        </p>
+        <h3 className="mt-1 text-base font-semibold leading-snug text-foreground md:text-lg">
+          {link.title}
+        </h3>
+        {link.description ? (
+          <p className="mt-2 line-clamp-3 text-sm leading-6 text-muted-foreground">
+            {link.description}
+          </p>
+        ) : null}
+      </div>
+    </a>
   );
 }
 
@@ -234,17 +286,19 @@ function formatHumanTimestamp(date: Date): string {
     hour: "numeric",
     minute: "2-digit",
   });
+  const fullDate = date.toLocaleDateString([], {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 
   if (dayDiff === 0) return `Today at ${time}`;
   if (dayDiff > 0 && dayDiff < 7) {
     const dayName = date.toLocaleDateString([], { weekday: "long" });
-    return `${dayName} at ${time}`;
+    return `${dayName}, ${time}`;
   }
-  return date.toLocaleDateString([], {
-    month: "short",
-    day: "numeric",
-    year: date.getFullYear() !== now.getFullYear() ? "numeric" : undefined,
-  });
+  return `${fullDate} at ${time}`;
 }
 
 function formatShortTime(date: Date): string {
