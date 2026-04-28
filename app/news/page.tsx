@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Newspaper, RefreshCw } from "lucide-react";
 
 interface NewsItem {
@@ -18,6 +18,7 @@ interface LinkPreview {
 }
 
 const REFRESH_MS = 60_000;
+type QuickFilter = "all" | "today" | "week" | "withLinks";
 
 export default function NewsPage() {
   const [items, setItems] = useState<NewsItem[]>([]);
@@ -26,6 +27,8 @@ export default function NewsPage() {
   const [error, setError] = useState<string | null>(null);
   const lastFetchRef = useRef<number>(0);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
 
   const load = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true);
@@ -76,6 +79,43 @@ export default function NewsPage() {
     return () => document.removeEventListener("visibilitychange", onVis);
   }, [load]);
 
+  const filteredItems = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    const now = Date.now();
+    return items.filter((item) => {
+      const itemDate = safeDate(item.timestamp);
+
+      if (quickFilter === "today") {
+        if (!itemDate) return false;
+        const startOfToday = new Date();
+        startOfToday.setHours(0, 0, 0, 0);
+        if (itemDate.getTime() < startOfToday.getTime()) return false;
+      }
+
+      if (quickFilter === "week") {
+        if (!itemDate) return false;
+        const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+        if (now - itemDate.getTime() > sevenDaysMs) return false;
+      }
+
+      if (quickFilter === "withLinks" && (!item.links || item.links.length === 0)) {
+        return false;
+      }
+
+      if (!query) return true;
+
+      const inContent = item.content.toLowerCase().includes(query);
+      const inLinks = (item.links ?? []).some(
+        (link) =>
+          link.title.toLowerCase().includes(query) ||
+          link.description.toLowerCase().includes(query) ||
+          (link.siteName ?? "").toLowerCase().includes(query),
+      );
+
+      return inContent || inLinks;
+    });
+  }, [items, quickFilter, searchQuery]);
+
   return (
     <main className="relative overflow-hidden">
       <div
@@ -110,6 +150,41 @@ export default function NewsPage() {
               {refreshing ? "Refreshing…" : "Refresh"}
             </button>
           </div>
+
+          <div className="mt-5 space-y-3">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search news, topics, companies, or link titles..."
+              className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            <div className="flex flex-wrap gap-2">
+              <FilterButton
+                active={quickFilter === "all"}
+                onClick={() => setQuickFilter("all")}
+                label="All"
+              />
+              <FilterButton
+                active={quickFilter === "today"}
+                onClick={() => setQuickFilter("today")}
+                label="Today"
+              />
+              <FilterButton
+                active={quickFilter === "week"}
+                onClick={() => setQuickFilter("week")}
+                label="Last 7 days"
+              />
+              <FilterButton
+                active={quickFilter === "withLinks"}
+                onClick={() => setQuickFilter("withLinks")}
+                label="Has links"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Showing {filteredItems.length} of {items.length} items
+            </p>
+          </div>
         </header>
 
         {loading ? (
@@ -118,9 +193,14 @@ export default function NewsPage() {
           <ErrorState message={error} onRetry={() => void load(false)} />
         ) : items.length === 0 ? (
           <EmptyState />
+        ) : filteredItems.length === 0 ? (
+          <NoMatchesState onClear={() => {
+            setSearchQuery("");
+            setQuickFilter("all");
+          }} />
         ) : (
           <ul className="divide-y divide-border/70 rounded-2xl border border-border/70 bg-card/60 shadow-sm backdrop-blur">
-            {items.map((item, index) => (
+            {filteredItems.map((item, index) => (
               <NewsItemCard
                 key={`${item.timestamp}-${index}`}
                 item={item}
@@ -163,9 +243,10 @@ function NewsItemCard({ item, isLatest }: { item: NewsItem; isLatest: boolean })
           </time>
         </p>
 
-        <p className="whitespace-pre-wrap break-words text-[15px] leading-7 text-foreground/95 md:text-base">
-          {item.content}
-        </p>
+        <div
+          className="break-words text-[15px] leading-7 text-foreground/95 md:text-base [&_a]:text-violet-600 [&_a]:underline [&_a]:underline-offset-2 hover:[&_a]:text-violet-500 dark:[&_a]:text-violet-400 dark:hover:[&_a]:text-violet-300 [&_strong]:font-semibold"
+          dangerouslySetInnerHTML={{ __html: renderNewsMarkdown(item.content) }}
+        />
 
         {item.links && item.links.length > 0 ? (
           <div className="mt-4 space-y-3">
@@ -176,6 +257,30 @@ function NewsItemCard({ item, isLatest }: { item: NewsItem; isLatest: boolean })
         ) : null}
       </article>
     </li>
+  );
+}
+
+function FilterButton({
+  active,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`h-8 rounded-full border px-3 text-xs font-medium transition-colors ${
+        active
+          ? "border-violet-500/60 bg-violet-500/10 text-violet-700 dark:text-violet-300"
+          : "border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
+      }`}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -245,6 +350,24 @@ function EmptyState() {
   );
 }
 
+function NoMatchesState({ onClear }: { onClear: () => void }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-border/80 bg-card/50 px-6 py-14 text-center">
+      <h2 className="text-lg font-semibold text-foreground">No matching news found</h2>
+      <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
+        Try a different keyword or clear filters to see all recent items.
+      </p>
+      <button
+        type="button"
+        onClick={onClear}
+        className="mt-4 inline-flex h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-foreground hover:bg-muted"
+      >
+        Clear filters
+      </button>
+    </div>
+  );
+}
+
 function ErrorState({
   message,
   onRetry,
@@ -296,4 +419,40 @@ function getOrdinalSuffix(day: number): string {
   if (last === 2) return "nd";
   if (last === 3) return "rd";
   return "th";
+}
+
+function renderNewsMarkdown(input: string): string {
+  let out = escapeHtml(input);
+
+  // Markdown links [text](url)
+  out = out.replace(
+    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    (_match, text: string, url: string) =>
+      `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`,
+  );
+
+  // Bare links
+  out = out.replace(
+    /(https?:\/\/[^\s<]+)/g,
+    (url: string) =>
+      `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`,
+  );
+
+  // Bold and italics
+  out = out.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+  out = out.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "<em>$1</em>");
+  out = out.replace(/(?<!\w)_([^_\n]+)_(?!\w)/g, "<em>$1</em>");
+
+  // Line breaks
+  out = out.replace(/\n/g, "<br />");
+  return out;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
