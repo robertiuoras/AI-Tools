@@ -1204,11 +1204,11 @@ function NotesPageInner() {
    * preference is persisted in localStorage.
    */
   const [toolbarCompact, setToolbarCompact] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
+    if (typeof window === "undefined") return true;
     try {
       return window.localStorage.getItem("notes:toolbarCompact") === "1";
     } catch {
-      return false;
+      return true;
     }
   });
   useEffect(() => {
@@ -5430,85 +5430,6 @@ function NotesPageInner() {
                     </div>
                     <div className="flex w-full min-w-0 flex-col items-stretch gap-2 sm:w-auto sm:items-end">
                       <div className="flex flex-wrap items-center justify-end gap-1">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          className="h-7 text-xs"
-                          title="Copy note body"
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => {
-                            const c = selectedNote.content;
-                            const plain = isProbablyHtml(c)
-                              ? htmlToPlainText(c)
-                              : c;
-                            void copyText(
-                              plain,
-                              `editor-body-${selectedNote.id}`,
-                            );
-                          }}
-                        >
-                          {copiedKey === `editor-body-${selectedNote.id}` ? (
-                            <>
-                              <Check className="h-3.5 w-3.5 mr-1 text-emerald-500" />
-                              Copied body
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="h-3.5 w-3.5 mr-1" />
-                              Copy body
-                            </>
-                          )}
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          className="h-7 text-xs"
-                          title="Export note as .txt"
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => {
-                            if (!selectedNote) return;
-                            const src = selectedNote.content ?? "";
-                            const plain = isProbablyHtml(src) ? htmlToPlainText(src) : src;
-                            const blob = new Blob([plain], {
-                              type: "text/plain;charset=utf-8",
-                            });
-                            const safeBase = (selectedNote.title || "note")
-                              .replace(/[\\/:*?\"<>|]+/g, " ")
-                              .trim()
-                              .replace(/\s+/g, "-")
-                              .slice(0, 80) || "note";
-                            const url = URL.createObjectURL(blob);
-                            const a = document.createElement("a");
-                            a.href = url;
-                            a.download = `${safeBase}.txt`;
-                            document.body.appendChild(a);
-                            a.click();
-                            a.remove();
-                            URL.revokeObjectURL(url);
-                          }}
-                        >
-                          <Download className="h-3.5 w-3.5 mr-1" />
-                          Export .txt
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          className="h-7 text-xs"
-                          title={
-                            useCollaborativeEditor
-                              ? "Import is available in solo notes"
-                              : "Import note from .txt"
-                          }
-                          onMouseDown={(e) => e.preventDefault()}
-                          disabled={!canEditSelectedNote || useCollaborativeEditor}
-                          onClick={() => noteTextImportInputRef.current?.click()}
-                        >
-                          <Upload className="h-3.5 w-3.5 mr-1" />
-                          Import .txt
-                        </Button>
                         <input
                           ref={noteTextImportInputRef}
                           type="file"
@@ -6510,6 +6431,88 @@ function NotesPageInner() {
                       )}
                     </div>
                   )}
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/20 px-2 py-1.5">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs"
+                      title="Copy note body"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => {
+                        const c = selectedNote.content;
+                        const plain = isProbablyHtml(c) ? htmlToPlainText(c) : c;
+                        void copyText(
+                          plain,
+                          `editor-body-${selectedNote.id}`,
+                        );
+                      }}
+                    >
+                      {copiedKey === `editor-body-${selectedNote.id}` ? (
+                        <>
+                          <Check className="h-3.5 w-3.5 mr-1 text-emerald-500" />
+                          Copied body
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="h-3.5 w-3.5 mr-1" />
+                          Copy body
+                        </>
+                      )}
+                    </Button>
+                    <div className="flex items-center gap-1">
+                      <span className="text-[11px] text-muted-foreground">File</span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 text-xs"
+                        title="Export note as .txt"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => {
+                          if (!selectedNote) return;
+                          const src = selectedNote.content ?? "";
+                          const plain = isProbablyHtml(src) ? htmlToPlainText(src) : src;
+                          const blob = new Blob([plain], {
+                            type: "text/plain;charset=utf-8",
+                          });
+                          const safeBase = (selectedNote.title || "note")
+                            .replace(/[\\/:*?\"<>|]+/g, " ")
+                            .trim()
+                            .replace(/\s+/g, "-")
+                            .slice(0, 80) || "note";
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement("a");
+                          a.href = url;
+                          a.download = `${safeBase}.txt`;
+                          document.body.appendChild(a);
+                          a.click();
+                          a.remove();
+                          URL.revokeObjectURL(url);
+                        }}
+                      >
+                        <Download className="h-3.5 w-3.5 mr-1" />
+                        Export
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 text-xs"
+                        title={
+                          useCollaborativeEditor
+                            ? "Import is available in solo notes"
+                            : "Import note from .txt"
+                        }
+                        onMouseDown={(e) => e.preventDefault()}
+                        disabled={!canEditSelectedNote || useCollaborativeEditor}
+                        onClick={() => noteTextImportInputRef.current?.click()}
+                      >
+                        <Upload className="h-3.5 w-3.5 mr-1" />
+                        Import
+                      </Button>
+                    </div>
+                  </div>
                   {isEditing && contextMenu.open && (
                     <div
                       ref={(el) => {
