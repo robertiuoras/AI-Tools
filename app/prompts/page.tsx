@@ -11,6 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useAuthSession } from "@/components/AuthSessionProvider";
 import { useToast } from "@/components/ui/toaster";
 import {
   COMMUNITY_PROMPTS,
@@ -22,6 +23,7 @@ import {
   type PromptType,
   type UserPrompt,
 } from "@/lib/prompt-data";
+import { putUserPromptsToAccount } from "@/lib/user-prompts-sync";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -68,6 +70,7 @@ function formatUsd(n: number): string {
 
 export default function PromptsPage() {
   const { addToast } = useToast();
+  const { accessToken } = useAuthSession();
   const [query, setQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState<PromptCategory | "all">(
     "all",
@@ -144,14 +147,25 @@ export default function PromptsPage() {
         createdAt: new Date().toISOString(),
         summary: deriveBlurb(p),
       };
-      appendUserPrompt(entry);
+      const next = appendUserPrompt(entry);
+      if (accessToken) {
+        void putUserPromptsToAccount(accessToken, next).then((r) => {
+          if (!r.ok) {
+            addToast({
+              variant: "warning",
+              title: "Saved in this browser only",
+              description: r.error ?? "Could not sync to your account.",
+            });
+          }
+        });
+      }
       addToast({
         variant: "success",
         title: "Saved to My prompts",
         description: "Open My prompts to view or edit your library.",
       });
     },
-    [addToast],
+    [addToast, accessToken],
   );
 
   const runImprove = useCallback(async () => {
@@ -215,13 +229,24 @@ export default function PromptsPage() {
       summary: improveResult.notes[0] ?? "AI-improved prompt",
       tags: ["improved", improveResult.type.toLowerCase()],
     };
-    appendUserPrompt(entry);
+    const next = appendUserPrompt(entry);
+    if (accessToken) {
+      void putUserPromptsToAccount(accessToken, next).then((r) => {
+        if (!r.ok) {
+          addToast({
+            variant: "warning",
+            title: "Saved in this browser only",
+            description: r.error ?? "Could not sync to your account.",
+          });
+        }
+      });
+    }
     addToast({
       variant: "success",
       title: "Saved to My prompts",
       description: "You can refine it further in your library.",
     });
-  }, [addToast, improveResult]);
+  }, [addToast, accessToken, improveResult]);
 
   return (
     <div className="min-h-[calc(100vh-4rem)] bg-gradient-to-b from-amber-500/5 via-background to-fuchsia-500/5">

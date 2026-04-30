@@ -272,38 +272,42 @@ export function isPromptType(s: string): s is PromptType {
   return (PROMPT_TYPES as readonly string[]).includes(s);
 }
 
+/** Normalise a JSON array from storage or the API into `UserPrompt[]`. */
+export function normalizeUserPromptsPayload(parsed: unknown): UserPrompt[] {
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .filter(
+      (p): p is UserPrompt =>
+        typeof p === "object" &&
+        p !== null &&
+        typeof (p as UserPrompt).id === "string" &&
+        typeof (p as UserPrompt).title === "string" &&
+        typeof (p as UserPrompt).body === "string" &&
+        typeof (p as UserPrompt).category === "string" &&
+        isPromptCategory((p as UserPrompt).category) &&
+        typeof (p as UserPrompt).createdAt === "string",
+    )
+    .map((p) => {
+      const type =
+        typeof p.type === "string" && isPromptType(p.type) ? p.type : undefined;
+      const tags = Array.isArray(p.tags)
+        ? p.tags.filter((t): t is string => typeof t === "string").slice(0, 8)
+        : undefined;
+      const summary =
+        typeof p.summary === "string" && p.summary.trim().length > 0
+          ? p.summary.trim()
+          : undefined;
+      return { ...p, type, tags, summary };
+    });
+}
+
 export function loadUserPrompts(): UserPrompt[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(USER_PROMPTS_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter(
-        (p): p is UserPrompt =>
-          typeof p === "object" &&
-          p !== null &&
-          typeof (p as UserPrompt).id === "string" &&
-          typeof (p as UserPrompt).title === "string" &&
-          typeof (p as UserPrompt).body === "string" &&
-          typeof (p as UserPrompt).category === "string" &&
-          isPromptCategory((p as UserPrompt).category) &&
-          typeof (p as UserPrompt).createdAt === "string",
-      )
-      .map((p) => {
-        // Coerce v2 fields to safe defaults so the UI can rely on them.
-        const type =
-          typeof p.type === "string" && isPromptType(p.type) ? p.type : undefined;
-        const tags = Array.isArray(p.tags)
-          ? p.tags.filter((t): t is string => typeof t === "string").slice(0, 8)
-          : undefined;
-        const summary =
-          typeof p.summary === "string" && p.summary.trim().length > 0
-            ? p.summary.trim()
-            : undefined;
-        return { ...p, type, tags, summary };
-      });
+    return normalizeUserPromptsPayload(parsed);
   } catch {
     return [];
   }
@@ -314,7 +318,12 @@ export function saveUserPrompts(list: UserPrompt[]) {
   localStorage.setItem(USER_PROMPTS_STORAGE_KEY, JSON.stringify(list));
 }
 
-/** Append one prompt (e.g. from community “Save to mine”) without React state. */
-export function appendUserPrompt(entry: UserPrompt) {
-  saveUserPrompts([entry, ...loadUserPrompts()]);
+/**
+ * Append one prompt (e.g. from community “Save to mine”) without React state.
+ * Returns the new full list (also written to localStorage).
+ */
+export function appendUserPrompt(entry: UserPrompt): UserPrompt[] {
+  const next = [entry, ...loadUserPrompts()];
+  saveUserPrompts(next);
+  return next;
 }

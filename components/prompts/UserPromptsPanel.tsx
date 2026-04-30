@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toaster";
+import { useAuthSession } from "@/components/AuthSessionProvider";
 import {
   PROMPT_CATEGORIES,
   PROMPT_TYPES,
@@ -24,6 +25,10 @@ import {
   isPromptCategory,
   isPromptType,
 } from "@/lib/prompt-data";
+import {
+  fetchUserPromptsFromAccount,
+  putUserPromptsToAccount,
+} from "@/lib/user-prompts-sync";
 import {
   Sparkles,
   Loader2,
@@ -56,6 +61,7 @@ interface AnalyzeResult {
 
 export function UserPromptsPanel() {
   const { addToast } = useToast();
+  const { accessToken, isReady } = useAuthSession();
 
   const [userPrompts, setUserPrompts] = useState<UserPrompt[]>([]);
   const [hydrated, setHydrated] = useState(false);
@@ -83,21 +89,88 @@ export function UserPromptsPanel() {
     [],
   );
 
-  // Hydrate from localStorage once.
+  // Signed out: localStorage only. Signed in: merge with server (server wins if
+  // non-empty; otherwise migrate local → account once).
   useEffect(() => {
-    setUserPrompts(loadUserPrompts());
-    setHydrated(true);
-  }, []);
+    if (!isReady) return;
+    let cancelled = false;
+
+    async function init() {
+      const local = loadUserPrompts();
+      if (!accessToken) {
+        setUserPrompts(local);
+        setHydrated(true);
+        return;
+      }
+
+      const { prompts: remote, error } =
+        await fetchUserPromptsFromAccount(accessToken);
+      if (cancelled) return;
+
+      if (error) {
+        addToast({
+          variant: "warning",
+          title: "Could not load prompts from account",
+          description: error,
+        });
+        setUserPrompts(local);
+        setHydrated(true);
+        return;
+      }
+
+      if (remote.length > 0) {
+        setUserPrompts(remote);
+        saveUserPrompts(remote);
+        setHydrated(true);
+        return;
+      }
+
+      if (local.length > 0) {
+        const put = await putUserPromptsToAccount(accessToken, local);
+        if (!put.ok) {
+          addToast({
+            variant: "warning",
+            title: "Could not save prompts to your account",
+            description: put.error ?? "Your prompts stay in this browser only until sync works.",
+          });
+        }
+        setUserPrompts(local);
+        setHydrated(true);
+        return;
+      }
+
+      setUserPrompts([]);
+      saveUserPrompts([]);
+      setHydrated(true);
+    }
+
+    void init();
+    return () => {
+      cancelled = true;
+    };
+  }, [isReady, accessToken, addToast]);
 
   const persist = useCallback(
     (updater: UserPrompt[] | ((prev: UserPrompt[]) => UserPrompt[])) => {
+      if (accessToken && !hydrated) return;
       setUserPrompts((prev) => {
         const next = typeof updater === "function" ? updater(prev) : updater;
         saveUserPrompts(next);
+        if (accessToken) {
+          void putUserPromptsToAccount(accessToken, next).then((r) => {
+            if (!r.ok) {
+              addToast({
+                variant: "error",
+                title: "Could not save to account",
+                description: r.error ?? "Check your connection and try again.",
+              });
+            }
+          });
+        }
         return next;
       });
     },
-    [],
+    [accessToken, hydrated, addToast],
   );
 
   const filtered = useMemo(() => {
@@ -182,7 +255,7 @@ export function UserPromptsPanel() {
   }, [body, addToast]);
 
   const saveDraft = useCallback(() => {
-    if (!draft) return;
+    if (!draft || (accessToken && !hydrated)) return;
     const tags = tagsInput
       .split(",")
       .map((t) => t.trim().toLowerCase())
@@ -207,7 +280,7 @@ export function UserPromptsPanel() {
       title: "Saved",
       description: "Tagged and added to your library.",
     });
-  }, [draft, tagsInput, body, persist, addToast]);
+  }, [draft, tagsInput, body, persist, addToast, accessToken, hydrated]);
 
   const removeUser = useCallback(
     (id: string) => {
@@ -233,7 +306,8 @@ export function UserPromptsPanel() {
     [addToast],
   );
 
-  const ctaDisabled = body.trim().length === 0 || analyzing;
+  const syncingAccount = Boolean(accessToken) && !hydrated;
+  const ctaDisabled = body.trim().length === 0 || analyzing || syncingAccount;
 
   return (
     <div className="space-y-8">
@@ -246,6 +320,7 @@ export function UserPromptsPanel() {
         analyzing={analyzing}
         disabled={ctaDisabled}
         hasDraft={Boolean(draft)}
+        syncingHint={syncingAccount}
       />
 
       {/* Analysis result — shown only after we have a draft to save */}
@@ -269,7 +344,11 @@ export function UserPromptsPanel() {
             </h2>
             <p className="text-xs text-muted-foreground">
               {hydrated
-                ? `${userPrompts.length} ${userPrompts.length === 1 ? "prompt" : "prompts"} · stored in this browser`
+                ? `${userPrompts.length} ${userPrompts.length === 1 ? "prompt" : "prompts"} · ${
+                    accessToken
+                      ? "saved to your account"
+                      : "this browser only — sign in to sync across devices"
+                  }`
                 : "Loading…"}
             </p>
           </div>
@@ -362,6 +441,7 @@ function PasteBox({
   analyzing,
   disabled,
   hasDraft,
+  syncingHint,
 }: {
   body: string;
   onBodyChange: (s: string) => void;
@@ -370,6 +450,7 @@ function PasteBox({
   analyzing: boolean;
   disabled: boolean;
   hasDraft: boolean;
+  syncingHint?: boolean;
 }) {
   const ref = useRef<HTMLTextAreaElement | null>(null);
 
@@ -410,11 +491,13 @@ function PasteBox({
         />
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
           <p className="text-[11px] text-muted-foreground/70">
-            {body.length === 0
-              ? "Paste a prompt — we'll auto-tag it."
-              : `${body.length.toLocaleString()} chars · ${
-                  body.trim().split(/\s+/).length
-                } words`}
+            {syncingHint
+              ? "Loading your account library…"
+              : body.length === 0
+                ? "Paste a prompt — we'll auto-tag it."
+                : `${body.length.toLocaleString()} chars · ${
+                    body.trim().split(/\s+/).length
+                  } words`}
           </p>
           <Button
             type="button"
