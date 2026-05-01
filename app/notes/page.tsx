@@ -1123,10 +1123,14 @@ function NotesPageInner() {
    * smoothly. A "Back" button in the editor header leaves focus mode.
    */
   const [focusMode, setFocusMode] = useState(false);
+  const [notesPaneCompact, setNotesPaneCompact] = useState(false);
   // Always exit focus mode if the active note disappears (delete, switch tabs)
   // so the user is never stranded with the side columns hidden.
   useEffect(() => {
     if (!selectedNoteId) setFocusMode(false);
+  }, [selectedNoteId]);
+  useEffect(() => {
+    setNotesPaneCompact(!!selectedNoteId);
   }, [selectedNoteId]);
 
   /**
@@ -4492,7 +4496,9 @@ function NotesPageInner() {
             "transition-[grid-template-columns,gap] duration-[520ms] ease-[cubic-bezier(0.16,1,0.3,1)]",
             focusMode
               ? "lg:grid-cols-[minmax(0,0px)_minmax(0,0px)_minmax(0,1fr)] lg:gap-0"
-              : "lg:grid-cols-[minmax(0,280px)_minmax(0,320px)_minmax(0,1fr)]",
+              : notesPaneCompact && selectedNoteId
+                ? "lg:grid-cols-[minmax(0,280px)_minmax(0,64px)_minmax(0,1fr)]"
+                : "lg:grid-cols-[minmax(0,280px)_minmax(0,320px)_minmax(0,1fr)]",
           )}
         >
           {notesLoading && initialNotesBootstrapDone ? (
@@ -4784,6 +4790,7 @@ function NotesPageInner() {
                           onClick={() => {
                             setSelectedNoteId(note.id);
                             setFocusMode(false);
+                            setNotesPaneCompact(true);
                           }}
                           title={`Shared by ${ownerLabel}`}
                         >
@@ -4870,12 +4877,50 @@ function NotesPageInner() {
             className={cn(
               "min-w-0 cursor-default rounded-xl border bg-card p-3 space-y-3",
               "lg:overflow-hidden transition-[opacity,transform] duration-[420ms] ease-out",
+              notesPaneCompact &&
+                selectedNoteId &&
+                "lg:p-2 lg:space-y-2",
               focusMode &&
                 "lg:pointer-events-none lg:scale-[0.97] lg:opacity-0",
             )}
             aria-hidden={focusMode || undefined}
           >
-            <Label className="text-xs text-muted-foreground">Notes</Label>
+            {notesPaneCompact && selectedNoteId ? (
+              <div className="flex h-full min-h-[120px] flex-col items-center gap-2">
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="outline"
+                  className="h-8 w-8 shrink-0"
+                  onClick={() => setNotesPaneCompact(false)}
+                  title="Show notes list"
+                >
+                  <PanelLeftOpen className="h-4 w-4" />
+                  <span className="sr-only">Show notes list</span>
+                </Button>
+                <div className="rounded-md border border-border/60 bg-muted/30 px-2 py-1 text-[10px] font-medium text-muted-foreground [writing-mode:vertical-rl] [text-orientation:mixed]">
+                  Notes
+                </div>
+              </div>
+            ) : null}
+            {(!notesPaneCompact || !selectedNoteId) && (
+              <>
+            <div className="flex items-center justify-between gap-2">
+              <Label className="text-xs text-muted-foreground">Notes</Label>
+              {selectedNoteId && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 px-2 text-[11px]"
+                  onClick={() => setNotesPaneCompact(true)}
+                  title="Compact notes list"
+                >
+                  <ChevronsRightLeft className="mr-1 h-3.5 w-3.5" />
+                  Compact
+                </Button>
+              )}
+            </div>
             <div className="flex gap-2">
               <Input
                 data-notes-new-title="1"
@@ -5078,6 +5123,7 @@ function NotesPageInner() {
                         onClick={() => {
                           setSelectedNoteId(n.id);
                           setFocusMode(false);
+                          setNotesPaneCompact(true);
                         }}
                       >
                         <span className="block truncate">{n.title}</span>
@@ -5238,6 +5284,8 @@ function NotesPageInner() {
                   />
                 )}
             </div>
+              </>
+            )}
           </section>
 
           <section className="flex min-h-0 min-w-0 cursor-default flex-col overflow-visible rounded-xl border bg-card p-4 lg:max-h-[calc(100vh-7rem)]">
@@ -5277,6 +5325,25 @@ function NotesPageInner() {
                       </>
                     )}
                   </Button>
+                  {selectedNoteId && !focusMode && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setNotesPaneCompact((v) => !v)}
+                      className="h-8 shrink-0 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
+                      title={
+                        notesPaneCompact ? "Show notes list" : "Compact notes list"
+                      }
+                    >
+                      {notesPaneCompact ? (
+                        <PanelLeftOpen className="h-4 w-4" />
+                      ) : (
+                        <ChevronsRightLeft className="h-4 w-4" />
+                      )}
+                      {notesPaneCompact ? "Notes" : "Compact"}
+                    </Button>
+                  )}
                   <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
                   {editingMainTitle ? (
                     <>
@@ -6485,7 +6552,7 @@ function NotesPageInner() {
                             e.preventDefault();
                             beginEditingNote();
                             requestAnimationFrame(() =>
-                              editorRef.current?.focus(),
+                            editorRef.current?.focus({ preventScroll: true }),
                             );
                           }
                         }}
@@ -6509,7 +6576,9 @@ function NotesPageInner() {
                           }
                           if ((e.target as HTMLElement).closest("a")) return;
                           beginEditingNote();
-                          requestAnimationFrame(() => editorRef.current?.focus());
+                        requestAnimationFrame(() =>
+                          editorRef.current?.focus({ preventScroll: true }),
+                        );
                         }}
                         onContextMenu={openContextMenuFromReadBody}
                         className={cn(
