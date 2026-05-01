@@ -4,7 +4,8 @@ import { supabaseAdmin } from "@/lib/supabase";
  * Helpers for the note_version table (history + revert for shared notes).
  */
 
-const SNAPSHOT_DEDUP_MS = 60_000;
+const SNAPSHOT_DEDUP_MS = 10 * 60_000;
+const SNAPSHOT_RETENTION_MS = 2 * 60 * 60_000;
 
 export interface NoteVersionRow {
   id: string;
@@ -16,10 +17,13 @@ export interface NoteVersionRow {
 }
 
 /**
- * Snapshot the current note state, deduped to one row per minute. We dedupe
+ * Snapshot the current note state, deduped to one row per 10 minutes. We dedupe
  * by checking the most recent version for this note: if it was written less
- * than ~60s ago, we update it in place instead of inserting (keeps history
- * meaningful — long typing sessions become 1 snapshot/min, not 1/keystroke).
+ * than ~10 minutes ago, we update it in place instead of inserting (keeps history
+ * meaningful — long typing sessions become periodic backups, not 1/keystroke).
+ *
+ * We also prune backups older than the rolling retention window (2 hours),
+ * so users always have recent recovery points without unbounded growth.
  */
 export async function snapshotNoteVersion(params: {
   noteId: string;
@@ -39,6 +43,7 @@ export async function snapshotNoteVersion(params: {
     .maybeSingle();
 
   const now = Date.now();
+  const retentionCutoffIso = new Date(now - SNAPSHOT_RETENTION_MS).toISOString();
   const latestAt = latest?.created_at
     ? new Date(latest.created_at).getTime()
     : 0;
@@ -56,4 +61,11 @@ export async function snapshotNoteVersion(params: {
   await admin.from("note_version").insert([
     { note_id: noteId, author_id: authorId, title, content },
   ]);
+
+  // Keep a bounded rolling history window for this note.
+  await admin
+    .from("note_version")
+    .delete()
+    .eq("note_id", noteId)
+    .lt("created_at", retentionCutoffIso);
 }

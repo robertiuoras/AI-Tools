@@ -77,7 +77,8 @@ export async function PUT(
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    // Snapshot the version (deduped to ~1/min) only when the actual content
+    // Snapshot the version (deduped to ~1/10min with rolling retention)
+    // only when the actual content
     // changed — title-only or favorite-only edits don't need a snapshot.
     if (typeof body?.content === "string" && data) {
       try {

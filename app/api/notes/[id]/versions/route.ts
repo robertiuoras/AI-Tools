@@ -25,10 +25,12 @@ export async function GET(
     }
 
     const admin = supabaseAdmin as any;
+    const cutoffIso = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
     const { data: versions, error } = await admin
       .from("note_version")
       .select("id, author_id, title, created_at")
       .eq("note_id", id)
+      .gte("created_at", cutoffIso)
       .order("created_at", { ascending: false })
       .limit(100);
 

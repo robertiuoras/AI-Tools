@@ -14,8 +14,8 @@ import { useAuthSession } from "@/components/AuthSessionProvider";
 
 /**
  * Slide-in drawer showing every saved version of a note (newest first)
- * with one-click revert. Snapshots are deduped to ~1/min server-side, so
- * the list stays browsable even after long editing sessions.
+ * with one-click revert. Backups are deduped to ~1 every 10 minutes
+ * server-side and retained as a rolling recent window.
  *
  * Revert flow shows a side-by-side preview modal (current vs. selected
  * version) before applying — confirming inside the modal is what
@@ -229,8 +229,8 @@ export function NoteVersionHistory({
               </div>
             ) : versions.length === 0 ? (
               <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-                No saved versions yet. Versions are recorded automatically as
-                you edit, deduplicated to one snapshot per minute.
+                No recent backups yet. Backups are recorded automatically as
+                you edit, with one snapshot about every 10 minutes.
               </div>
             ) : (
               <ul className="divide-y divide-border">
@@ -307,7 +307,7 @@ export function NoteVersionHistory({
 
           <div className="border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
             {canRevert
-              ? "Reverts open a side-by-side preview before committing — and the current state is itself snapshotted, so reverts are undoable."
+              ? "Reverts open a side-by-side preview before committing. We keep a rolling recent backup window (about every 10 minutes for ~2 hours), and the current state is snapshotted before revert."
               : "View-only access — ask the owner for edit permission to revert."}
           </div>
         </aside>
