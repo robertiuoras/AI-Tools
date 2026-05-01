@@ -6643,7 +6643,7 @@ function NotesPageInner() {
                     </div>
                   </div>
                   <div
-                    className="relative min-h-0 min-w-0 flex-1"
+                    className="relative min-h-0 min-w-0 flex-1 pb-2"
                     onDragEnter={handleNoteBodyImageDragEnter}
                     onDragOver={handleNoteBodyImageDragOver}
                     onDragLeave={handleNoteBodyImageDragLeave}
@@ -6747,7 +6747,7 @@ function NotesPageInner() {
                         handlersRef={editorHandlersRef}
                         onSessionHydrated={onEditorSessionHydrated}
                         className={cn(
-                          "note-html-scroll w-full min-w-0 max-w-full flex-1 cursor-text overflow-x-hidden overflow-y-auto rounded-lg bg-muted/30 px-3 py-2 text-sm text-foreground !space-y-0 outline-none [contain:layout] [overflow-wrap:anywhere] focus-visible:ring-2 focus-visible:ring-ring",
+                          "note-html-scroll w-full min-w-0 max-w-full flex-1 cursor-text overflow-x-hidden overflow-y-auto rounded-lg bg-muted/30 px-3 py-2 pb-20 text-sm text-foreground !space-y-0 outline-none [contain:layout] [overflow-wrap:anywhere] focus-visible:ring-2 focus-visible:ring-ring",
                           NOTE_HTML_VIEW_CLASS,
                           focusMode
                             ? "min-h-0 flex-1 max-h-none sm:min-h-0"
@@ -6830,7 +6830,7 @@ function NotesPageInner() {
                         }}
                         onContextMenu={openContextMenuFromReadBody}
                         className={cn(
-                          "note-html-scroll w-full min-w-0 max-w-full flex-1 cursor-pointer select-text overflow-x-hidden overflow-y-auto rounded-lg bg-muted/30 px-3 py-2 text-sm text-foreground [overflow-wrap:anywhere]",
+                          "note-html-scroll w-full min-w-0 max-w-full flex-1 cursor-pointer select-text overflow-x-hidden overflow-y-auto rounded-lg bg-muted/30 px-3 py-2 pb-20 text-sm text-foreground [overflow-wrap:anywhere]",
                           focusMode
                             ? "min-h-0 flex-1 max-h-none sm:min-h-0"
                             : "min-h-[200px] max-h-[min(65vh,520px)] sm:min-h-[240px] sm:max-h-[min(70vh,560px)]",
@@ -6851,7 +6851,7 @@ function NotesPageInner() {
                       </div>
                     )}
                   </div>
-                  <div className="mt-2 shrink-0 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/20 px-2 py-1.5">
+                  <div className="mt-3 shrink-0 flex flex-wrap items-center justify-between gap-2 rounded-md border-t border-border/70 bg-card px-2 py-2">
                     <Button
                       type="button"
                       size="sm"

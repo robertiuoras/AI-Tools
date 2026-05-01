@@ -380,6 +380,8 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
         onSaveStateChange?.("saved");
         window.setTimeout(() => onSaveStateChange?.("idle"), 1200);
       } else {
+        const errText = await res.text().catch(() => "");
+        console.error("[collab] save rejected", res.status, errText);
         onSaveStateChange?.("idle");
       }
     } catch (err) {
@@ -519,6 +521,7 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
           cursor: text;
           min-height: 220px;
           line-height: 1.65;
+          padding-bottom: 5rem;
         }
         .collab-editor-shell .ProseMirror:focus { outline: none; }
         .collab-editor-shell .collab-prose p { margin: 0 0 0.6em; }
