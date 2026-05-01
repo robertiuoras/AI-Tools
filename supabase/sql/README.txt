@@ -10,3 +10,4 @@ Skip any script whose changes already exist in your database.
 7. supabase-batch-vote-counts.sql     — batch_monthly_vote_counts RPC (optional perf)
 8. openai-usage-migration.sql         — openai_usage_log table
 9. supabase-migration-news-notifications.sql — user.last_news_notified_day for daily /news alerts
+10. supabase-migration-tool-suggestion.sql — tool_suggestion (public suggest → admin approve)

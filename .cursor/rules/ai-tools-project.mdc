@@ -14,8 +14,7 @@ alwaysApply: true
 
 - URL helpers: `lib/assistant-urls.ts` (`getAssistantDashboardUrl`, `getAssistantOpenApiUrl`, `DEFAULT_ASSISTANT_DASHBOARD`).
 - **Env:** `NEXT_PUBLIC_ASSISTANT_DASHBOARD_URL` — required for non-default dashboard host (e.g. Tailscale `http://100.x.x.x:8000/dashboard`). Client-only; rebuild after changes.
-- **Routes:** `app/assistant/` (admin-only embedded view + fallbacks). **Admin:** Personal control opens a **named popup** (`assistant-personal`) via `window.open`, not an in-page tab.
-- **Nav:** `components/NavLinks.tsx` — Assistant link is **admin-only**.
+- **Admin:** **Personal** (header control) opens the assistant dashboard in a **named popup** (`assistant-personal`) via `window.open`. No Assistant link in the main nav.
 - **Secrets:** Never commit service account / credential JSON. `.gitignore` includes `ai-tools-*.json`.
 
 ## Implementation habits

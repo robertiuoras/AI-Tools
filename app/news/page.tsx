@@ -422,7 +422,11 @@ function getOrdinalSuffix(day: number): string {
 }
 
 function renderNewsMarkdown(input: string): string {
-  let out = escapeHtml(input);
+  const strippedHeadings = input
+    .split("\n")
+    .map((line) => line.replace(/^\s*#{1,6}\s+/, ""))
+    .join("\n");
+  let out = escapeHtml(strippedHeadings);
 
   // Markdown links [text](url)
   out = out.replace(

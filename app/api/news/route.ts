@@ -56,10 +56,9 @@ export async function GET() {
         timestamp: String(row[2] ?? row[1] ?? "").trim(),
       }));
 
-    const items: NewsRow[] = await Promise.all(
-      baseItems
-        .reverse()
-        .map(async (item) => {
+    const items: NewsRow[] = (
+      await Promise.all(
+        baseItems.reverse().map(async (item) => {
           const cleaned = normalizeNewsItem(item.content, item.timestamp);
           const urls = extractUrls(cleaned.content).slice(0, 3);
           const links = await Promise.all(urls.map((url) => getLinkPreview(url)));
@@ -69,6 +68,10 @@ export async function GET() {
             links: links.filter((link): link is LinkPreview => link !== null),
           };
         }),
+      )
+    ).filter(
+      (item) =>
+        item.content.trim().length > 0 && !isDateOnlyOrEmptyContent(item.content),
     );
 
     return NextResponse.json(items);
@@ -81,11 +84,97 @@ export async function GET() {
   }
 }
 
+/** Discord role/user mentions — strip from published news. */
+function stripDiscordMentions(text: string): string {
+  return text.replace(/<@&\d+>/g, "").replace(/<@!?\d+>/g, "");
+}
+
+/** Remove leading # / ## markdown heading markers per line. */
+function stripMarkdownHeadingHashes(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .map((line) => {
+      const lead = line.length - line.trimStart().length;
+      const trimmed = line.trimStart();
+      if (!trimmed.startsWith("#")) return line;
+      const rest = trimmed.replace(/^#{1,6}\s*/, "");
+      return line.slice(0, lead) + rest;
+    })
+    .join("\n");
+}
+
+/**
+ * When the same calendar date appears multiple times (e.g. duplicate "April 30th"
+ * blocks), keep only the last block — usually the updated copy.
+ */
+function dedupeRepeatedDateBlocks(content: string): string {
+  const paragraphs = content
+    .split(/\n\s*\n+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  type Seg = { key: string | null; body: string };
+  const segments: Seg[] = [];
+
+  for (const para of paragraphs) {
+    const lines = para.split(/\r?\n/);
+    const first = (lines[0] ?? "").trim();
+    const rest = lines.slice(1).join("\n").trim();
+    const d = parseDateLikeLine(first);
+    if (d && !rest) continue;
+    if (d && rest) {
+      segments.push({
+        key: d.toISOString().slice(0, 10),
+        body: stripMarkdownHeadingHashes(rest).trim(),
+      });
+    } else {
+      segments.push({
+        key: null,
+        body: stripMarkdownHeadingHashes(para).trim(),
+      });
+    }
+  }
+
+  const lastIdxByKey = new Map<string, number>();
+  segments.forEach((s, i) => {
+    if (s.key) lastIdxByKey.set(s.key, i);
+  });
+
+  return segments
+    .filter((s, i) => !s.key || lastIdxByKey.get(s.key) === i)
+    .map((s) => s.body)
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function preprocessNewsRawContent(raw: string): string {
+  let t = stripDiscordMentions(raw);
+  t = dedupeRepeatedDateBlocks(t);
+  t = t.replace(/\n{3,}/g, "\n\n").trim();
+  return t;
+}
+
+/** True when every non-empty paragraph is only a date line (no body). */
+function isDateOnlyOrEmptyContent(text: string): boolean {
+  const t = text.trim();
+  if (!t) return true;
+  const paras = t
+    .split(/\n\s*\n+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (paras.length === 0) return true;
+  return paras.every((p) => {
+    const first = p.split(/\r?\n/)[0]?.trim() ?? "";
+    const rest = p.split(/\r?\n/).slice(1).join("\n").trim();
+    return parseDateLikeLine(first) !== null && !rest;
+  });
+}
+
 function normalizeNewsItem(
   rawContent: string,
   rawTimestamp: string,
 ): { content: string; timestamp: string } {
-  const lines = rawContent.split(/\r?\n/);
+  const preprocessed = preprocessNewsRawContent(rawContent);
+  const lines = preprocessed.split(/\r?\n/);
   const firstContentLine = lines.find((line) => line.trim().length > 0) ?? "";
   const inferredFromLine = parseDateLikeLine(firstContentLine);
 
@@ -93,7 +182,7 @@ function normalizeNewsItem(
   const shouldDropFirstLine = inferredFromLine !== null;
   const content = shouldDropFirstLine
     ? dropFirstNonEmptyLine(lines).join("\n").trim()
-    : rawContent.trim();
+    : preprocessed.trim();
 
   return {
     content,

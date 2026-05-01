@@ -63,6 +63,7 @@ export type RateLimitKind =
   | 'cs2_prices'
   | 'cs2_image'
   | 'ai_betting_bot'
+  | 'tools_suggest'
 
 const LIMITS: Record<RateLimitKind, { windowMs: number; max: number }[]> = {
   tools_analyze: [
@@ -163,6 +164,16 @@ const LIMITS: Record<RateLimitKind, { windowMs: number; max: number }[]> = {
     {
       windowMs: 3_600_000,
       max: envInt('RATE_LIMIT_AI_BETTING_BOT_PER_HOUR', 60),
+    },
+  ],
+  tools_suggest: [
+    {
+      windowMs: 60_000,
+      max: envInt('RATE_LIMIT_TOOLS_SUGGEST_PER_MINUTE', 15),
+    },
+    {
+      windowMs: 3_600_000,
+      max: envInt('RATE_LIMIT_TOOLS_SUGGEST_PER_HOUR', 120),
     },
   ],
 }

@@ -47,6 +47,7 @@ import type { Tool } from "@/lib/supabase";
 import { toolCategoryList, toolIsAgency } from "@/lib/tool-categories";
 import { AGENCY_CATEGORY_LABEL, categories as defaultCategories, sortToolCategoryLabelsForDisplay } from "@/lib/schemas";
 import { NewToolsBanner } from "@/components/NewToolsBanner";
+import { SuggestToolCard } from "@/components/SuggestToolCard";
 import { HomeSplashLoader } from "@/components/HomeSplashLoader";
 import { LiveSyncBadge } from "@/components/LiveSyncBadge";
 import { ToolCardGridSkeleton, ToolCardListSkeleton } from "@/components/ToolCardSkeleton";
@@ -498,6 +499,9 @@ function HomePageContent() {
       <Hero tools={tools} toolsAddedTodayCount={toolsAddedTodayCount} />
       <div className="container mx-auto px-4 py-8">
         <NewToolsBanner count={toolsAddedTodayCount} />
+        <div className="mb-6">
+          <SuggestToolCard />
+        </div>
         <div className="flex flex-col gap-6 lg:flex-row">
           <div className="lg:w-80">
             <FilterSidebar

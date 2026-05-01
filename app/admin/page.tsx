@@ -49,6 +49,7 @@ import { toolCategoryList, videoCategoryList } from '@/lib/tool-categories'
 import type { Tool, Video } from '@/lib/supabase'
 import { cn } from '@/lib/utils'
 import { getAssistantDashboardUrl } from '@/lib/assistant-urls'
+import { buildToolPayloadFromAnalyzeResponse } from '@/lib/build-tool-payload-from-analyze'
 import {
   Loader2,
   Plus,
@@ -79,6 +80,15 @@ type AdminToolFormState = {
   estimatedVisits: string
   isAgency: boolean
   hasDownloadableApp: boolean
+}
+
+type ToolSuggestionRow = {
+  id: string
+  url: string
+  normalized_url: string
+  status: string
+  created_at: string
+  suggested_by_user_id: string | null
 }
 
 function buildToolPayload(
@@ -167,58 +177,6 @@ function isLikelyHttpUrl(text: string): boolean {
   return /^[\w.-]+\.[a-z]{2,}([/:?#].*)?$/i.test(t)
 }
 
-function buildToolPostPayloadFromAnalyze(
-  data: Record<string, unknown>,
-): Record<string, unknown> | null {
-  const name = String(data.name || '').trim()
-  const description = String(data.description || '').trim()
-  const url = String(data.url || '').trim()
-  const categories =
-    Array.isArray(data.categories) && data.categories.length > 0
-      ? finalizeToolCategoriesList(
-          data.categories.map((c: unknown) =>
-            normalizeToolCategory(String(c)),
-          ),
-        )
-      : finalizeToolCategoriesList([
-          normalizeToolCategory(String(data.category || 'Other')),
-        ])
-  if (!name || !description || !url || categories.length === 0) return null
-  const payload: Record<string, unknown> = {
-    name,
-    description,
-    url,
-    categories,
-  }
-  if (data.logoUrl && String(data.logoUrl).trim())
-    payload.logoUrl = String(data.logoUrl).trim()
-  if (data.tags && String(data.tags).trim())
-    payload.tags = String(data.tags).trim()
-  if (data.traffic) payload.traffic = data.traffic
-  if (data.revenue) payload.revenue = data.revenue
-  if (data.rating !== null && data.rating !== undefined) payload.rating = data.rating
-  if (data.estimatedVisits !== null && data.estimatedVisits !== undefined)
-    payload.estimatedVisits = data.estimatedVisits
-  if (data.isAgency === true) payload.isAgency = true
-  if (data.hasDownloadableApp === true) payload.hasDownloadableApp = true
-  // Forward the popularity snapshot (Tranco/GitHub/age/Wiki/claims) so it
-  // lands on the new row directly — no need for a follow-up backfill call.
-  const pop = data.popularity as Record<string, unknown> | null | undefined
-  if (pop && typeof pop === 'object') {
-    if (typeof pop.trancoRank === 'number') payload.trancoRank = pop.trancoRank
-    if (typeof pop.githubRepo === 'string') payload.githubRepo = pop.githubRepo
-    if (typeof pop.githubStars === 'number') payload.githubStars = pop.githubStars
-    if (typeof pop.domainAgeYears === 'number') payload.domainAgeYears = pop.domainAgeYears
-    if (typeof pop.wikipediaPageTitle === 'string') payload.wikipediaPageTitle = pop.wikipediaPageTitle
-    if (typeof pop.wikipediaPageviews90d === 'number')
-      payload.wikipediaPageviews90d = pop.wikipediaPageviews90d
-    if (typeof pop.score === 'number') payload.popularityScore = pop.score
-    if (typeof pop.tier === 'string') payload.popularityTier = pop.tier
-    payload.popularitySignals = pop
-  }
-  return payload
-}
-
 export default function AdminPage() {
   const router = useRouter()
   const { addToast } = useToast()
@@ -290,6 +248,9 @@ export default function AdminPage() {
 
   // Videos tab state
   const [adminTab, setAdminTab] = useState<'tools' | 'videos'>('tools')
+  const [toolSuggestions, setToolSuggestions] = useState<ToolSuggestionRow[]>([])
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false)
+  const [suggestionActionId, setSuggestionActionId] = useState<string | null>(null)
   const [videos, setVideos] = useState<Video[]>([])
   const [videosLoading, setVideosLoading] = useState(false)
   const [videoQuickAddUrl, setVideoQuickAddUrl] = useState('')
@@ -425,6 +386,98 @@ export default function AdminPage() {
       setLoading(false)
     }
   }
+
+  const fetchToolSuggestions = useCallback(async () => {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    if (!session) return
+    setSuggestionsLoading(true)
+    try {
+      const r = await fetch('/api/admin/tool-suggestions', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      })
+      if (r.ok) {
+        const j = (await r.json()) as ToolSuggestionRow[]
+        setToolSuggestions(Array.isArray(j) ? j : [])
+      }
+    } catch (e) {
+      console.error('fetchToolSuggestions', e)
+    } finally {
+      setSuggestionsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!isAdmin || authLoading) return
+    void fetchToolSuggestions()
+  }, [isAdmin, authLoading, fetchToolSuggestions])
+
+  const approveToolSuggestion = useCallback(
+    async (id: string) => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+      if (!session) return
+      setSuggestionActionId(id)
+      try {
+        const r = await fetch(`/api/admin/tool-suggestions/${id}/approve`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        })
+        const data = await r.json().catch(() => ({}))
+        if (!r.ok) {
+          addToast({
+            variant: 'error',
+            title: 'Approve failed',
+            description:
+              (data as { error?: string }).error ||
+              `HTTP ${r.status}`,
+          })
+          return
+        }
+        addToast({
+          variant: 'success',
+          title: 'Tool added',
+          description: 'Suggestion approved and analyzed like Quick Add.',
+        })
+        await fetchTools()
+        await fetchToolSuggestions()
+      } finally {
+        setSuggestionActionId(null)
+      }
+    },
+    [addToast, fetchTools, fetchToolSuggestions],
+  )
+
+  const rejectToolSuggestion = useCallback(
+    async (id: string) => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+      if (!session) return
+      setSuggestionActionId(id)
+      try {
+        const r = await fetch(`/api/admin/tool-suggestions/${id}/reject`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        })
+        if (!r.ok) {
+          addToast({
+            variant: 'error',
+            title: 'Reject failed',
+            description: `HTTP ${r.status}`,
+          })
+          return
+        }
+        addToast({ variant: 'success', title: 'Suggestion dismissed' })
+        await fetchToolSuggestions()
+      } finally {
+        setSuggestionActionId(null)
+      }
+    },
+    [addToast, fetchToolSuggestions],
+  )
 
   /** Debounced auto-save when editing an existing tool */
   useEffect(() => {
@@ -1818,7 +1871,7 @@ export default function AdminPage() {
         console.warn('⚠️ No debug info available - cannot determine if OpenAI was used')
       }
 
-      const payload = buildToolPostPayloadFromAnalyze({
+      const payload = buildToolPayloadFromAnalyzeResponse({
         ...data,
         url: data.url || urlToAnalyze,
       } as Record<string, unknown>)
@@ -2305,7 +2358,7 @@ export default function AdminPage() {
                     variant: 'error',
                     title: 'Popup blocked',
                     description:
-                      'Allow popups for this site, or open the assistant URL from the Assistant nav link.',
+                      'Allow popups for this site, then try Personal again.',
                   })
                 }
               }}
@@ -2316,6 +2369,68 @@ export default function AdminPage() {
             </button>
           </div>
         </div>
+
+        <Card className="mb-6 border-border/60 shadow-md bg-card/95">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg">Pending tool suggestions</CardTitle>
+            <CardDescription>
+              URLs submitted from the homepage. Approve runs the same AI analyze + add as Quick Add.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {suggestionsLoading && toolSuggestions.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Loading suggestions…</p>
+            ) : toolSuggestions.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No pending suggestions.</p>
+            ) : (
+              <ul className="space-y-2">
+                {toolSuggestions.map((s) => (
+                  <li
+                    key={s.id}
+                    className="flex flex-col gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <a
+                      href={s.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm font-medium text-primary underline-offset-4 hover:underline break-all"
+                    >
+                      {s.url}
+                    </a>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="default"
+                        className="h-9 w-9 rounded-full"
+                        title="Approve and add"
+                        disabled={suggestionActionId !== null}
+                        onClick={() => void approveToolSuggestion(s.id)}
+                      >
+                        {suggestionActionId === s.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Check className="h-4 w-4" />
+                        )}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="outline"
+                        className="h-9 w-9 rounded-full"
+                        title="Dismiss"
+                        disabled={suggestionActionId !== null}
+                        onClick={() => void rejectToolSuggestion(s.id)}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
 
       {adminTab === 'tools' && (
       <div className="grid gap-8 lg:grid-cols-2">
