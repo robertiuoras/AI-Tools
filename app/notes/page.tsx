@@ -2164,9 +2164,19 @@ function NotesPageInner() {
     });
     if (!res.ok) return false;
     const updated = (await res.json()) as Note;
+    const keepLocalEditingContent =
+      typeof patch.content === "string" &&
+      isEditing &&
+      selectedNoteIdRef.current === noteId;
     setNotes((prev) => {
       const next = sortNotesFavoritesFirst(
-        prev.map((n) => (n.id === noteId ? updated : n)),
+        prev.map((n) =>
+          n.id === noteId
+            ? keepLocalEditingContent
+              ? { ...updated, content: patch.content as string }
+              : updated
+            : n,
+        ),
       );
       if (selectedPageId) {
         writeOrderIds(
@@ -2177,7 +2187,13 @@ function NotesPageInner() {
       return next;
     });
     setAllNotesForMentions((prev) =>
-      prev.map((n) => (n.id === noteId ? updated : n)),
+      prev.map((n) =>
+        n.id === noteId
+          ? keepLocalEditingContent
+            ? { ...updated, content: patch.content as string }
+            : updated
+          : n,
+      ),
     );
     return updated;
   };
@@ -3222,7 +3238,9 @@ function NotesPageInner() {
     img.style.display = "block";
     img.style.minHeight = "32px";
     img.style.pointerEvents = "auto";
-    if (!img.getAttribute("loading")) img.setAttribute("loading", "lazy");
+    // Keep newly inserted images eager while editing so they render
+    // immediately instead of waiting for viewport heuristics.
+    if (!img.getAttribute("loading")) img.setAttribute("loading", "eager");
 
     const cornersOk =
       figure.querySelectorAll("[data-resize-corner]").length === 4 &&
@@ -3362,7 +3380,8 @@ function NotesPageInner() {
       img.style.height = "auto";
       img.style.maxWidth = "100%";
       img.style.display = "block";
-      img.setAttribute("loading", "lazy");
+      img.setAttribute("loading", "eager");
+      img.decoding = "async";
       figure.appendChild(img);
       ensureImageFigureUi(figure);
       r.deleteContents();
@@ -3462,27 +3481,19 @@ function NotesPageInner() {
         }
       }
       if (!url) return;
-      setImageUploadState({ active: true, progress: -1, phase: "decode" });
       const img = insertImageIntoEditor(url);
       if (!img) {
         setImageUploadState({ active: false, progress: 0, phase: "upload" });
         return;
       }
-      const finishDecode = () =>
-        setImageUploadState({ active: false, progress: 0, phase: "upload" });
-      if (img.complete && img.naturalWidth > 0) {
-        queueMicrotask(finishDecode);
-        return;
+      // Insert as soon as the upload finishes; avoid a long "Processing image"
+      // state that can stick when lazy-loading delays image decode events.
+      setImageUploadState({ active: false, progress: 0, phase: "upload" });
+      if (!img.complete) {
+        void img.decode().catch(() => {
+          /* ignore decode failures */
+        });
       }
-      const maxWait = window.setTimeout(finishDecode, 12000);
-      img.onload = () => {
-        window.clearTimeout(maxWait);
-        finishDecode();
-      };
-      img.onerror = () => {
-        window.clearTimeout(maxWait);
-        finishDecode();
-      };
     },
     [getEditorAuthToken, insertImageIntoEditor],
   );
