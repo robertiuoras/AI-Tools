@@ -18,6 +18,18 @@ export function SuggestToolCard() {
     e.preventDefault()
     const trimmed = url.trim()
     if (!trimmed) return
+    const normalized = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
+    let parsed: URL
+    try {
+      parsed = new URL(normalized)
+    } catch {
+      addToast({
+        variant: 'error',
+        title: 'Invalid URL',
+        description: 'Enter a valid website like canva.com or https://canva.com',
+      })
+      return
+    }
     setSubmitting(true)
     try {
       const headers: HeadersInit = { 'Content-Type': 'application/json' }
@@ -27,7 +39,7 @@ export function SuggestToolCard() {
       const r = await fetch('/api/tools/suggest', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ url: trimmed }),
+        body: JSON.stringify({ url: parsed.toString() }),
       })
       const data = (await r.json().catch(() => ({}))) as {
         error?: string
@@ -93,7 +105,7 @@ export function SuggestToolCard() {
       </p>
       <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-2 sm:flex-row">
         <Input
-          type="url"
+          type="text"
           inputMode="url"
           placeholder="https://example.com"
           value={url}

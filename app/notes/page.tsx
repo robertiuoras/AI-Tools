@@ -522,6 +522,35 @@ function getRangeForTextSpan(
   return r;
 }
 
+function getCaretCharOffsetAtPoint(
+  root: HTMLElement,
+  clientX: number,
+  clientY: number,
+): number | null {
+  let pointRange: Range | null = null;
+  const docAny = document as Document & {
+    caretPositionFromPoint?: (
+      x: number,
+      y: number,
+    ) => { offsetNode: Node; offset: number } | null;
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+  };
+  const pos = docAny.caretPositionFromPoint?.(clientX, clientY);
+  if (pos) {
+    pointRange = document.createRange();
+    pointRange.setStart(pos.offsetNode, pos.offset);
+    pointRange.collapse(true);
+  } else {
+    pointRange = docAny.caretRangeFromPoint?.(clientX, clientY) ?? null;
+  }
+  if (!pointRange) return null;
+  if (!root.contains(pointRange.startContainer)) return null;
+  const pre = document.createRange();
+  pre.setStart(root, 0);
+  pre.setEnd(pointRange.startContainer, pointRange.startOffset);
+  return pre.toString().length;
+}
+
 function isInsideNoteMentionAnchor(node: Node, root: HTMLElement): boolean {
   let el: Node | null =
     node.nodeType === Node.TEXT_NODE ? node.parentNode : node;
@@ -1347,6 +1376,7 @@ function NotesPageInner() {
   } | null>(null);
   /** When entering edit, match read view scroll on the editor. */
   const pendingEditorScrollRef = useRef<number | null>(null);
+  const pendingEditorCaretCharRef = useRef<number | null>(null);
   const mentionPickerRef = useRef<HTMLDivElement | null>(null);
   const refreshMentionPickerRef = useRef<() => void>(() => {});
   const lastMentionQueryForHighlightRef = useRef<string>("");
@@ -2073,6 +2103,21 @@ function NotesPageInner() {
       if (editorRef.current) editorRef.current.scrollTop = top;
     });
     pendingEditorScrollRef.current = null;
+  }, [isEditing, selectedNoteId, editorSession]);
+
+  useLayoutEffect(() => {
+    if (!isEditing || !selectedNoteId) return;
+    const char = pendingEditorCaretCharRef.current;
+    if (char === null) return;
+    const root = editorRef.current;
+    if (!root) return;
+    const sel = window.getSelection();
+    if (!sel) return;
+    const r = getRangeForTextSpan(root, char, char);
+    if (!r) return;
+    sel.removeAllRanges();
+    sel.addRange(r);
+    pendingEditorCaretCharRef.current = null;
   }, [isEditing, selectedNoteId, editorSession]);
 
   const createPage = async () => {
@@ -6545,6 +6590,12 @@ function NotesPageInner() {
                             return;
                           }
                           if ((e.target as HTMLElement).closest("a")) return;
+                          const caretChar = getCaretCharOffsetAtPoint(
+                            e.currentTarget,
+                            e.clientX,
+                            e.clientY,
+                          );
+                          pendingEditorCaretCharRef.current = caretChar;
                           beginEditingNote();
                         requestAnimationFrame(() =>
                           editorRef.current?.focus({ preventScroll: true }),
