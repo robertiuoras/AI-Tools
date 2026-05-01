@@ -1384,6 +1384,7 @@ function NotesPageInner() {
   /** When entering edit, match read view scroll on the editor. */
   const pendingEditorScrollRef = useRef<number | null>(null);
   const pendingEditorCaretCharRef = useRef<number | null>(null);
+  const pendingReadClickCaretCharRef = useRef<number | null>(null);
   const mentionPickerRef = useRef<HTMLDivElement | null>(null);
   const refreshMentionPickerRef = useRef<() => void>(() => {});
   const lastMentionQueryForHighlightRef = useRef<string>("");
@@ -2122,6 +2123,8 @@ function NotesPageInner() {
       const root = editorRef.current;
       const sel = window.getSelection();
       if (!root || !sel) return false;
+      const winX = window.scrollX;
+      const winY = window.scrollY;
       root.focus({ preventScroll: true });
       const textLen = root.textContent?.length ?? 0;
       const safe = Math.max(0, Math.min(char, textLen));
@@ -2131,6 +2134,7 @@ function NotesPageInner() {
       if (!r) return false;
       sel.removeAllRanges();
       sel.addRange(r);
+      window.scrollTo(winX, winY);
       return true;
     };
     if (apply()) {
@@ -6587,6 +6591,14 @@ function NotesPageInner() {
                         role="button"
                         tabIndex={0}
                         aria-label="Click to edit note"
+                        onMouseDownCapture={(e) => {
+                          pendingReadClickCaretCharRef.current =
+                            getCaretCharOffsetAtPoint(
+                              e.currentTarget,
+                              e.clientX,
+                              e.clientY,
+                            );
+                        }}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === " ") {
                             e.preventDefault();
@@ -6595,9 +6607,6 @@ function NotesPageInner() {
                                 readNoteBodyWrapRef.current!,
                               );
                             beginEditingNote();
-                            requestAnimationFrame(() =>
-                              editorRef.current?.focus({ preventScroll: true }),
-                            );
                           }
                         }}
                         onClick={(e) => {
@@ -6622,18 +6631,18 @@ function NotesPageInner() {
                           const fromSelection = getSelectionCaretCharOffsetInRoot(
                             e.currentTarget,
                           );
+                          const fromMouseDown = pendingReadClickCaretCharRef.current;
                           const fromPoint = getCaretCharOffsetAtPoint(
                             e.currentTarget,
                             e.clientX,
                             e.clientY,
                           );
                           const fallbackEnd = e.currentTarget.innerText.length;
-                          const caretChar = fromSelection ?? fromPoint ?? fallbackEnd;
+                          const caretChar =
+                            fromSelection ?? fromMouseDown ?? fromPoint ?? fallbackEnd;
                           pendingEditorCaretCharRef.current = caretChar;
+                          pendingReadClickCaretCharRef.current = null;
                           beginEditingNote();
-                          requestAnimationFrame(() =>
-                            editorRef.current?.focus({ preventScroll: true }),
-                          );
                         }}
                         onContextMenu={openContextMenuFromReadBody}
                         className={cn(
