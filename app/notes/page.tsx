@@ -4989,7 +4989,7 @@ function NotesPageInner() {
                         className="min-w-0 flex-1 truncate text-left text-sm"
                         onClick={() => {
                           setSelectedNoteId(n.id);
-                          setFocusMode(true);
+                          setFocusMode(false);
                         }}
                       >
                         <span className="block truncate">{n.title}</span>
