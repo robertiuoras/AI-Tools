@@ -644,6 +644,15 @@ function getMentionContext(
   const replaceRange = getRangeForTextSpan(blockEl, lastAt, text.length);
   if (!replaceRange) return null;
 
+  // The matched `@` may live inside a mention anchor we just inserted —
+  // every freshly-inserted mention reads as `@TargetTitle ` and the caret
+  // lands in the trailing space. Without this guard the picker re-opens on
+  // its own anchor's text, the same option keeps showing, and rapid clicks
+  // stack duplicate mentions.
+  if (isInsideNoteMentionAnchor(replaceRange.startContainer, root)) {
+    return null;
+  }
+
   const caretRect = caretRange.getBoundingClientRect();
   return { query, replaceRange, caretRect };
 }
