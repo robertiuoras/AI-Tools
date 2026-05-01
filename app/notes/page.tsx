@@ -1172,6 +1172,14 @@ function NotesPageInner() {
   useEffect(() => {
     if (!selectedNoteId) setNotesPaneHover(false);
   }, [selectedNoteId]);
+  useEffect(
+    () => () => {
+      if (notesPaneHoverCloseTimerRef.current !== null) {
+        window.clearTimeout(notesPaneHoverCloseTimerRef.current);
+      }
+    },
+    [],
+  );
 
   /**
    * Notes shared WITH the current user (Google-Docs-style). Each entry has
@@ -1299,6 +1307,7 @@ function NotesPageInner() {
   const [newNoteTitle, setNewNoteTitle] = useState("");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const noteTextImportInputRef = useRef<HTMLInputElement | null>(null);
+  const notesPaneHoverCloseTimerRef = useRef<number | null>(null);
   /** Bumps every minute so "last edited" relative labels stay fresh. */
   const [editedNowMs, setEditedNowMs] = useState(() => Date.now());
   const [allNotesForMentions, setAllNotesForMentions] = useState<Note[]>([]);
@@ -4963,10 +4972,22 @@ function NotesPageInner() {
 
           <section
             onMouseEnter={() => {
-              if (notesPaneCompact) setNotesPaneHover(true);
+              if (!notesPaneCompact) return;
+              if (notesPaneHoverCloseTimerRef.current !== null) {
+                window.clearTimeout(notesPaneHoverCloseTimerRef.current);
+                notesPaneHoverCloseTimerRef.current = null;
+              }
+              setNotesPaneHover(true);
             }}
             onMouseLeave={() => {
-              if (notesPaneCompact) setNotesPaneHover(false);
+              if (!notesPaneCompact) return;
+              if (notesPaneHoverCloseTimerRef.current !== null) {
+                window.clearTimeout(notesPaneHoverCloseTimerRef.current);
+              }
+              notesPaneHoverCloseTimerRef.current = window.setTimeout(() => {
+                setNotesPaneHover(false);
+                notesPaneHoverCloseTimerRef.current = null;
+              }, 220);
             }}
             className={cn(
               "min-w-0 cursor-default rounded-2xl border bg-card p-3.5 space-y-3",
@@ -4983,6 +5004,16 @@ function NotesPageInner() {
                 {notes.length} notes
               </span>
             </div>
+            {notesPaneCompact && !notesPaneHover ? (
+              <button
+                type="button"
+                onClick={() => setNotesPaneHover(true)}
+                className="mx-auto mt-1 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-border/70 bg-muted/35 text-sm font-semibold text-foreground shadow-sm transition-colors hover:bg-muted/55"
+                title="Show notes"
+              >
+                {notes.length}
+              </button>
+            ) : null}
             {notesPaneExpanded && (
               <div className="flex gap-2">
               <Input
@@ -5055,7 +5086,8 @@ function NotesPageInner() {
               )}
             </div>
             )}
-            <div className="relative min-h-[120px] max-h-[min(58vh,520px)] space-y-1 overflow-y-auto pr-1">
+            {notesPaneExpanded && (
+              <div className="relative min-h-[120px] max-h-[min(58vh,520px)] space-y-1 overflow-y-auto pr-1">
               {notes.map((n) => (
                 <Fragment key={n.id}>
                   {dragNoteId &&
@@ -5349,6 +5381,7 @@ function NotesPageInner() {
                   />
                 )}
             </div>
+            )}
           </section>
 
           <section className="flex min-h-0 min-w-0 cursor-default flex-col overflow-visible rounded-xl border bg-card p-4 lg:max-h-[calc(100vh-7rem)]">
@@ -5525,21 +5558,39 @@ function NotesPageInner() {
                     </>
                   )}
                 </div>
-                {selectedNote.updatedAt ? (
-                  <div className="flex min-w-0 items-center gap-1.5 pl-6 text-[11px] text-muted-foreground tabular-nums">
-                    <Clock
-                      className="h-3 w-3 shrink-0 opacity-80"
-                      aria-hidden
-                    />
-                    <span
-                      title={new Date(selectedNote.updatedAt).toLocaleString()}
-                    >
-                      Updated{" "}
-                      {formatNoteEditedRelative(
-                        selectedNote.updatedAt,
-                        editedNowMs,
+                <div className="flex min-w-0 items-center gap-1.5 pl-6 text-[11px] text-muted-foreground tabular-nums">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (useCollaborativeEditor) setVersionHistoryOpen(true);
+                      }}
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded px-1 py-0.5",
+                        useCollaborativeEditor
+                          ? "hover:bg-muted/70 hover:text-foreground"
+                          : "cursor-default",
                       )}
-                    </span>
+                      title={
+                        useCollaborativeEditor
+                          ? "Show version history"
+                          : selectedNote.updatedAt
+                            ? new Date(selectedNote.updatedAt).toLocaleString()
+                            : "No saved timestamp yet"
+                      }
+                    >
+                      <Clock
+                        className="h-3 w-3 shrink-0 opacity-80"
+                        aria-hidden
+                      />
+                      <span>
+                        {selectedNote.updatedAt
+                          ? `Updated ${formatNoteEditedRelative(
+                              selectedNote.updatedAt,
+                              editedNowMs,
+                            )}`
+                          : "No save timestamp"}
+                      </span>
+                    </button>
                     {!isSharedNoteSelected && selectedOwnedShareCount > 0 ? (
                       <button
                         type="button"
@@ -5577,7 +5628,6 @@ function NotesPageInner() {
                       </button>
                     ) : null}
                   </div>
-                ) : null}
                 <div
                   className={cn(
                     "flex min-h-0 min-w-0 flex-1 flex-col space-y-2",
