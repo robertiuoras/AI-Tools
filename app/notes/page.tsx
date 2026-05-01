@@ -622,8 +622,16 @@ function getMentionContext(
     return null;
   }
 
+  // Confine the @-search to the caret's own block. Range.toString() drops
+  // paragraph boundaries, so scanning from the editor root would let the
+  // last char of the PREVIOUS paragraph become beforeChar — typing `@`
+  // at the start of a new line right after a normal paragraph would then
+  // look like the user typed `text@` and the picker would refuse to open.
+  const block = getMentionBlockContainer(caretRange.startContainer, root);
+  const blockEl = (block instanceof HTMLElement ? block : root) as HTMLElement;
+
   const pre = document.createRange();
-  pre.selectNodeContents(root);
+  pre.selectNodeContents(blockEl);
   pre.setEnd(caretRange.endContainer, caretRange.endOffset);
   const text = pre.toString();
   const lastAt = text.lastIndexOf("@");
@@ -633,12 +641,8 @@ function getMentionContext(
   const query = text.slice(lastAt + 1);
   if (query.includes("\n")) return null;
 
-  const replaceRange = getRangeForTextSpan(root, lastAt, text.length);
+  const replaceRange = getRangeForTextSpan(blockEl, lastAt, text.length);
   if (!replaceRange) return null;
-
-  const atBlock = getMentionBlockContainer(replaceRange.startContainer, root);
-  const caretBlock = getMentionBlockContainer(caretRange.startContainer, root);
-  if (atBlock !== caretBlock) return null;
 
   const caretRect = caretRange.getBoundingClientRect();
   return { query, replaceRange, caretRect };
@@ -2138,7 +2142,21 @@ function NotesPageInner() {
       const winY = window.scrollY;
       root.focus({ preventScroll: true });
       let r: Range | null = null;
-      if (clickPoint) {
+      // Prefer the character offset captured in the read view: read view and
+      // editor have different DOM (padding, prose tree) so a viewport (x,y)
+      // that landed mid-paragraph in the read view often resolves to a wildly
+      // different position in the editor — caret jumps to top-left, page
+      // scrolls. Char offset is anchored to text content and stays stable.
+      if (char !== null) {
+        const textLen = root.textContent?.length ?? 0;
+        const safe = Math.max(0, Math.min(char, textLen));
+        r =
+          getRangeForTextSpan(root, safe, safe) ??
+          getRangeForTextSpan(root, textLen, textLen);
+      }
+      // Point is a last-resort fallback for the rare case where char wasn't
+      // captured (e.g. user activated edit via keyboard at an empty doc).
+      if (!r && clickPoint) {
         const rect = root.getBoundingClientRect();
         const x = Math.min(Math.max(clickPoint.x, rect.left + 2), rect.right - 2);
         const y = Math.min(Math.max(clickPoint.y, rect.top + 2), rect.bottom - 2);
@@ -2165,10 +2183,7 @@ function NotesPageInner() {
       }
       if (!r) {
         const textLen = root.textContent?.length ?? 0;
-        const safe = Math.max(0, Math.min(char ?? textLen, textLen));
-        r =
-          getRangeForTextSpan(root, safe, safe) ??
-          getRangeForTextSpan(root, textLen, textLen);
+        r = getRangeForTextSpan(root, textLen, textLen);
       }
       if (!r) return false;
       sel.removeAllRanges();
@@ -3485,12 +3500,14 @@ function NotesPageInner() {
     });
   }, [ensureImageFigureUi]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!isEditing) return;
-    const id = window.setTimeout(() => {
-      hydrateEditorImageFigures();
-    }, 0);
-    return () => window.clearTimeout(id);
+    // useLayoutEffect (not useEffect + setTimeout) so the resize/rotate
+    // handles are mounted synchronously after the editor's innerHTML seed
+    // and before the browser paints. Otherwise the first frame shows the
+    // image without handles and the user sees a flicker each time they
+    // enter edit mode.
+    hydrateEditorImageFigures();
   }, [isEditing, editorSession, selectedNoteId, hydrateEditorImageFigures]);
 
   const getEditorAuthToken = useCallback(
@@ -6835,90 +6852,6 @@ function NotesPageInner() {
                       </div>
                     )}
                   </div>
-                  <div className="mt-3 shrink-0 flex flex-wrap items-center justify-between gap-2 rounded-md border-t border-border/70 bg-card px-2 py-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      className="h-7 text-xs"
-                      title="Copy note body"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => {
-                        const c = selectedNote.content;
-                        const plain = isProbablyHtml(c) ? htmlToPlainText(c) : c;
-                        void copyText(
-                          plain,
-                          `editor-body-${selectedNote.id}`,
-                        );
-                      }}
-                    >
-                      {copiedKey === `editor-body-${selectedNote.id}` ? (
-                        <>
-                          <Check className="h-3.5 w-3.5 mr-1 text-emerald-500" />
-                          Copied body
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="h-3.5 w-3.5 mr-1" />
-                          Copy body
-                        </>
-                      )}
-                    </Button>
-                    <div className="flex items-center gap-1.5">
-                      <span className="inline-flex h-7 items-center rounded-md border border-border/60 bg-background px-2 text-xs font-medium text-muted-foreground">
-                        TXT
-                      </span>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        className="h-7 text-xs"
-                        title="Export note as .txt"
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => {
-                          if (!selectedNote) return;
-                          const src = selectedNote.content ?? "";
-                          const plain = isProbablyHtml(src) ? htmlToPlainText(src) : src;
-                          const blob = new Blob([plain], {
-                            type: "text/plain;charset=utf-8",
-                          });
-                          const safeBase = (selectedNote.title || "note")
-                            .replace(/[\\/:*?\"<>|]+/g, " ")
-                            .trim()
-                            .replace(/\s+/g, "-")
-                            .slice(0, 80) || "note";
-                          const url = URL.createObjectURL(blob);
-                          const a = document.createElement("a");
-                          a.href = url;
-                          a.download = `${safeBase}.txt`;
-                          document.body.appendChild(a);
-                          a.click();
-                          a.remove();
-                          URL.revokeObjectURL(url);
-                        }}
-                      >
-                        <Download className="h-3.5 w-3.5 mr-1" />
-                        Export
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        className="h-7 text-xs"
-                        title={
-                          useCollaborativeEditor
-                            ? "Import is available in solo notes"
-                            : "Import note from .txt"
-                        }
-                        onMouseDown={(e) => e.preventDefault()}
-                        disabled={!canEditSelectedNote || useCollaborativeEditor}
-                        onClick={() => noteTextImportInputRef.current?.click()}
-                      >
-                        <Upload className="h-3.5 w-3.5 mr-1" />
-                        Import
-                      </Button>
-                    </div>
-                  </div>
                   {isEditing && contextMenu.open && (
                     <div
                       ref={(el) => {
@@ -7152,6 +7085,99 @@ function NotesPageInner() {
                       )}
                     </div>
                   )}
+                </div>
+                {/* Footer: Copy / Export / Import. Lives as a sibling of the
+                    editor wrapper (NOT inside it) so it always sits below
+                    the editor body and the buttons are reachable — when this
+                    row was nested inside the editor's flex container, large
+                    notes pushed the editor over it and the buttons couldn't
+                    be clicked. Standalone card styling makes the separation
+                    obvious. */}
+                <div className="shrink-0 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/30 px-3 py-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 text-xs"
+                    title="Copy note body"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      const c = selectedNote.content;
+                      const plain = isProbablyHtml(c) ? htmlToPlainText(c) : c;
+                      void copyText(plain, `editor-body-${selectedNote.id}`);
+                    }}
+                  >
+                    {copiedKey === `editor-body-${selectedNote.id}` ? (
+                      <>
+                        <Check className="h-3.5 w-3.5 mr-1 text-emerald-500" />
+                        Copied body
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="h-3.5 w-3.5 mr-1" />
+                        Copy body
+                      </>
+                    )}
+                  </Button>
+                  <div className="flex items-center gap-1.5">
+                    <span className="inline-flex h-7 items-center rounded-md border border-border/60 bg-background px-2 text-xs font-medium text-muted-foreground">
+                      TXT
+                    </span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs"
+                      title="Export note as .txt"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => {
+                        if (!selectedNote) return;
+                        const src = selectedNote.content ?? "";
+                        const plain = isProbablyHtml(src)
+                          ? htmlToPlainText(src)
+                          : src;
+                        const blob = new Blob([plain], {
+                          type: "text/plain;charset=utf-8",
+                        });
+                        const safeBase =
+                          (selectedNote.title || "note")
+                            .replace(/[\\/:*?\"<>|]+/g, " ")
+                            .trim()
+                            .replace(/\s+/g, "-")
+                            .slice(0, 80) || "note";
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = `${safeBase}.txt`;
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        URL.revokeObjectURL(url);
+                      }}
+                    >
+                      <Download className="h-3.5 w-3.5 mr-1" />
+                      Export
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs"
+                      title={
+                        useCollaborativeEditor
+                          ? "Import is available in solo notes"
+                          : "Import note from .txt"
+                      }
+                      onMouseDown={(e) => e.preventDefault()}
+                      disabled={
+                        !canEditSelectedNote || useCollaborativeEditor
+                      }
+                      onClick={() => noteTextImportInputRef.current?.click()}
+                    >
+                      <Upload className="h-3.5 w-3.5 mr-1" />
+                      Import
+                    </Button>
+                  </div>
                 </div>
               </div>
             ) : (
