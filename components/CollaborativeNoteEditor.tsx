@@ -82,7 +82,7 @@ interface CollaborativeNoteEditorProps {
   /** Whether the current user can edit (false = view-only share). */
   canEdit: boolean;
   /** Called after a successful save so the parent can refresh side panels. */
-  onSaved?: (html: string) => void;
+  onSaved?: (payload: { html: string; savedNote: any | null }) => void;
   /** Emits save indicator state to parent chrome. */
   onSaveStateChange?: (state: "saving" | "saved" | "idle") => void;
   /** Optional placeholder text shown when the doc is empty. */
@@ -373,7 +373,8 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
         body: JSON.stringify({ content: html }),
       });
       if (res.ok) {
-        onSaved?.(html);
+        const savedNote = (await res.json().catch(() => null)) as any | null;
+        onSaved?.({ html, savedNote });
         onSaveStateChange?.("saved");
         window.setTimeout(() => onSaveStateChange?.("idle"), 1200);
       } else {

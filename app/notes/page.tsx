@@ -6602,9 +6602,28 @@ function NotesPageInner() {
                           noteId={selectedNote.id}
                           initialHtml={selectedNote.content || ""}
                           canEdit={canEditSelectedNote}
+                          onSaved={({ savedNote }) => {
+                            if (!savedNote) return;
+                            setNotes((prev) =>
+                              sortNotesFavoritesFirst(
+                                prev.map((n) =>
+                                  n.id === savedNote.id ? { ...n, ...savedNote } : n,
+                                ),
+                              ),
+                            );
+                            setAllNotesForMentions((prev) =>
+                              prev.map((n) =>
+                                n.id === savedNote.id ? { ...n, ...savedNote } : n,
+                              ),
+                            );
+                            const ts =
+                              typeof savedNote.updatedAt === "string"
+                                ? Date.parse(savedNote.updatedAt)
+                                : NaN;
+                            if (!Number.isNaN(ts)) setLastSavedAtMs(ts);
+                          }}
                           onSaveStateChange={(state) => {
                             setAutoSaveState(state);
-                            if (state === "saved") setLastSavedAtMs(Date.now());
                           }}
                           placeholder={
                             isSharedNoteSelected || selectedOwnedShareCount > 0
