@@ -551,6 +551,17 @@ function getCaretCharOffsetAtPoint(
   return pre.toString().length;
 }
 
+function getSelectionCaretCharOffsetInRoot(root: HTMLElement): number | null {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return null;
+  const anchor = sel.anchorNode;
+  if (!anchor || !root.contains(anchor)) return null;
+  const pre = document.createRange();
+  pre.setStart(root, 0);
+  pre.setEnd(anchor, sel.anchorOffset);
+  return pre.toString().length;
+}
+
 function isInsideNoteMentionAnchor(node: Node, root: HTMLElement): boolean {
   let el: Node | null =
     node.nodeType === Node.TEXT_NODE ? node.parentNode : node;
@@ -1152,10 +1163,14 @@ function NotesPageInner() {
    * smoothly. A "Back" button in the editor header leaves focus mode.
    */
   const [focusMode, setFocusMode] = useState(false);
+  const [notesPaneHover, setNotesPaneHover] = useState(false);
   // Always exit focus mode if the active note disappears (delete, switch tabs)
   // so the user is never stranded with the side columns hidden.
   useEffect(() => {
     if (!selectedNoteId) setFocusMode(false);
+  }, [selectedNoteId]);
+  useEffect(() => {
+    if (!selectedNoteId) setNotesPaneHover(false);
   }, [selectedNoteId]);
 
   /**
@@ -2097,19 +2112,44 @@ function NotesPageInner() {
     pendingEditorScrollRef.current = null;
   }, [isEditing, selectedNoteId, editorSession]);
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (!isEditing || !selectedNoteId) return;
     const char = pendingEditorCaretCharRef.current;
     if (char === null) return;
-    const root = editorRef.current;
-    if (!root) return;
-    const sel = window.getSelection();
-    if (!sel) return;
-    const r = getRangeForTextSpan(root, char, char);
-    if (!r) return;
-    sel.removeAllRanges();
-    sel.addRange(r);
-    pendingEditorCaretCharRef.current = null;
+    let raf1 = 0;
+    let raf2 = 0;
+    const apply = () => {
+      const root = editorRef.current;
+      const sel = window.getSelection();
+      if (!root || !sel) return false;
+      root.focus({ preventScroll: true });
+      const textLen = root.textContent?.length ?? 0;
+      const safe = Math.max(0, Math.min(char, textLen));
+      const r =
+        getRangeForTextSpan(root, safe, safe) ??
+        getRangeForTextSpan(root, textLen, textLen);
+      if (!r) return false;
+      sel.removeAllRanges();
+      sel.addRange(r);
+      return true;
+    };
+    if (apply()) {
+      pendingEditorCaretCharRef.current = null;
+      return;
+    }
+    raf1 = requestAnimationFrame(() => {
+      if (apply()) {
+        pendingEditorCaretCharRef.current = null;
+        return;
+      }
+      raf2 = requestAnimationFrame(() => {
+        if (apply()) pendingEditorCaretCharRef.current = null;
+      });
+    });
+    return () => {
+      if (raf1) cancelAnimationFrame(raf1);
+      if (raf2) cancelAnimationFrame(raf2);
+    };
   }, [isEditing, selectedNoteId, editorSession]);
 
   const createPage = async () => {
@@ -4463,6 +4503,8 @@ function NotesPageInner() {
     notesSubView === "notes" &&
     notesLoading &&
     !initialNotesBootstrapDone;
+  const notesPaneCompact = !!selectedNoteId && !focusMode;
+  const notesPaneExpanded = !notesPaneCompact || notesPaneHover;
 
   if (!authSessionReady || showInitialNotesWorkspaceLoader) {
     return (
@@ -4537,7 +4579,11 @@ function NotesPageInner() {
             "transition-[grid-template-columns,gap] duration-[520ms] ease-[cubic-bezier(0.16,1,0.3,1)]",
             focusMode
               ? "lg:grid-cols-[minmax(0,0px)_minmax(0,0px)_minmax(0,1fr)] lg:gap-0"
-              : "lg:grid-cols-[minmax(0,280px)_minmax(0,240px)_minmax(0,1fr)]",
+              : notesPaneCompact
+                ? notesPaneHover
+                  ? "lg:grid-cols-[minmax(0,280px)_minmax(0,220px)_minmax(0,1fr)]"
+                  : "lg:grid-cols-[minmax(0,280px)_minmax(0,132px)_minmax(0,1fr)]"
+                : "lg:grid-cols-[minmax(0,280px)_minmax(0,220px)_minmax(0,1fr)]",
           )}
         >
           {notesLoading && initialNotesBootstrapDone ? (
@@ -4912,9 +4958,16 @@ function NotesPageInner() {
           </section>
 
           <section
+            onMouseEnter={() => {
+              if (notesPaneCompact) setNotesPaneHover(true);
+            }}
+            onMouseLeave={() => {
+              if (notesPaneCompact) setNotesPaneHover(false);
+            }}
             className={cn(
               "min-w-0 cursor-default rounded-2xl border bg-card p-3.5 space-y-3",
               "lg:overflow-hidden lg:max-h-[calc(100vh-7rem)] transition-[opacity,transform] duration-[420ms] ease-out",
+              notesPaneCompact && !notesPaneHover && "lg:p-2.5 lg:space-y-2",
               focusMode &&
                 "lg:pointer-events-none lg:scale-[0.97] lg:opacity-0",
             )}
@@ -4926,7 +4979,8 @@ function NotesPageInner() {
                 {notes.length} notes
               </span>
             </div>
-            <div className="flex gap-2">
+            {notesPaneExpanded && (
+              <div className="flex gap-2">
               <Input
                 data-notes-new-title="1"
                 placeholder="New note title..."
@@ -4942,8 +4996,10 @@ function NotesPageInner() {
               >
                 <Plus className="h-4 w-4" />
               </Button>
-            </div>
-            <div className="space-y-1.5">
+              </div>
+            )}
+            {notesPaneExpanded && (
+              <div className="space-y-1.5">
               <Label className="text-[10px] text-muted-foreground">
                 Search all notes
               </Label>
@@ -4994,6 +5050,7 @@ function NotesPageInner() {
                 </div>
               )}
             </div>
+            )}
             <div className="relative min-h-[120px] max-h-[min(58vh,520px)] space-y-1 overflow-y-auto pr-1">
               {notes.map((n) => (
                 <Fragment key={n.id}>
@@ -6533,9 +6590,13 @@ function NotesPageInner() {
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === " ") {
                             e.preventDefault();
+                            pendingEditorCaretCharRef.current =
+                              getSelectionCaretCharOffsetInRoot(
+                                readNoteBodyWrapRef.current!,
+                              );
                             beginEditingNote();
                             requestAnimationFrame(() =>
-                            editorRef.current?.focus({ preventScroll: true }),
+                              editorRef.current?.focus({ preventScroll: true }),
                             );
                           }
                         }}
@@ -6558,16 +6619,21 @@ function NotesPageInner() {
                             return;
                           }
                           if ((e.target as HTMLElement).closest("a")) return;
-                          const caretChar = getCaretCharOffsetAtPoint(
+                          const fromSelection = getSelectionCaretCharOffsetInRoot(
+                            e.currentTarget,
+                          );
+                          const fromPoint = getCaretCharOffsetAtPoint(
                             e.currentTarget,
                             e.clientX,
                             e.clientY,
                           );
+                          const fallbackEnd = e.currentTarget.innerText.length;
+                          const caretChar = fromSelection ?? fromPoint ?? fallbackEnd;
                           pendingEditorCaretCharRef.current = caretChar;
                           beginEditingNote();
-                        requestAnimationFrame(() =>
-                          editorRef.current?.focus({ preventScroll: true }),
-                        );
+                          requestAnimationFrame(() =>
+                            editorRef.current?.focus({ preventScroll: true }),
+                          );
                         }}
                         onContextMenu={openContextMenuFromReadBody}
                         className={cn(
