@@ -1,0 +1,28 @@
+---
+description: AI Tools (Next.js) stack, boundaries with assistant, env and ship workflow
+alwaysApply: true
+---
+
+# AI Tools project
+
+## What this repo is
+
+- **Next.js App Router** app: directory (tools/videos), notes, prompts, news, admin (Supabase-backed).
+- **`assistant/` (Python FastAPI)** is a **separate project** on your machine. Do not move its backend into this repo unless the user explicitly asks for a full merge.
+
+## Personal assistant touchpoints (when editing)
+
+- URL helpers: `lib/assistant-urls.ts` (`getAssistantDashboardUrl`, `getAssistantOpenApiUrl`, `DEFAULT_ASSISTANT_DASHBOARD`).
+- **Env:** `NEXT_PUBLIC_ASSISTANT_DASHBOARD_URL` — required for non-default dashboard host (e.g. Tailscale `http://100.x.x.x:8000/dashboard`). Client-only; rebuild after changes.
+- **Routes:** `app/assistant/` (admin-only embedded view + fallbacks). **Admin:** Personal control opens a **named popup** (`assistant-personal`) via `window.open`, not an in-page tab.
+- **Nav:** `components/NavLinks.tsx` — Assistant link is **admin-only**.
+- **Secrets:** Never commit service account / credential JSON. `.gitignore` includes `ai-tools-*.json`.
+
+## Implementation habits
+
+- Match existing patterns: `components/ui/*`, `@/lib/*`, Supabase via `@/lib/supabase`, client auth via `AuthSessionProvider` / `useAuthSession`.
+- Prefer small, focused diffs; avoid drive-by refactors and unsolicited markdown docs.
+
+## Shipping
+
+- Follow `.cursor/rules/deploy-after-change.mdc`: after substantive changes, `npm run build` (fix failures), then commit and `git push origin main` for Vercel (no manual `vercel deploy`).
