@@ -6698,6 +6698,17 @@ function NotesPageInner() {
                         tabIndex={0}
                         aria-label="Click to edit note"
                         onMouseDownCapture={(e) => {
+                          const tgt = e.target as HTMLElement;
+                          if (
+                            (tgt.tagName === "INPUT" &&
+                              (tgt as HTMLInputElement).type === "checkbox") ||
+                            !!tgt.closest("a")
+                          ) {
+                            return;
+                          }
+                          // Prevent the browser from assigning a native caret/focus
+                          // during the click transition; we restore caret manually.
+                          e.preventDefault();
                           pendingReadClickPointRef.current = {
                             x: e.clientX,
                             y: e.clientY,
@@ -6739,9 +6750,8 @@ function NotesPageInner() {
                             return;
                           }
                           if ((e.target as HTMLElement).closest("a")) return;
-                          const fromSelection = getSelectionCaretCharOffsetInRoot(
-                            e.currentTarget,
-                          );
+                          const fromSelection =
+                            getSelectionCaretCharOffsetInRoot(e.currentTarget);
                           const fromMouseDown = pendingReadClickCaretCharRef.current;
                           const fromPoint = getCaretCharOffsetAtPoint(
                             e.currentTarget,
