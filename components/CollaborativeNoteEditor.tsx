@@ -355,7 +355,6 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
     }
 
     if (html === lastSavedHtmlRef.current) return;
-    lastSavedHtmlRef.current = html;
 
     saveAbort.current?.abort();
     const ctrl = new AbortController();
@@ -374,6 +373,9 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
       });
       if (res.ok) {
         const savedNote = (await res.json().catch(() => null)) as any | null;
+        // Mark as saved only after server confirmation. If a request fails or
+        // gets aborted, keeping this stale would suppress retries for same HTML.
+        lastSavedHtmlRef.current = html;
         onSaved?.({ html, savedNote });
         onSaveStateChange?.("saved");
         window.setTimeout(() => onSaveStateChange?.("idle"), 1200);

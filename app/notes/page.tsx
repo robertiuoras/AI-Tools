@@ -5003,92 +5003,6 @@ function NotesPageInner() {
                 </div>
               </div>
             )}
-            <div
-              onMouseEnter={() => {
-                if (!notesPaneCompact) return;
-                if (notesPaneHoverCloseTimerRef.current !== null) {
-                  window.clearTimeout(notesPaneHoverCloseTimerRef.current);
-                  notesPaneHoverCloseTimerRef.current = null;
-                }
-                setNotesPaneHover(true);
-              }}
-              onMouseLeave={() => {
-                if (!notesPaneCompact) return;
-                if (notesPaneHoverCloseTimerRef.current !== null) {
-                  window.clearTimeout(notesPaneHoverCloseTimerRef.current);
-                }
-                notesPaneHoverCloseTimerRef.current = window.setTimeout(() => {
-                  setNotesPaneHover(false);
-                  notesPaneHoverCloseTimerRef.current = null;
-                }, 220);
-              }}
-              className={cn(
-                "mt-4 rounded-xl border border-border/70 bg-muted/25 p-2.5 transition-all duration-300",
-                notesPaneCompact && !notesPaneHover && "mx-auto w-16 p-1.5",
-              )}
-            >
-              <div className="flex items-center justify-between gap-2">
-                {(notesPaneHover || !notesPaneCompact) && (
-                  <Label className="text-[10px] text-muted-foreground">Notes</Label>
-                )}
-                <span className="text-[10px] text-muted-foreground">
-                  {notes.length} notes
-                </span>
-              </div>
-              {notesPaneCompact && !notesPaneHover ? (
-                <button
-                  type="button"
-                  onClick={() => setNotesPaneHover(true)}
-                  className="mx-auto mt-1 inline-flex h-10 w-10 items-center justify-center rounded-full border border-border/70 bg-background text-sm font-semibold text-foreground shadow-sm transition-colors hover:bg-muted"
-                  title="Show notes"
-                >
-                  {notes.length}
-                </button>
-              ) : (
-                <>
-                  <div className="mt-2 flex gap-2">
-                    <Input
-                      data-notes-new-title="1"
-                      placeholder="New note title..."
-                      value={newNoteTitle}
-                      onChange={(e) => setNewNoteTitle(e.target.value)}
-                      disabled={!selectedPageId}
-                    />
-                    <Button
-                      type="button"
-                      size="icon"
-                      onClick={createNote}
-                      disabled={!selectedPageId || !newNoteTitle.trim()}
-                    >
-                      <Plus className="h-4 w-4" />
-                    </Button>
-                  </div>
-                  <div className="mt-2 max-h-[min(42vh,360px)] space-y-1 overflow-y-auto pr-1">
-                    {notes.map((n) => (
-                      <button
-                        key={`compact-note-${n.id}`}
-                        type="button"
-                        className={cn(
-                          "w-full rounded-lg border px-2 py-1.5 text-left text-sm hover:bg-muted/40",
-                          selectedNoteId === n.id && "border-violet-500 bg-violet-500/10",
-                        )}
-                        onClick={() => {
-                          setSelectedNoteId(n.id);
-                          setFocusMode(false);
-                        }}
-                      >
-                        <span className="block truncate">{n.title}</span>
-                        {n.updatedAt ? (
-                          <span className="mt-0.5 block truncate text-[9px] text-muted-foreground">
-                            Updated {formatNoteEditedRelative(n.updatedAt, editedNowMs)}
-                          </span>
-                        ) : null}
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
           </section>
 
           <section
@@ -5513,7 +5427,7 @@ function NotesPageInner() {
                 ref={noteEditShellRef}
                 className="flex min-h-0 min-w-0 max-w-full flex-1 flex-col gap-4 overflow-hidden"
               >
-                <div className="flex min-w-0 flex-wrap items-center justify-center gap-2">
+                <div className="flex min-w-0 w-full flex-wrap items-center justify-center gap-2 text-center">
                   {/* One labeled toggle that switches between "Focus" (expand
                       the editor full width) and "Exit focus" (bring the
                       Pages + Notes lists back). Visible on every screen size
@@ -5681,7 +5595,7 @@ function NotesPageInner() {
                     </>
                   )}
                 </div>
-                <div className="flex min-w-0 flex-wrap items-center justify-center gap-1.5 text-[11px] text-muted-foreground tabular-nums">
+                <div className="flex min-w-0 w-full flex-wrap items-center justify-center gap-1.5 text-[11px] text-muted-foreground tabular-nums">
                     <button
                       type="button"
                       onClick={() => {
@@ -5756,8 +5670,73 @@ function NotesPageInner() {
                     "flex min-h-0 min-w-0 flex-1 flex-col space-y-2",
                   )}
                 >
-                  <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="flex min-h-7 min-w-0 items-center gap-2">
+                  <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="flex min-h-7 min-w-0 items-start gap-2">
+                      <div
+                        onMouseEnter={() => {
+                          if (!notesPaneCompact) return;
+                          if (notesPaneHoverCloseTimerRef.current !== null) {
+                            window.clearTimeout(notesPaneHoverCloseTimerRef.current);
+                            notesPaneHoverCloseTimerRef.current = null;
+                          }
+                          setNotesPaneHover(true);
+                        }}
+                        onMouseLeave={() => {
+                          if (!notesPaneCompact) return;
+                          if (notesPaneHoverCloseTimerRef.current !== null) {
+                            window.clearTimeout(notesPaneHoverCloseTimerRef.current);
+                          }
+                          notesPaneHoverCloseTimerRef.current = window.setTimeout(() => {
+                            setNotesPaneHover(false);
+                            notesPaneHoverCloseTimerRef.current = null;
+                          }, 220);
+                        }}
+                        className={cn(
+                          "shrink-0 rounded-xl border border-border/70 bg-muted/25 p-1.5 transition-all duration-300",
+                          notesPaneCompact && !notesPaneHover
+                            ? "w-12"
+                            : "w-[min(22rem,38vw)] p-2",
+                        )}
+                      >
+                        {notesPaneCompact && !notesPaneHover ? (
+                          <button
+                            type="button"
+                            onClick={() => setNotesPaneHover(true)}
+                            className="mx-auto inline-flex h-8 w-8 items-center justify-center rounded-full border border-border/70 bg-background text-xs font-semibold text-foreground shadow-sm transition-colors hover:bg-muted"
+                            title="Show notes"
+                          >
+                            {notes.length}
+                          </button>
+                        ) : (
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <Label className="text-[10px] text-muted-foreground">Notes</Label>
+                              <span className="text-[10px] text-muted-foreground">
+                                {notes.length} notes
+                              </span>
+                            </div>
+                            <div className="max-h-32 space-y-1 overflow-y-auto pr-1">
+                              {notes.map((n) => (
+                                <button
+                                  key={`inline-note-${n.id}`}
+                                  type="button"
+                                  className={cn(
+                                    "w-full rounded-lg border px-2 py-1 text-left text-xs hover:bg-muted/40",
+                                    selectedNoteId === n.id &&
+                                      "border-violet-500 bg-violet-500/10",
+                                  )}
+                                  onClick={() => {
+                                    setSelectedNoteId(n.id);
+                                    setFocusMode(false);
+                                  }}
+                                >
+                                  <span className="block truncate">{n.title}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
                       <Label className="shrink-0 text-xs text-muted-foreground">
                         Note body
                       </Label>
