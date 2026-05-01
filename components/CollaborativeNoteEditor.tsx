@@ -389,11 +389,11 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
 
   useEffect(() => {
     if (!editor) return;
-    const handler = ({ transaction }: any) => {
-      // y-prosemirror tags remote-applied transactions with this meta key.
-      // Only schedule a save when the change originated locally.
-      const isRemote = transaction.getMeta("y-sync$") !== undefined;
-      if (isRemote) return;
+    const handler = () => {
+      // In practice, Yjs transaction metadata can classify legitimate local
+      // edits as sync-origin updates in some startup/orderings. Persist any
+      // doc change through the debounced save path so refresh never loses
+      // visible edits.
       if (saveTimer.current) window.clearTimeout(saveTimer.current);
       saveTimer.current = window.setTimeout(() => {
         void flushSave();
@@ -1066,6 +1066,7 @@ function CollabContextMenu({
   editor: Editor;
   onClose: () => void;
 }) {
+  /* eslint-disable react-hooks/static-components */
   const ref = useRef<HTMLDivElement | null>(null);
 
   // Close on outside-click / Escape / scroll. Stays open while interacting
@@ -1324,4 +1325,5 @@ function CollabContextMenu({
       />
     </div>
   );
+  /* eslint-enable react-hooks/static-components */
 }
