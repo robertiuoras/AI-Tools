@@ -1124,6 +1124,7 @@ function NotesPageInner() {
    */
   const [focusMode, setFocusMode] = useState(false);
   const [notesPaneCompact, setNotesPaneCompact] = useState(false);
+  const [notesPaneHover, setNotesPaneHover] = useState(false);
   // Always exit focus mode if the active note disappears (delete, switch tabs)
   // so the user is never stranded with the side columns hidden.
   useEffect(() => {
@@ -1132,6 +1133,9 @@ function NotesPageInner() {
   useEffect(() => {
     setNotesPaneCompact(!!selectedNoteId);
   }, [selectedNoteId]);
+  useEffect(() => {
+    if (!notesPaneCompact) setNotesPaneHover(false);
+  }, [notesPaneCompact]);
 
   /**
    * Notes shared WITH the current user (Google-Docs-style). Each entry has
@@ -4497,7 +4501,9 @@ function NotesPageInner() {
             focusMode
               ? "lg:grid-cols-[minmax(0,0px)_minmax(0,0px)_minmax(0,1fr)] lg:gap-0"
               : notesPaneCompact && selectedNoteId
-                ? "lg:grid-cols-[minmax(0,280px)_minmax(0,64px)_minmax(0,1fr)]"
+                ? notesPaneHover
+                  ? "lg:grid-cols-[minmax(0,280px)_minmax(0,320px)_minmax(0,1fr)]"
+                  : "lg:grid-cols-[minmax(0,280px)_minmax(0,64px)_minmax(0,1fr)]"
                 : "lg:grid-cols-[minmax(0,280px)_minmax(0,320px)_minmax(0,1fr)]",
           )}
         >
@@ -4874,6 +4880,12 @@ function NotesPageInner() {
           </section>
 
           <section
+            onMouseEnter={() => {
+              if (notesPaneCompact && selectedNoteId) setNotesPaneHover(true);
+            }}
+            onMouseLeave={() => {
+              if (notesPaneCompact) setNotesPaneHover(false);
+            }}
             className={cn(
               "min-w-0 cursor-default rounded-xl border bg-card p-3 space-y-3",
               "lg:overflow-hidden transition-[opacity,transform] duration-[420ms] ease-out",
@@ -4885,41 +4897,18 @@ function NotesPageInner() {
             )}
             aria-hidden={focusMode || undefined}
           >
-            {notesPaneCompact && selectedNoteId ? (
-              <div className="flex h-full min-h-[120px] flex-col items-center gap-2">
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="outline"
-                  className="h-8 w-8 shrink-0"
-                  onClick={() => setNotesPaneCompact(false)}
-                  title="Show notes list"
-                >
-                  <PanelLeftOpen className="h-4 w-4" />
-                  <span className="sr-only">Show notes list</span>
-                </Button>
-                <div className="rounded-md border border-border/60 bg-muted/30 px-2 py-1 text-[10px] font-medium text-muted-foreground [writing-mode:vertical-rl] [text-orientation:mixed]">
-                  Notes
+            {notesPaneCompact && selectedNoteId && !notesPaneHover ? (
+              <div className="flex h-full min-h-[120px] flex-col items-center justify-start gap-2 pt-1">
+                <div className="inline-flex h-8 min-w-8 items-center justify-center rounded-full border border-border/60 bg-muted/30 px-2 text-[11px] font-semibold text-foreground">
+                  {Math.max(0, notes.length - (selectedNoteId ? 1 : 0))}
                 </div>
+                <div className="text-[10px] text-muted-foreground">more</div>
               </div>
             ) : null}
-            {(!notesPaneCompact || !selectedNoteId) && (
+            {(!notesPaneCompact || !selectedNoteId || notesPaneHover) && (
               <>
             <div className="flex items-center justify-between gap-2">
               <Label className="text-xs text-muted-foreground">Notes</Label>
-              {selectedNoteId && (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  className="h-7 px-2 text-[11px]"
-                  onClick={() => setNotesPaneCompact(true)}
-                  title="Compact notes list"
-                >
-                  <ChevronsRightLeft className="mr-1 h-3.5 w-3.5" />
-                  Compact
-                </Button>
-              )}
             </div>
             <div className="flex gap-2">
               <Input
@@ -5129,7 +5118,7 @@ function NotesPageInner() {
                         <span className="block truncate">{n.title}</span>
                         {n.updatedAt ? (
                           <span
-                            className="block truncate text-[10px] text-muted-foreground tabular-nums"
+                            className="mt-0.5 block truncate text-left text-[9px] italic text-muted-foreground/90 tabular-nums"
                             title={new Date(n.updatedAt).toLocaleString()}
                           >
                             Updated{" "}
@@ -5325,25 +5314,6 @@ function NotesPageInner() {
                       </>
                     )}
                   </Button>
-                  {selectedNoteId && !focusMode && (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => setNotesPaneCompact((v) => !v)}
-                      className="h-8 shrink-0 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
-                      title={
-                        notesPaneCompact ? "Show notes list" : "Compact notes list"
-                      }
-                    >
-                      {notesPaneCompact ? (
-                        <PanelLeftOpen className="h-4 w-4" />
-                      ) : (
-                        <ChevronsRightLeft className="h-4 w-4" />
-                      )}
-                      {notesPaneCompact ? "Notes" : "Compact"}
-                    </Button>
-                  )}
                   <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
                   {editingMainTitle ? (
                     <>
