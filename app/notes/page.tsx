@@ -2297,6 +2297,10 @@ function NotesPageInner() {
     });
     if (!res.ok) return false;
     const updated = (await res.json()) as Note;
+    // Bootstrap cache is read-on-load and persists in sessionStorage for 24h;
+    // without invalidation, a page refresh after an edit replays the stale
+    // pre-edit snapshot and the user perceives data loss.
+    if (userId) clearNotesBootstrapFromSession(userId);
     const keepLocalEditingContent =
       typeof patch.content === "string" &&
       isEditing &&
@@ -5427,45 +5431,88 @@ function NotesPageInner() {
                 ref={noteEditShellRef}
                 className="flex min-h-0 min-w-0 max-w-full flex-1 flex-col gap-4 overflow-hidden"
               >
-                <div className="flex min-w-0 w-full flex-wrap items-center justify-center gap-2 text-center">
-                  {/* One labeled toggle that switches between "Focus" (expand
-                      the editor full width) and "Exit focus" (bring the
-                      Pages + Notes lists back). Visible on every screen size
-                      so the user always has an obvious way back. */}
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={focusMode ? "outline" : "ghost"}
-                    onClick={() => setFocusMode((f) => !f)}
-                    className={cn(
-                      "h-8 shrink-0 gap-1.5 px-2 text-xs font-medium",
-                      focusMode
-                        ? "border-primary/40 text-primary hover:text-primary"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                    title={focusMode ? "Exit focus mode" : "Focus on this note"}
-                    aria-pressed={focusMode}
-                  >
-                    {focusMode ? (
+                {/* Tabs strip: quick note switcher pinned above the title.
+                    Only renders with 2+ notes (a strip with one tab is just
+                    visual noise). Active tab gets the primary border + tinted
+                    fill; inactive tabs lift on hover. Horizontal overflow
+                    scrolls so long lists stay reachable in focus mode. */}
+                {notes.length > 1 && (
+                  <div className="-mx-1 flex w-full min-w-0 items-stretch gap-1 overflow-x-auto px-1 pb-1">
+                    {notes.map((n) => {
+                      const active = selectedNoteId === n.id;
+                      return (
+                        <button
+                          key={`note-tab-${n.id}`}
+                          type="button"
+                          onClick={() => {
+                            setSelectedNoteId(n.id);
+                            setFocusMode(false);
+                          }}
+                          className={cn(
+                            "group inline-flex shrink-0 max-w-[14rem] items-center gap-1.5 rounded-t-lg border-b-2 px-3 py-1.5 text-xs font-medium outline-none transition-all duration-200 ease-out focus-visible:ring-2 focus-visible:ring-ring",
+                            active
+                              ? "border-primary bg-primary/10 text-foreground"
+                              : "border-transparent text-muted-foreground hover:border-border hover:bg-muted/40 hover:text-foreground",
+                          )}
+                          title={n.title}
+                          aria-current={active ? "page" : undefined}
+                        >
+                          {n.favorite && (
+                            <Star
+                              className="h-3 w-3 shrink-0 fill-amber-400 text-amber-400"
+                              aria-hidden
+                            />
+                          )}
+                          <span className="truncate">
+                            {n.title || "Untitled"}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Title row — the title sits dead-centered via a 1fr/auto/1fr
+                    grid so the surrounding chrome can never push it off-axis.
+                    Focus toggle on the left, edit pencil on the right keep the
+                    row balanced visually even when only one side has buttons. */}
+                <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3">
+                  <div className="justify-self-start">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={focusMode ? "outline" : "ghost"}
+                      onClick={() => setFocusMode((f) => !f)}
+                      className={cn(
+                        "h-8 shrink-0 gap-1.5 px-2 text-xs font-medium",
+                        focusMode
+                          ? "border-primary/40 text-primary hover:text-primary"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                      title={focusMode ? "Exit focus mode" : "Focus on this note"}
+                      aria-pressed={focusMode}
+                    >
+                      {focusMode ? (
+                        <>
+                          <ArrowLeft className="h-4 w-4" />
+                          Exit focus
+                        </>
+                      ) : (
+                        <>
+                          <PanelLeftOpen className="h-4 w-4" />
+                          Focus
+                        </>
+                      )}
+                    </Button>
+                  </div>
+
+                  <div className="flex min-w-0 max-w-full items-center justify-center gap-1.5">
+                    {editingMainTitle ? (
                       <>
-                        <ArrowLeft className="h-4 w-4" />
-                        Exit focus
-                      </>
-                    ) : (
-                      <>
-                        <PanelLeftOpen className="h-4 w-4" />
-                        Focus
-                      </>
-                    )}
-                  </Button>
-                  <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  {editingMainTitle ? (
-                    <>
-                      <div className="flex min-w-0 flex-1 items-center gap-1">
                         <Input
                           aria-label="Note heading"
                           autoFocus
-                          className="min-w-0 flex-1 font-semibold"
+                          className="min-w-0 max-w-[28rem] flex-1 text-center text-base font-semibold"
                           placeholder="Note title"
                           value={selectedNote.title}
                           onChange={(e) => {
@@ -5527,14 +5574,12 @@ function NotesPageInner() {
                           )}
                           <span className="sr-only">Copy title</span>
                         </Button>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="flex min-w-0 flex-1 items-center gap-1">
-                        <span className="min-w-0 truncate font-semibold">
+                      </>
+                    ) : (
+                      <>
+                        <h2 className="min-w-0 truncate text-center text-base font-semibold leading-tight">
                           {selectedNote.title}
-                        </span>
+                        </h2>
                         {isSharedNoteSelected && (
                           <span
                             className={cn(
@@ -5559,28 +5604,35 @@ function NotesPageInner() {
                               : "View only"}
                           </span>
                         )}
-                        <Button
-                          type="button"
-                          size="icon"
-                          variant="ghost"
-                          className="h-8 w-8 shrink-0"
-                          title="Copy title"
-                          onClick={() =>
-                            void copyText(
-                              selectedNote.title,
-                              `editor-title-${selectedNote.id}`,
-                            )
-                          }
-                        >
-                          {copiedKey === `editor-title-${selectedNote.id}` ? (
-                            <Check className="h-4 w-4 text-emerald-500" />
-                          ) : (
-                            <Copy className="h-4 w-4" />
-                          )}
-                          <span className="sr-only">Copy title</span>
-                        </Button>
-                      </div>
-                      {!(isSharedNoteSelected && selectedSharedPermission === "view") && (
+                      </>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1 justify-self-end">
+                    {!editingMainTitle && (
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        className="h-8 w-8 shrink-0"
+                        title="Copy title"
+                        onClick={() =>
+                          void copyText(
+                            selectedNote.title,
+                            `editor-title-${selectedNote.id}`,
+                          )
+                        }
+                      >
+                        {copiedKey === `editor-title-${selectedNote.id}` ? (
+                          <Check className="h-4 w-4 text-emerald-500" />
+                        ) : (
+                          <Copy className="h-4 w-4" />
+                        )}
+                        <span className="sr-only">Copy title</span>
+                      </Button>
+                    )}
+                    {!editingMainTitle &&
+                      !(isSharedNoteSelected && selectedSharedPermission === "view") && (
                         <Button
                           type="button"
                           size="icon"
@@ -5592,8 +5644,7 @@ function NotesPageInner() {
                           <Pencil className="h-3.5 w-3.5" />
                         </Button>
                       )}
-                    </>
-                  )}
+                  </div>
                 </div>
                 <div className="flex min-w-0 w-full flex-wrap items-center justify-center gap-1.5 text-[11px] text-muted-foreground tabular-nums">
                     <button
@@ -5672,74 +5723,6 @@ function NotesPageInner() {
                 >
                   <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="flex min-h-7 min-w-0 items-start gap-2">
-                      <div
-                        onMouseEnter={() => {
-                          if (!notesPaneCompact) return;
-                          if (notesPaneHoverCloseTimerRef.current !== null) {
-                            window.clearTimeout(notesPaneHoverCloseTimerRef.current);
-                            notesPaneHoverCloseTimerRef.current = null;
-                          }
-                          setNotesPaneHover(true);
-                        }}
-                        onMouseLeave={() => {
-                          if (!notesPaneCompact) return;
-                          if (notesPaneHoverCloseTimerRef.current !== null) {
-                            window.clearTimeout(notesPaneHoverCloseTimerRef.current);
-                          }
-                          notesPaneHoverCloseTimerRef.current = window.setTimeout(() => {
-                            setNotesPaneHover(false);
-                            notesPaneHoverCloseTimerRef.current = null;
-                          }, 220);
-                        }}
-                        className={cn(
-                          "shrink-0 rounded-xl border border-border/70 bg-muted/25 p-1.5 transition-all duration-300",
-                          notesPaneCompact && !notesPaneHover
-                            ? "w-12"
-                            : "w-[min(22rem,38vw)] p-2",
-                        )}
-                      >
-                        {notesPaneCompact && !notesPaneHover ? (
-                          <button
-                            type="button"
-                            onClick={() => setNotesPaneHover(true)}
-                            className="mx-auto inline-flex h-8 w-8 items-center justify-center rounded-full border border-border/70 bg-background text-xs font-semibold text-foreground shadow-sm transition-colors hover:bg-muted"
-                            title="Show notes"
-                          >
-                            {notes.length}
-                          </button>
-                        ) : (
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between gap-2">
-                              <Label className="text-[10px] text-muted-foreground">Notes</Label>
-                              <span className="text-[10px] text-muted-foreground">
-                                {notes.length} notes
-                              </span>
-                            </div>
-                            <div className="max-h-32 space-y-1 overflow-y-auto pr-1">
-                              {notes.map((n) => (
-                                <button
-                                  key={`inline-note-${n.id}`}
-                                  type="button"
-                                  className={cn(
-                                    "w-full rounded-lg border px-2 py-1 text-left text-xs hover:bg-muted/40",
-                                    selectedNoteId === n.id &&
-                                      "border-violet-500 bg-violet-500/10",
-                                  )}
-                                  onClick={() => {
-                                    setSelectedNoteId(n.id);
-                                    setFocusMode(false);
-                                  }}
-                                >
-                                  <span className="block truncate">{n.title}</span>
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                      <Label className="shrink-0 text-xs text-muted-foreground">
-                        Note body
-                      </Label>
                       <div className="flex min-h-7 min-w-[10.5rem] items-center gap-1.5 text-xs text-muted-foreground">
                         {autoSaveState === "saving" ? (
                           <>
@@ -6721,6 +6704,7 @@ function NotesPageInner() {
                                 ? Date.parse(savedNote.updatedAt)
                                 : NaN;
                             if (!Number.isNaN(ts)) setLastSavedAtMs(ts);
+                            if (userId) clearNotesBootstrapFromSession(userId);
                           }}
                           onSaveStateChange={(state) => {
                             setAutoSaveState(state);
