@@ -1294,6 +1294,8 @@ function NotesPageInner() {
     progress: number;
     phase: "upload" | "decode";
   }>({ active: false, progress: 0, phase: "upload" });
+  const [noteBodyImageDragOver, setNoteBodyImageDragOver] = useState(false);
+  const noteBodyImageDragDepthRef = useRef(0);
   /** Bumps when an image figure is selected so toolbar can show move/crop actions. */
   const [imageSelectionEpoch, setImageSelectionEpoch] = useState(0);
   const [imageCropOpen, setImageCropOpen] = useState(false);
@@ -3483,6 +3485,76 @@ function NotesPageInner() {
       };
     },
     [getEditorAuthToken, insertImageIntoEditor],
+  );
+
+  const isImageFileDrag = useCallback((dt: DataTransfer | null): boolean => {
+    if (!dt) return false;
+    const files = Array.from(dt.items || []);
+    if (files.some((it) => it.kind === "file" && it.type.startsWith("image/"))) {
+      return true;
+    }
+    return Array.from(dt.files || []).some((f) => f.type.startsWith("image/"));
+  }, []);
+
+  const handleNoteBodyImageDragEnter = useCallback(
+    (e: DragEvent<HTMLDivElement>) => {
+      if (!canEditSelectedNote || !isImageFileDrag(e.dataTransfer)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      noteBodyImageDragDepthRef.current += 1;
+      setNoteBodyImageDragOver(true);
+    },
+    [canEditSelectedNote, isImageFileDrag],
+  );
+
+  const handleNoteBodyImageDragOver = useCallback(
+    (e: DragEvent<HTMLDivElement>) => {
+      if (!canEditSelectedNote || !isImageFileDrag(e.dataTransfer)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = "copy";
+      if (!noteBodyImageDragOver) setNoteBodyImageDragOver(true);
+    },
+    [canEditSelectedNote, isImageFileDrag, noteBodyImageDragOver],
+  );
+
+  const handleNoteBodyImageDragLeave = useCallback((e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    noteBodyImageDragDepthRef.current = Math.max(0, noteBodyImageDragDepthRef.current - 1);
+    if (noteBodyImageDragDepthRef.current === 0) setNoteBodyImageDragOver(false);
+  }, []);
+
+  const handleNoteBodyImageDrop = useCallback(
+    async (e: DragEvent<HTMLDivElement>) => {
+      if (!canEditSelectedNote) return;
+      if (!isImageFileDrag(e.dataTransfer)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      noteBodyImageDragDepthRef.current = 0;
+      setNoteBodyImageDragOver(false);
+      const file = Array.from(e.dataTransfer.files || []).find((f) =>
+        f.type.startsWith("image/"),
+      );
+      if (!file) return;
+      if (!useCollaborativeEditor && !isEditing) {
+        beginEditingNote();
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        );
+      }
+      if (!useCollaborativeEditor) {
+        await uploadImageFile(file);
+      }
+    },
+    [
+      beginEditingNote,
+      canEditSelectedNote,
+      isEditing,
+      isImageFileDrag,
+      uploadImageFile,
+      useCollaborativeEditor,
+    ],
   );
 
   const refreshMentionPicker = useCallback(() => {
@@ -6293,144 +6365,159 @@ function NotesPageInner() {
                       )}
                     </div>
                   </div>
-                  {useCollaborativeEditor ? (
-                    /*
-                     * Tiptap editor — used for every note. Each note gets
-                     * its own Liveblocks room so the same toolbar, prose
-                     * styles, and right-click menu apply everywhere. When
-                     * the note is shared, presence + live cursors light
-                     * up automatically with no UI change.
-                     *
-                     * key={selectedNote.id} forces a fresh Y.Doc + Tiptap
-                     * instance on every note switch — sharing the same
-                     * editor across notes would mix their content.
-                     */
-                    <LiveblocksRoomProvider
-                      key={selectedNote.id}
-                      noteId={selectedNote.id}
-                      fallback={
-                        // Render the note's saved content immediately so
-                        // the user sees their note text the instant they
-                        // click it, instead of a blank "Loading editor…"
-                        // panel while the auth + Liveblocks handshake
-                        // happens in the background.
-                        <div
+                  <div
+                    className="relative min-h-0 min-w-0 flex-1"
+                    onDragEnter={handleNoteBodyImageDragEnter}
+                    onDragOver={handleNoteBodyImageDragOver}
+                    onDragLeave={handleNoteBodyImageDragLeave}
+                    onDrop={handleNoteBodyImageDrop}
+                  >
+                    {useCollaborativeEditor ? (
+                      /*
+                       * Tiptap editor — used for every note. Each note gets
+                       * its own Liveblocks room so the same toolbar, prose
+                       * styles, and right-click menu apply everywhere. When
+                       * the note is shared, presence + live cursors light
+                       * up automatically with no UI change.
+                       *
+                       * key={selectedNote.id} forces a fresh Y.Doc + Tiptap
+                       * instance on every note switch — sharing the same
+                       * editor across notes would mix their content.
+                       */
+                      <LiveblocksRoomProvider
+                        key={selectedNote.id}
+                        noteId={selectedNote.id}
+                        fallback={
+                          // Render the note's saved content immediately so
+                          // the user sees their note text the instant they
+                          // click it, instead of a blank "Loading editor…"
+                          // panel while the auth + Liveblocks handshake
+                          // happens in the background.
+                          <div
+                            className={cn(
+                              "relative w-full overflow-y-auto rounded-xl border border-border/60 bg-card shadow-sm ring-1 ring-black/5 [overflow-wrap:anywhere]",
+                              focusMode
+                                ? "min-h-0 flex-1"
+                                : "min-h-[420px] sm:min-h-[480px]",
+                            )}
+                            aria-busy="true"
+                          >
+                            {selectedNote.content ? (
+                              <div
+                                className="prose prose-sm sm:prose-base dark:prose-invert max-w-none px-3 py-4 collab-prose select-text"
+                                dangerouslySetInnerHTML={{
+                                  __html: selectedNote.content,
+                                }}
+                              />
+                            ) : (
+                              <div className="flex h-full min-h-[200px] items-center justify-center px-3 py-4 text-sm text-muted-foreground">
+                                Opening note…
+                              </div>
+                            )}
+                            <div className="pointer-events-none absolute bottom-2 right-2 flex items-center gap-1.5 rounded-full border border-border/60 bg-background/80 px-2 py-0.5 text-[10px] font-medium text-muted-foreground shadow-sm backdrop-blur">
+                              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
+                              Connecting…
+                            </div>
+                          </div>
+                        }
+                      >
+                        <CollaborativeNoteEditor
+                          noteId={selectedNote.id}
+                          initialHtml={selectedNote.content || ""}
+                          canEdit={canEditSelectedNote}
+                          onSaveStateChange={(state) => {
+                            setAutoSaveState(state);
+                            if (state === "saved") setLastSavedAtMs(Date.now());
+                          }}
+                          placeholder={
+                            isSharedNoteSelected || selectedOwnedShareCount > 0
+                              ? "Start typing… others will see your edits live."
+                              : "Start writing your note…"
+                          }
                           className={cn(
-                            "relative w-full overflow-y-auto rounded-xl border border-border/60 bg-card shadow-sm ring-1 ring-black/5 [overflow-wrap:anywhere]",
+                            "w-full min-w-0 max-w-full flex-1 [overflow-wrap:anywhere]",
                             focusMode
                               ? "min-h-0 flex-1"
                               : "min-h-[420px] sm:min-h-[480px]",
                           )}
-                          aria-busy="true"
-                        >
-                          {selectedNote.content ? (
-                            <div
-                              className="prose prose-sm sm:prose-base dark:prose-invert max-w-none px-3 py-4 collab-prose select-text"
-                              dangerouslySetInnerHTML={{
-                                __html: selectedNote.content,
-                              }}
-                            />
-                          ) : (
-                            <div className="flex h-full min-h-[200px] items-center justify-center px-3 py-4 text-sm text-muted-foreground">
-                              Opening note…
-                            </div>
-                          )}
-                          <div className="pointer-events-none absolute bottom-2 right-2 flex items-center gap-1.5 rounded-full border border-border/60 bg-background/80 px-2 py-0.5 text-[10px] font-medium text-muted-foreground shadow-sm backdrop-blur">
-                            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
-                            Connecting…
-                          </div>
-                        </div>
-                      }
-                    >
-                      <CollaborativeNoteEditor
+                        />
+                      </LiveblocksRoomProvider>
+                    ) : isEditing ? (
+                      <NoteBodyEditor
+                        editorRef={editorRef}
                         noteId={selectedNote.id}
-                        initialHtml={selectedNote.content || ""}
-                        canEdit={canEditSelectedNote}
-                        onSaveStateChange={(state) => {
-                          setAutoSaveState(state);
-                          if (state === "saved") setLastSavedAtMs(Date.now());
-                        }}
-                        placeholder={
-                          isSharedNoteSelected || selectedOwnedShareCount > 0
-                            ? "Start typing… others will see your edits live."
-                            : "Start writing your note…"
-                        }
+                        editorSession={editorSession}
+                        initialContent={selectedNote.content}
+                        handlersRef={editorHandlersRef}
+                        onSessionHydrated={onEditorSessionHydrated}
                         className={cn(
-                          "w-full min-w-0 max-w-full flex-1 [overflow-wrap:anywhere]",
+                          "note-html-scroll w-full min-w-0 max-w-full flex-1 cursor-text overflow-x-hidden overflow-y-auto rounded-lg bg-muted/30 px-3 py-2 text-sm text-foreground !space-y-0 outline-none [contain:layout] [overflow-wrap:anywhere] focus-visible:ring-2 focus-visible:ring-ring",
+                          NOTE_HTML_VIEW_CLASS,
                           focusMode
-                            ? "min-h-0 flex-1"
-                            : "min-h-[420px] sm:min-h-[480px]",
+                            ? "min-h-0 flex-1 max-h-none sm:min-h-0"
+                            : "min-h-[200px] max-h-[min(65vh,520px)] sm:min-h-[240px] sm:max-h-[min(70vh,560px)]",
                         )}
                       />
-                    </LiveblocksRoomProvider>
-                  ) : isEditing ? (
-                    <NoteBodyEditor
-                      editorRef={editorRef}
-                      noteId={selectedNote.id}
-                      editorSession={editorSession}
-                      initialContent={selectedNote.content}
-                      handlersRef={editorHandlersRef}
-                      onSessionHydrated={onEditorSessionHydrated}
-                      className={cn(
-                        "note-html-scroll w-full min-w-0 max-w-full flex-1 cursor-text overflow-x-hidden overflow-y-auto rounded-lg bg-muted/30 px-3 py-2 text-sm text-foreground !space-y-0 outline-none [contain:layout] [overflow-wrap:anywhere] focus-visible:ring-2 focus-visible:ring-ring",
-                        NOTE_HTML_VIEW_CLASS,
-                        focusMode
-                          ? "min-h-0 flex-1 max-h-none sm:min-h-0"
-                          : "min-h-[200px] max-h-[min(65vh,520px)] sm:min-h-[240px] sm:max-h-[min(70vh,560px)]",
-                      )}
-                    />
-                  ) : (
-                    <div
-                      ref={readNoteBodyWrapRef}
-                      role="button"
-                      tabIndex={0}
-                      aria-label="Click to edit note"
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
+                    ) : (
+                      <div
+                        ref={readNoteBodyWrapRef}
+                        role="button"
+                        tabIndex={0}
+                        aria-label="Click to edit note"
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            beginEditingNote();
+                            requestAnimationFrame(() =>
+                              editorRef.current?.focus(),
+                            );
+                          }
+                        }}
+                        onClick={(e) => {
+                          const tgt = e.target as HTMLElement;
+                          if (
+                            tgt.tagName === "INPUT" &&
+                            (tgt as HTMLInputElement).type === "checkbox"
+                          ) {
+                            e.stopPropagation();
+                            return;
+                          }
+                          const link = (e.target as HTMLElement).closest(
+                            "a[data-note-id]",
+                          ) as HTMLAnchorElement | null;
+                          if (link) {
+                            e.preventDefault();
+                            const noteId = link.getAttribute("data-note-id");
+                            if (noteId) jumpToMentionedNote(noteId);
+                            return;
+                          }
+                          if ((e.target as HTMLElement).closest("a")) return;
                           beginEditingNote();
-                          requestAnimationFrame(() =>
-                            editorRef.current?.focus(),
-                          );
-                        }
-                      }}
-                      onClick={(e) => {
-                        const tgt = e.target as HTMLElement;
-                        if (
-                          tgt.tagName === "INPUT" &&
-                          (tgt as HTMLInputElement).type === "checkbox"
-                        ) {
-                          e.stopPropagation();
-                          return;
-                        }
-                        const link = (e.target as HTMLElement).closest(
-                          "a[data-note-id]",
-                        ) as HTMLAnchorElement | null;
-                        if (link) {
-                          e.preventDefault();
-                          const noteId = link.getAttribute("data-note-id");
-                          if (noteId) jumpToMentionedNote(noteId);
-                          return;
-                        }
-                        if ((e.target as HTMLElement).closest("a")) return;
-                        beginEditingNote();
-                        requestAnimationFrame(() => editorRef.current?.focus());
-                      }}
-                      onContextMenu={openContextMenuFromReadBody}
-                      className={cn(
-                        "note-html-scroll w-full min-w-0 max-w-full flex-1 cursor-pointer select-text overflow-x-hidden overflow-y-auto rounded-lg bg-muted/30 px-3 py-2 text-sm text-foreground [overflow-wrap:anywhere]",
-                        focusMode
-                          ? "min-h-0 flex-1 max-h-none sm:min-h-0"
-                          : "min-h-[200px] max-h-[min(65vh,520px)] sm:min-h-[240px] sm:max-h-[min(70vh,560px)]",
-                      )}
-                      aria-live="polite"
-                    >
-                      {renderReadNoteBody(
-                        selectedNote.content,
-                        readNoteHtmlRef,
-                      )}
-                    </div>
-                  )}
+                          requestAnimationFrame(() => editorRef.current?.focus());
+                        }}
+                        onContextMenu={openContextMenuFromReadBody}
+                        className={cn(
+                          "note-html-scroll w-full min-w-0 max-w-full flex-1 cursor-pointer select-text overflow-x-hidden overflow-y-auto rounded-lg bg-muted/30 px-3 py-2 text-sm text-foreground [overflow-wrap:anywhere]",
+                          focusMode
+                            ? "min-h-0 flex-1 max-h-none sm:min-h-0"
+                            : "min-h-[200px] max-h-[min(65vh,520px)] sm:min-h-[240px] sm:max-h-[min(70vh,560px)]",
+                        )}
+                        aria-live="polite"
+                      >
+                        {renderReadNoteBody(
+                          selectedNote.content,
+                          readNoteHtmlRef,
+                        )}
+                      </div>
+                    )}
+                    {noteBodyImageDragOver && !useCollaborativeEditor && (
+                      <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-primary/65 bg-background/55 backdrop-blur-sm">
+                        <div className="rounded-md border border-primary/45 bg-background/85 px-3 py-2 text-sm font-medium text-primary shadow-sm">
+                          Drop here to insert image
+                        </div>
+                      </div>
+                    )}
+                  </div>
                   <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/20 px-2 py-1.5">
                     <Button
                       type="button"
@@ -6460,8 +6547,10 @@ function NotesPageInner() {
                         </>
                       )}
                     </Button>
-                    <div className="flex items-center gap-1">
-                      <span className="text-[11px] text-muted-foreground">File</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="inline-flex h-7 items-center rounded-md border border-border/60 bg-background px-2 text-xs font-medium text-muted-foreground">
+                        TXT
+                      </span>
                       <Button
                         type="button"
                         size="sm"
