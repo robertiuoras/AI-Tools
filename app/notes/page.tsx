@@ -4394,16 +4394,24 @@ function NotesPageInner() {
     },
   };
 
-  /** Leaving Notes subview: drop stale editing/menus so document-level note listeners never run over the whiteboard. */
+  /** Leaving Notes subview: close floating UI, but keep edit mode state so returning to Notes is instant. */
   useEffect(() => {
     if (notesSubView === "notes") return;
-    setIsEditing(false);
     setFormatMenuOpen(false);
     setMentionPickerOpen(false);
     setFindInNoteOpen(false);
     setContextMenu((s) => ({ ...s, open: false }));
     setFocusMode(false);
   }, [notesSubView]);
+
+  /** Returning to Notes while already editing should restore caret/focus immediately. */
+  useEffect(() => {
+    if (notesSubView !== "notes" || !isEditing || !selectedNoteId) return;
+    const id = requestAnimationFrame(() => {
+      editorRef.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [notesSubView, isEditing, selectedNoteId]);
 
   const showInitialNotesWorkspaceLoader =
     !!token &&
@@ -4459,9 +4467,6 @@ function NotesPageInner() {
                   : "text-muted-foreground hover:bg-muted",
               )}
               onClick={() => {
-                if (notesSubView === "notes" && key !== "notes" && isEditing) {
-                  closeNoteBodyEditAndSave();
-                }
                 router.replace(url);
               }}
             >
