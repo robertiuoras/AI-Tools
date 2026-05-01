@@ -433,7 +433,7 @@ function renderNewsMarkdown(input: string): string {
 
   // Bare links
   out = out.replace(
-    /(https?:\/\/[^\s<]+)/g,
+    /(https?:\/\/[^\s<>"']+)/g,
     (url: string) =>
       `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`,
   );

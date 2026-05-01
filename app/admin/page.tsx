@@ -48,7 +48,22 @@ import { toolHasDownloadableApp, toolIsAgency } from '@/lib/tool-flags'
 import { toolCategoryList, videoCategoryList } from '@/lib/tool-categories'
 import type { Tool, Video } from '@/lib/supabase'
 import { cn } from '@/lib/utils'
-import { Loader2, Plus, Trash2, Edit2, Sparkles, RefreshCw, Star, TrendingUp, Youtube, Music2, Check, X } from 'lucide-react'
+import { getAssistantDashboardUrl } from '@/lib/assistant-urls'
+import {
+  Loader2,
+  Plus,
+  Trash2,
+  Edit2,
+  Sparkles,
+  RefreshCw,
+  Star,
+  TrendingUp,
+  Youtube,
+  Music2,
+  Check,
+  X,
+  LayoutDashboard,
+} from 'lucide-react'
 
 /** Shared tool form → API body (matches PUT / auto-save). */
 type AdminToolFormState = {
@@ -2253,7 +2268,7 @@ export default function AdminPage() {
               Add, edit, or remove AI tools and videos from the directory
             </p>
           </div>
-          <div className="flex rounded-xl border border-border/80 bg-card/80 shadow-sm p-1">
+          <div className="flex flex-wrap gap-1 rounded-xl border border-border/80 bg-card/80 shadow-sm p-1">
             <button
               type="button"
               onClick={() => setAdminTab('tools')}
@@ -2268,6 +2283,36 @@ export default function AdminPage() {
             >
               <Youtube className="h-4 w-4" />
               Videos
+            </button>
+            <button
+              type="button"
+              title="Opens your personal assistant dashboard in a new window (run assistant backend first)"
+              onClick={() => {
+                const url = getAssistantDashboardUrl()
+                const features = [
+                  'width=1280',
+                  'height=840',
+                  'menubar=no',
+                  'toolbar=no',
+                  'location=yes',
+                  'status=no',
+                  'scrollbars=yes',
+                  'resizable=yes',
+                ].join(',')
+                const win = window.open(url, 'assistant-personal', features)
+                if (!win) {
+                  addToast({
+                    variant: 'error',
+                    title: 'Popup blocked',
+                    description:
+                      'Allow popups for this site, or open the assistant URL from the Assistant nav link.',
+                  })
+                }
+              }}
+              className="rounded-lg px-5 py-2.5 text-sm font-semibold transition-all flex items-center gap-2 text-muted-foreground hover:text-foreground hover:bg-muted/50"
+            >
+              <LayoutDashboard className="h-4 w-4" />
+              Personal
             </button>
           </div>
         </div>

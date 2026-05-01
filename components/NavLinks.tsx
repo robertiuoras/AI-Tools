@@ -68,6 +68,7 @@ export function NavLinks() {
     pathname === '/prompts' || pathname.startsWith('/prompts/')
   const isNotesPage = pathname === '/notes'
   const isProjectsPage = pathname === '/projects'
+  const isAssistantPage = pathname === '/assistant'
   const isNewsPage = pathname === '/news'
   const isCreatorsView = isVideosPage && searchParams.get('view') === 'creators'
 
@@ -194,6 +195,28 @@ export function NavLinks() {
               gradient={{ from: 'from-emerald-500', to: 'to-teal-600' }}
             >
               Projects
+            </NavLabel>
+          </Link>
+          <span
+            className="text-muted-foreground/60 px-0.5 font-light"
+            aria-hidden
+          >
+            |
+          </span>
+          <Link
+            href="/assistant"
+            className={cn(
+              linkBase,
+              isAssistantPage
+                ? 'bg-background text-foreground shadow-sm ring-1 ring-border/50'
+                : 'text-muted-foreground hover:bg-background/50',
+            )}
+          >
+            <NavLabel
+              active={isAssistantPage}
+              gradient={{ from: 'from-violet-500', to: 'to-fuchsia-500' }}
+            >
+              Assistant
             </NavLabel>
           </Link>
         </>

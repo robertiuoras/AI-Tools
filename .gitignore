@@ -29,6 +29,9 @@ yarn-error.log*
 .env
 .env.example
 
+# service account / credential JSON often dropped in repo root by mistake
+ai-tools-*.json
+
 # vercel
 .vercel
 
