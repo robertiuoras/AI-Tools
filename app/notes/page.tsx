@@ -4626,12 +4626,12 @@ function NotesPageInner() {
             // pop. Keep all tracks in `px`/`fr` mix that browsers can tween.
             "transition-[grid-template-columns,gap] duration-[520ms] ease-[cubic-bezier(0.16,1,0.3,1)]",
             focusMode
-              ? "lg:grid-cols-[minmax(0,0px)_minmax(0,0px)_minmax(0,1fr)] lg:gap-0"
+              ? "lg:grid-cols-[minmax(0,0px)_minmax(0,1fr)] lg:gap-0"
               : notesPaneCompact
                 ? notesPaneHover
-                  ? "lg:grid-cols-[minmax(0,280px)_minmax(0,220px)_minmax(0,1fr)]"
-                  : "lg:grid-cols-[minmax(0,280px)_minmax(0,132px)_minmax(0,1fr)]"
-                : "lg:grid-cols-[minmax(0,280px)_minmax(0,220px)_minmax(0,1fr)]",
+                  ? "lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]"
+                  : "lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]"
+                : "lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]",
           )}
         >
           {notesLoading && initialNotesBootstrapDone ? (
@@ -5003,6 +5003,92 @@ function NotesPageInner() {
                 </div>
               </div>
             )}
+            <div
+              onMouseEnter={() => {
+                if (!notesPaneCompact) return;
+                if (notesPaneHoverCloseTimerRef.current !== null) {
+                  window.clearTimeout(notesPaneHoverCloseTimerRef.current);
+                  notesPaneHoverCloseTimerRef.current = null;
+                }
+                setNotesPaneHover(true);
+              }}
+              onMouseLeave={() => {
+                if (!notesPaneCompact) return;
+                if (notesPaneHoverCloseTimerRef.current !== null) {
+                  window.clearTimeout(notesPaneHoverCloseTimerRef.current);
+                }
+                notesPaneHoverCloseTimerRef.current = window.setTimeout(() => {
+                  setNotesPaneHover(false);
+                  notesPaneHoverCloseTimerRef.current = null;
+                }, 220);
+              }}
+              className={cn(
+                "mt-4 rounded-xl border border-border/70 bg-muted/25 p-2.5 transition-all duration-300",
+                notesPaneCompact && !notesPaneHover && "mx-auto w-16 p-1.5",
+              )}
+            >
+              <div className="flex items-center justify-between gap-2">
+                {(notesPaneHover || !notesPaneCompact) && (
+                  <Label className="text-[10px] text-muted-foreground">Notes</Label>
+                )}
+                <span className="text-[10px] text-muted-foreground">
+                  {notes.length} notes
+                </span>
+              </div>
+              {notesPaneCompact && !notesPaneHover ? (
+                <button
+                  type="button"
+                  onClick={() => setNotesPaneHover(true)}
+                  className="mx-auto mt-1 inline-flex h-10 w-10 items-center justify-center rounded-full border border-border/70 bg-background text-sm font-semibold text-foreground shadow-sm transition-colors hover:bg-muted"
+                  title="Show notes"
+                >
+                  {notes.length}
+                </button>
+              ) : (
+                <>
+                  <div className="mt-2 flex gap-2">
+                    <Input
+                      data-notes-new-title="1"
+                      placeholder="New note title..."
+                      value={newNoteTitle}
+                      onChange={(e) => setNewNoteTitle(e.target.value)}
+                      disabled={!selectedPageId}
+                    />
+                    <Button
+                      type="button"
+                      size="icon"
+                      onClick={createNote}
+                      disabled={!selectedPageId || !newNoteTitle.trim()}
+                    >
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  <div className="mt-2 max-h-[min(42vh,360px)] space-y-1 overflow-y-auto pr-1">
+                    {notes.map((n) => (
+                      <button
+                        key={`compact-note-${n.id}`}
+                        type="button"
+                        className={cn(
+                          "w-full rounded-lg border px-2 py-1.5 text-left text-sm hover:bg-muted/40",
+                          selectedNoteId === n.id && "border-violet-500 bg-violet-500/10",
+                        )}
+                        onClick={() => {
+                          setSelectedNoteId(n.id);
+                          setFocusMode(false);
+                        }}
+                      >
+                        <span className="block truncate">{n.title}</span>
+                        {n.updatedAt ? (
+                          <span className="mt-0.5 block truncate text-[9px] text-muted-foreground">
+                            Updated {formatNoteEditedRelative(n.updatedAt, editedNowMs)}
+                          </span>
+                        ) : null}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
           </section>
 
           <section
@@ -5025,7 +5111,7 @@ function NotesPageInner() {
               }, 220);
             }}
             className={cn(
-              "min-w-0 cursor-default rounded-2xl border bg-card p-3.5 space-y-3",
+              "hidden min-w-0 cursor-default rounded-2xl border bg-card p-3.5 space-y-3",
               "lg:overflow-hidden lg:max-h-[calc(100vh-7rem)] transition-[opacity,transform] duration-[420ms] ease-out",
               notesPaneCompact && !notesPaneHover && "lg:p-2.5 lg:space-y-2",
               focusMode &&
@@ -5427,7 +5513,7 @@ function NotesPageInner() {
                 ref={noteEditShellRef}
                 className="flex min-h-0 min-w-0 max-w-full flex-1 flex-col gap-4 overflow-hidden"
               >
-                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <div className="flex min-w-0 flex-wrap items-center justify-center gap-2">
                   {/* One labeled toggle that switches between "Focus" (expand
                       the editor full width) and "Exit focus" (bring the
                       Pages + Notes lists back). Visible on every screen size
@@ -5595,7 +5681,7 @@ function NotesPageInner() {
                     </>
                   )}
                 </div>
-                <div className="flex min-w-0 items-center gap-1.5 pl-6 text-[11px] text-muted-foreground tabular-nums">
+                <div className="flex min-w-0 flex-wrap items-center justify-center gap-1.5 text-[11px] text-muted-foreground tabular-nums">
                     <button
                       type="button"
                       onClick={() => {
@@ -5668,8 +5754,6 @@ function NotesPageInner() {
                 <div
                   className={cn(
                     "flex min-h-0 min-w-0 flex-1 flex-col space-y-2",
-                    focusMode &&
-                      "fixed inset-0 z-[100] box-border flex h-[100dvh] max-h-[100dvh] flex-col overflow-hidden bg-background p-4 shadow-2xl sm:p-6",
                   )}
                 >
                   <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
