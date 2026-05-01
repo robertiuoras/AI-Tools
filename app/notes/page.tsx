@@ -1394,6 +1394,7 @@ function NotesPageInner() {
   const pendingEditorScrollRef = useRef<number | null>(null);
   const pendingEditorCaretCharRef = useRef<number | null>(null);
   const pendingReadClickCaretCharRef = useRef<number | null>(null);
+  const pendingReadClickPointRef = useRef<{ x: number; y: number } | null>(null);
   const mentionPickerRef = useRef<HTMLDivElement | null>(null);
   const refreshMentionPickerRef = useRef<() => void>(() => {});
   const lastMentionQueryForHighlightRef = useRef<string>("");
@@ -2125,7 +2126,8 @@ function NotesPageInner() {
   useEffect(() => {
     if (!isEditing || !selectedNoteId) return;
     const char = pendingEditorCaretCharRef.current;
-    if (char === null) return;
+    const clickPoint = pendingReadClickPointRef.current;
+    if (char === null && !clickPoint) return;
     let raf1 = 0;
     let raf2 = 0;
     const apply = () => {
@@ -2135,11 +2137,39 @@ function NotesPageInner() {
       const winX = window.scrollX;
       const winY = window.scrollY;
       root.focus({ preventScroll: true });
-      const textLen = root.textContent?.length ?? 0;
-      const safe = Math.max(0, Math.min(char, textLen));
-      const r =
-        getRangeForTextSpan(root, safe, safe) ??
-        getRangeForTextSpan(root, textLen, textLen);
+      let r: Range | null = null;
+      if (clickPoint) {
+        const rect = root.getBoundingClientRect();
+        const x = Math.min(Math.max(clickPoint.x, rect.left + 2), rect.right - 2);
+        const y = Math.min(Math.max(clickPoint.y, rect.top + 2), rect.bottom - 2);
+        const docAny = document as Document & {
+          caretPositionFromPoint?: (
+            px: number,
+            py: number,
+          ) => { offsetNode: Node; offset: number } | null;
+          caretRangeFromPoint?: (px: number, py: number) => Range | null;
+        };
+        const pos = docAny.caretPositionFromPoint?.(x, y);
+        if (pos && root.contains(pos.offsetNode)) {
+          const rr = document.createRange();
+          rr.setStart(pos.offsetNode, pos.offset);
+          rr.collapse(true);
+          r = rr;
+        } else {
+          const rr = docAny.caretRangeFromPoint?.(x, y) ?? null;
+          if (rr && root.contains(rr.startContainer)) {
+            rr.collapse(true);
+            r = rr;
+          }
+        }
+      }
+      if (!r) {
+        const textLen = root.textContent?.length ?? 0;
+        const safe = Math.max(0, Math.min(char ?? textLen, textLen));
+        r =
+          getRangeForTextSpan(root, safe, safe) ??
+          getRangeForTextSpan(root, textLen, textLen);
+      }
       if (!r) return false;
       sel.removeAllRanges();
       sel.addRange(r);
@@ -2148,15 +2178,20 @@ function NotesPageInner() {
     };
     if (apply()) {
       pendingEditorCaretCharRef.current = null;
+      pendingReadClickPointRef.current = null;
       return;
     }
     raf1 = requestAnimationFrame(() => {
       if (apply()) {
         pendingEditorCaretCharRef.current = null;
+        pendingReadClickPointRef.current = null;
         return;
       }
       raf2 = requestAnimationFrame(() => {
-        if (apply()) pendingEditorCaretCharRef.current = null;
+        if (apply()) {
+          pendingEditorCaretCharRef.current = null;
+          pendingReadClickPointRef.current = null;
+        }
       });
     });
     return () => {
@@ -5000,9 +5035,11 @@ function NotesPageInner() {
           >
             <div className="flex items-center justify-between gap-2">
               <Label className="text-xs text-muted-foreground">Notes</Label>
-              <span className="text-[10px] text-muted-foreground">
-                {notes.length} notes
-              </span>
+              {!notesPaneCompact && (
+                <span className="text-[10px] text-muted-foreground">
+                  {notes.length} notes
+                </span>
+              )}
             </div>
             {notesPaneCompact && !notesPaneHover ? (
               <button
@@ -6661,6 +6698,10 @@ function NotesPageInner() {
                         tabIndex={0}
                         aria-label="Click to edit note"
                         onMouseDownCapture={(e) => {
+                          pendingReadClickPointRef.current = {
+                            x: e.clientX,
+                            y: e.clientY,
+                          };
                           pendingReadClickCaretCharRef.current =
                             getCaretCharOffsetAtPoint(
                               e.currentTarget,
@@ -6671,6 +6712,7 @@ function NotesPageInner() {
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === " ") {
                             e.preventDefault();
+                            pendingReadClickPointRef.current = null;
                             pendingEditorCaretCharRef.current =
                               getSelectionCaretCharOffsetInRoot(
                                 readNoteBodyWrapRef.current!,
@@ -6736,7 +6778,7 @@ function NotesPageInner() {
                       </div>
                     )}
                   </div>
-                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/20 px-2 py-1.5">
+                  <div className="mt-2 shrink-0 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/20 px-2 py-1.5">
                     <Button
                       type="button"
                       size="sm"
