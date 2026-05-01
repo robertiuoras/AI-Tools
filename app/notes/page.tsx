@@ -1152,19 +1152,11 @@ function NotesPageInner() {
    * smoothly. A "Back" button in the editor header leaves focus mode.
    */
   const [focusMode, setFocusMode] = useState(false);
-  const [notesPaneCompact, setNotesPaneCompact] = useState(false);
-  const [notesPaneHover, setNotesPaneHover] = useState(false);
   // Always exit focus mode if the active note disappears (delete, switch tabs)
   // so the user is never stranded with the side columns hidden.
   useEffect(() => {
     if (!selectedNoteId) setFocusMode(false);
   }, [selectedNoteId]);
-  useEffect(() => {
-    setNotesPaneCompact(!!selectedNoteId);
-  }, [selectedNoteId]);
-  useEffect(() => {
-    if (!notesPaneCompact) setNotesPaneHover(false);
-  }, [notesPaneCompact]);
 
   /**
    * Notes shared WITH the current user (Google-Docs-style). Each entry has
@@ -4545,11 +4537,7 @@ function NotesPageInner() {
             "transition-[grid-template-columns,gap] duration-[520ms] ease-[cubic-bezier(0.16,1,0.3,1)]",
             focusMode
               ? "lg:grid-cols-[minmax(0,0px)_minmax(0,0px)_minmax(0,1fr)] lg:gap-0"
-              : notesPaneCompact && selectedNoteId
-                ? notesPaneHover
-                  ? "lg:grid-cols-[minmax(0,280px)_minmax(0,320px)_minmax(0,1fr)]"
-                  : "lg:grid-cols-[minmax(0,280px)_minmax(0,64px)_minmax(0,1fr)]"
-                : "lg:grid-cols-[minmax(0,280px)_minmax(0,320px)_minmax(0,1fr)]",
+              : "lg:grid-cols-[minmax(0,280px)_minmax(0,240px)_minmax(0,1fr)]",
           )}
         >
           {notesLoading && initialNotesBootstrapDone ? (
@@ -4841,7 +4829,6 @@ function NotesPageInner() {
                           onClick={() => {
                             setSelectedNoteId(note.id);
                             setFocusMode(false);
-                            setNotesPaneCompact(true);
                           }}
                           title={`Shared by ${ownerLabel}`}
                         >
@@ -4925,35 +4912,19 @@ function NotesPageInner() {
           </section>
 
           <section
-            onMouseEnter={() => {
-              if (notesPaneCompact && selectedNoteId) setNotesPaneHover(true);
-            }}
-            onMouseLeave={() => {
-              if (notesPaneCompact) setNotesPaneHover(false);
-            }}
             className={cn(
-              "min-w-0 cursor-default rounded-xl border bg-card p-3 space-y-3",
-              "lg:overflow-hidden transition-[opacity,transform] duration-[420ms] ease-out",
-              notesPaneCompact &&
-                selectedNoteId &&
-                "lg:p-2 lg:space-y-2",
+              "min-w-0 cursor-default rounded-2xl border bg-card p-3.5 space-y-3",
+              "lg:overflow-hidden lg:max-h-[calc(100vh-7rem)] transition-[opacity,transform] duration-[420ms] ease-out",
               focusMode &&
                 "lg:pointer-events-none lg:scale-[0.97] lg:opacity-0",
             )}
             aria-hidden={focusMode || undefined}
           >
-            {notesPaneCompact && selectedNoteId && !notesPaneHover ? (
-              <div className="flex h-full min-h-[120px] flex-col items-center justify-start gap-2 pt-1">
-                <div className="inline-flex h-8 min-w-8 items-center justify-center rounded-full border border-border/60 bg-muted/30 px-2 text-[11px] font-semibold text-foreground">
-                  {Math.max(0, notes.length - (selectedNoteId ? 1 : 0))}
-                </div>
-                <div className="text-[10px] text-muted-foreground">more</div>
-              </div>
-            ) : null}
-            {(!notesPaneCompact || !selectedNoteId || notesPaneHover) && (
-              <>
             <div className="flex items-center justify-between gap-2">
               <Label className="text-xs text-muted-foreground">Notes</Label>
+              <span className="text-[10px] text-muted-foreground">
+                {notes.length} notes
+              </span>
             </div>
             <div className="flex gap-2">
               <Input
@@ -5023,7 +4994,7 @@ function NotesPageInner() {
                 </div>
               )}
             </div>
-            <div className="relative space-y-1 min-h-[120px]">
+            <div className="relative min-h-[120px] max-h-[min(58vh,520px)] space-y-1 overflow-y-auto pr-1">
               {notes.map((n) => (
                 <Fragment key={n.id}>
                   {dragNoteId &&
@@ -5157,7 +5128,6 @@ function NotesPageInner() {
                         onClick={() => {
                           setSelectedNoteId(n.id);
                           setFocusMode(false);
-                          setNotesPaneCompact(true);
                         }}
                       >
                         <span className="block truncate">{n.title}</span>
@@ -5318,8 +5288,6 @@ function NotesPageInner() {
                   />
                 )}
             </div>
-              </>
-            )}
           </section>
 
           <section className="flex min-h-0 min-w-0 cursor-default flex-col overflow-visible rounded-xl border bg-card p-4 lg:max-h-[calc(100vh-7rem)]">
