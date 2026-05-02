@@ -77,8 +77,6 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowLeft,
-  ChevronLeft,
-  ChevronRight,
   Crop,
   PanelLeftOpen,
   List as ListIcon,
@@ -1255,6 +1253,9 @@ function NotesPageInner() {
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
   const [editingNoteRowId, setEditingNoteRowId] = useState<string | null>(null);
   const [editingMainTitle, setEditingMainTitle] = useState(false);
+  const [confirmDeleteNoteId, setConfirmDeleteNoteId] = useState<string | null>(
+    null,
+  );
   const [formatMenuOpen, setFormatMenuOpen] = useState(false);
   const [formatColorExpanded, setFormatColorExpanded] = useState(false);
   const [formatMenuCoords, setFormatMenuCoords] = useState<{
@@ -5451,86 +5452,6 @@ function NotesPageInner() {
                 )}
             </div>
             )}
-            {notesPaneExpanded && (() => {
-              const idx = notes.findIndex((n) => n.id === selectedNoteId);
-              return (
-                <div className="mt-2 flex items-center gap-1 rounded-lg border border-border/60 bg-muted/30 p-1">
-                  <Button
-                    type="button"
-                    size="icon"
-                    variant="ghost"
-                    className="h-7 w-7"
-                    disabled={idx <= 0}
-                    onClick={() => {
-                      const prev = notes[idx - 1];
-                      if (prev) setSelectedNoteId(prev.id);
-                    }}
-                    aria-label="Previous note"
-                    title="Previous note"
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                  </Button>
-                  <span className="flex-1 text-center text-[11px] tabular-nums text-muted-foreground">
-                    {notes.length === 0
-                      ? "No notes"
-                      : `${idx >= 0 ? idx + 1 : "—"} / ${notes.length}`}
-                  </span>
-                  <Button
-                    type="button"
-                    size="icon"
-                    variant="ghost"
-                    className="h-7 w-7"
-                    disabled={idx < 0 || idx >= notes.length - 1}
-                    onClick={() => {
-                      const next = notes[idx + 1];
-                      if (next) setSelectedNoteId(next.id);
-                    }}
-                    aria-label="Next note"
-                    title="Next note"
-                  >
-                    <ChevronRight className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    type="button"
-                    size="icon"
-                    variant="ghost"
-                    className="h-7 w-7 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                    disabled={idx < 0}
-                    onClick={() => {
-                      const cur = notes[idx];
-                      if (!cur) return;
-                      if (
-                        !window.confirm(
-                          `Delete "${cur.title || "Untitled Note"}"? This cannot be undone.`,
-                        )
-                      )
-                        return;
-                      void deleteNote(cur.id);
-                    }}
-                    aria-label="Delete current note"
-                    title="Delete current note"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    type="button"
-                    size="icon"
-                    variant="ghost"
-                    className="h-7 w-7"
-                    disabled={!selectedPageId}
-                    onClick={() => {
-                      const t = window.prompt("New note title")?.trim();
-                      if (!t) return;
-                      void createNote(t);
-                    }}
-                    aria-label="Add note"
-                    title="Add note"
-                  >
-                    <Plus className="h-4 w-4" />
-                  </Button>
-                </div>
-              );
-            })()}
           </section>
 
           <section className="flex min-h-0 min-w-0 cursor-default flex-col overflow-visible rounded-xl border bg-card p-4 lg:max-h-[calc(100vh-7rem)]">
@@ -5544,41 +5465,76 @@ function NotesPageInner() {
                     visual noise). Active tab gets the primary border + tinted
                     fill; inactive tabs lift on hover. Horizontal overflow
                     scrolls so long lists stay reachable in focus mode. */}
-                {notes.length > 1 && (
-                  <div className="-mx-1 flex w-full min-w-0 items-stretch gap-1 overflow-x-auto px-1 pb-1">
-                    {notes.map((n) => {
-                      const active = selectedNoteId === n.id;
-                      return (
-                        <button
-                          key={`note-tab-${n.id}`}
-                          type="button"
-                          onClick={() => {
+                <div className="-mx-1 flex w-full min-w-0 items-stretch gap-1 overflow-x-auto px-1 pb-1">
+                  {notes.map((n) => {
+                    const active = selectedNoteId === n.id;
+                    return (
+                      <div
+                        key={`note-tab-${n.id}`}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => {
+                          setSelectedNoteId(n.id);
+                          setFocusMode(false);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
                             setSelectedNoteId(n.id);
                             setFocusMode(false);
+                          }
+                        }}
+                        className={cn(
+                          "group inline-flex shrink-0 max-w-[14rem] cursor-pointer items-center gap-1.5 rounded-t-lg border-b-2 px-3 py-1.5 text-xs font-medium outline-none transition-all duration-200 ease-out focus-visible:ring-2 focus-visible:ring-ring",
+                          active
+                            ? "border-primary bg-primary/10 text-foreground"
+                            : "border-transparent text-muted-foreground hover:border-border hover:bg-muted/40 hover:text-foreground",
+                        )}
+                        title={n.title}
+                        aria-current={active ? "page" : undefined}
+                      >
+                        {n.favorite && (
+                          <Star
+                            className="h-3 w-3 shrink-0 fill-amber-400 text-amber-400"
+                            aria-hidden
+                          />
+                        )}
+                        <span className="truncate">
+                          {n.title || "Untitled"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setConfirmDeleteNoteId(n.id);
                           }}
                           className={cn(
-                            "group inline-flex shrink-0 max-w-[14rem] items-center gap-1.5 rounded-t-lg border-b-2 px-3 py-1.5 text-xs font-medium outline-none transition-all duration-200 ease-out focus-visible:ring-2 focus-visible:ring-ring",
-                            active
-                              ? "border-primary bg-primary/10 text-foreground"
-                              : "border-transparent text-muted-foreground hover:border-border hover:bg-muted/40 hover:text-foreground",
+                            "ml-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-sm opacity-0 transition-opacity hover:bg-destructive/15 hover:text-destructive group-hover:opacity-100 focus-visible:opacity-100",
+                            active && "opacity-60",
                           )}
-                          title={n.title}
-                          aria-current={active ? "page" : undefined}
+                          aria-label={`Delete note ${n.title || "Untitled"}`}
+                          title="Delete note"
                         >
-                          {n.favorite && (
-                            <Star
-                              className="h-3 w-3 shrink-0 fill-amber-400 text-amber-400"
-                              aria-hidden
-                            />
-                          )}
-                          <span className="truncate">
-                            {n.title || "Untitled"}
-                          </span>
+                          <XIcon className="h-3 w-3" />
                         </button>
-                      );
-                    })}
-                  </div>
-                )}
+                      </div>
+                    );
+                  })}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const t = window.prompt("New note title")?.trim();
+                      if (!t) return;
+                      void createNote(t);
+                    }}
+                    disabled={!selectedPageId}
+                    className="ml-auto inline-flex h-7 w-7 shrink-0 items-center justify-center self-center rounded-md border border-dashed border-border/70 text-muted-foreground transition-colors hover:border-primary/60 hover:bg-primary/10 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                    aria-label="Add new note"
+                    title="Add new note"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </button>
+                </div>
 
                 {/* Title row — the title sits dead-centered via a 1fr/auto/1fr
                     grid so the surrounding chrome can never push it off-axis.
@@ -7304,6 +7260,48 @@ function NotesPageInner() {
           </div>
         </div>
       )}
+      <Dialog
+        open={confirmDeleteNoteId !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirmDeleteNoteId(null);
+        }}
+      >
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete this note?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            {(() => {
+              const n = notes.find((x) => x.id === confirmDeleteNoteId);
+              return n
+                ? `"${n.title || "Untitled"}" will be permanently deleted. This cannot be undone.`
+                : "This note will be permanently deleted. This cannot be undone.";
+            })()}
+          </p>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setConfirmDeleteNoteId(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => {
+                const id = confirmDeleteNoteId;
+                if (!id) return;
+                setConfirmDeleteNoteId(null);
+                void deleteNote(id);
+              }}
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete note
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog open={imageCropOpen} onOpenChange={setImageCropOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
