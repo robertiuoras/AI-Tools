@@ -77,6 +77,8 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
   Crop,
   PanelLeftOpen,
   List as ListIcon,
@@ -2282,9 +2284,9 @@ function NotesPageInner() {
     }
   };
 
-  const createNote = async () => {
+  const createNote = async (overrideTitle?: string) => {
     if (!selectedPageId) return;
-    const title = newNoteTitle.trim();
+    const title = (overrideTitle ?? newNoteTitle).trim();
     if (!title) return;
     const res = await fetch("/api/notes", {
       method: "POST",
@@ -2306,7 +2308,7 @@ function NotesPageInner() {
     });
     setAllNotesForMentions((prev) => [created, ...prev]);
     setSelectedNoteId(created.id);
-    setNewNoteTitle("");
+    if (overrideTitle === undefined) setNewNoteTitle("");
   };
 
   const updateNote = async (
@@ -5093,7 +5095,7 @@ function NotesPageInner() {
               <Button
                 type="button"
                 size="icon"
-                onClick={createNote}
+                onClick={() => void createNote()}
                 disabled={!selectedPageId || !newNoteTitle.trim()}
               >
                 <Plus className="h-4 w-4" />
@@ -5449,6 +5451,64 @@ function NotesPageInner() {
                 )}
             </div>
             )}
+            {notesPaneExpanded && (() => {
+              const idx = notes.findIndex((n) => n.id === selectedNoteId);
+              return (
+                <div className="mt-2 flex items-center gap-1 rounded-lg border border-border/60 bg-muted/30 p-1">
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7"
+                    disabled={idx <= 0}
+                    onClick={() => {
+                      const prev = notes[idx - 1];
+                      if (prev) setSelectedNoteId(prev.id);
+                    }}
+                    aria-label="Previous note"
+                    title="Previous note"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <span className="flex-1 text-center text-[11px] tabular-nums text-muted-foreground">
+                    {notes.length === 0
+                      ? "No notes"
+                      : `${idx >= 0 ? idx + 1 : "—"} / ${notes.length}`}
+                  </span>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7"
+                    disabled={idx < 0 || idx >= notes.length - 1}
+                    onClick={() => {
+                      const next = notes[idx + 1];
+                      if (next) setSelectedNoteId(next.id);
+                    }}
+                    aria-label="Next note"
+                    title="Next note"
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7"
+                    disabled={!selectedPageId}
+                    onClick={() => {
+                      const t = window.prompt("New note title")?.trim();
+                      if (!t) return;
+                      void createNote(t);
+                    }}
+                    aria-label="Add note"
+                    title="Add note"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </div>
+              );
+            })()}
           </section>
 
           <section className="flex min-h-0 min-w-0 cursor-default flex-col overflow-visible rounded-xl border bg-card p-4 lg:max-h-[calc(100vh-7rem)]">
