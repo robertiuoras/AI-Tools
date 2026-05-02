@@ -5494,6 +5494,28 @@ function NotesPageInner() {
                     type="button"
                     size="icon"
                     variant="ghost"
+                    className="h-7 w-7 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    disabled={idx < 0}
+                    onClick={() => {
+                      const cur = notes[idx];
+                      if (!cur) return;
+                      if (
+                        !window.confirm(
+                          `Delete "${cur.title || "Untitled Note"}"? This cannot be undone.`,
+                        )
+                      )
+                        return;
+                      void deleteNote(cur.id);
+                    }}
+                    aria-label="Delete current note"
+                    title="Delete current note"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
                     className="h-7 w-7"
                     disabled={!selectedPageId}
                     onClick={() => {
