@@ -121,7 +121,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { LiveblocksRoomProvider } from "@/components/LiveblocksRoomProvider";
+import {
+  LiveblocksRoomProvider,
+  NotesLiveblocksProvider,
+} from "@/components/LiveblocksRoomProvider";
 import { CollaborativeNoteEditor } from "@/components/CollaborativeNoteEditor";
 import { NoteVersionHistory } from "@/components/NoteVersionHistory";
 import { History } from "lucide-react";
@@ -4604,6 +4607,7 @@ function NotesPageInner() {
   }
 
   return (
+    <NotesLiveblocksProvider>
     <div className="container mx-auto px-4 py-6">
       <TopLoadingBar visible={loading && pages.length === 0} />
       <div className="mb-6">
@@ -6782,7 +6786,7 @@ function NotesPageInner() {
                             "w-full min-w-0 max-w-full flex-1 [overflow-wrap:anywhere]",
                             focusMode
                               ? "min-h-0 flex-1"
-                              : "min-h-[420px] sm:min-h-[480px]",
+                              : "min-h-[420px] max-h-[min(70vh,560px)] sm:min-h-[480px] sm:max-h-[min(75vh,640px)]",
                           )}
                         />
                       </LiveblocksRoomProvider>
@@ -7441,6 +7445,7 @@ function NotesPageInner() {
         />
       )}
     </div>
+    </NotesLiveblocksProvider>
   );
 }
 

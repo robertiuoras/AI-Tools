@@ -142,6 +142,14 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
   const userAvatar =
     profile?.avatar_url ?? ((self?.info as any)?.avatar as string | null) ?? null;
 
+  // Refs so the editor can read the latest user identity inside the
+  // CollaborationCursor render callback without forcing a re-init when
+  // either changes (re-init = lost focus + caret = "edit lock-out" UX).
+  const userColourRef = useRef(userColour);
+  const userNameRef = useRef(userName);
+  userColourRef.current = userColour;
+  userNameRef.current = userName;
+
   const editor = useEditor(
     {
       editable: canEdit,
@@ -163,7 +171,9 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
             Collaboration.configure({ document: ydoc }),
             CollaborationCursor.configure({
               provider: providerRef.current,
-              user: { name: userName, color: userColour },
+              // Read identity at render time via refs so name/colour
+              // changes don't require recreating the editor.
+              user: { name: userNameRef.current, color: userColourRef.current },
               render: (user) => {
                 const safeName = String(user.name ?? "Anonymous");
                 const safeColour =
@@ -206,10 +216,24 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
         },
       },
     },
-    // Re-create the editor once the provider is ready (so CollaborationCursor is wired up)
-    // and whenever editability changes (view-only ↔ edit).
-    [isProviderReady, canEdit, userColour, userName],
+    // Re-create the editor only when the provider becomes ready or
+    // editability flips. User name/colour update via the effect below
+    // (CollaborationCursor.updateUser) so the editor instance is stable.
+    [isProviderReady, canEdit],
   );
+
+  // Push name/colour changes into the live CollaborationCursor extension
+  // without recreating the editor — keeps focus, selection, and caret
+  // intact when the user's profile loads after the editor mounts.
+  useEffect(() => {
+    if (!editor) return;
+    const chain = editor.chain() as unknown as {
+      updateUser?: (info: { name: string; color: string }) => { run: () => void };
+    };
+    if (typeof chain.updateUser === "function") {
+      chain.updateUser({ name: userName, color: userColour }).run();
+    }
+  }, [editor, userName, userColour]);
 
   /*
    * Seed the empty Y.Doc with the existing note HTML on first sync.
@@ -319,6 +343,16 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
   const initialHtmlRef = useRef<string>(initialHtml);
   initialHtmlRef.current = initialHtml;
 
+  // Parents typically pass new arrow functions for these props on every
+  // render. Stash the latest in refs so flushSave (and the editor "update"
+  // listener it's wired into) don't rebuild on every parent re-render —
+  // unstable handlers caused the editor's update subscription to flap on
+  // every autosave, which the user perceived as the editor "closing off".
+  const onSavedRef = useRef(onSaved);
+  const onSaveStateChangeRef = useRef(onSaveStateChange);
+  onSavedRef.current = onSaved;
+  onSaveStateChangeRef.current = onSaveStateChange;
+
   const flushSave = useCallback(async () => {
     if (!editor || !canEdit) return;
     const html = editor.getHTML();
@@ -361,7 +395,7 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
     saveAbort.current = ctrl;
 
     try {
-      onSaveStateChange?.("saving");
+      onSaveStateChangeRef.current?.("saving");
       const res = await fetch(`/api/notes/${noteId}`, {
         method: "PUT",
         signal: ctrl.signal,
@@ -376,21 +410,21 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
         // Mark as saved only after server confirmation. If a request fails or
         // gets aborted, keeping this stale would suppress retries for same HTML.
         lastSavedHtmlRef.current = html;
-        onSaved?.({ html, savedNote });
-        onSaveStateChange?.("saved");
-        window.setTimeout(() => onSaveStateChange?.("idle"), 1200);
+        onSavedRef.current?.({ html, savedNote });
+        onSaveStateChangeRef.current?.("saved");
+        window.setTimeout(() => onSaveStateChangeRef.current?.("idle"), 1200);
       } else {
         const errText = await res.text().catch(() => "");
         console.error("[collab] save rejected", res.status, errText);
-        onSaveStateChange?.("idle");
+        onSaveStateChangeRef.current?.("idle");
       }
     } catch (err) {
       if ((err as any)?.name !== "AbortError") {
         console.error("[collab] save failed", err);
       }
-      onSaveStateChange?.("idle");
+      onSaveStateChangeRef.current?.("idle");
     }
-  }, [accessToken, canEdit, editor, noteId, onSaved, onSaveStateChange, providerSynced]);
+  }, [accessToken, canEdit, editor, noteId, providerSynced]);
 
   useEffect(() => {
     if (!editor) return;
