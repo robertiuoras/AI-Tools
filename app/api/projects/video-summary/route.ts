@@ -3,43 +3,48 @@ import Innertube, { UniversalCache } from "youtubei.js";
 import { YoutubeTranscript } from "youtube-transcript";
 import { enforceApiRateLimit } from "@/lib/api-rate-limit";
 import { logOpenAIUsage } from "@/lib/openai-usage";
+import {
+  readTranscriptCache,
+  writeTranscriptCache,
+  type TranscriptKind,
+  type TranscriptSource,
+} from "@/lib/video-transcript-cache";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
 /**
- * AI Video Summariser
- * --------------------
- * Accepts a YouTube URL, or an uploaded audio/video file, and returns a structured summary:
- * - one-paragraph TL;DR
- * - 5–10 key points
- * - hierarchical outline (sections → bullets) suitable for slides / docs
+ * AI Video Summariser — YouTube + TikTok URL summariser.
  *
- * Strategy:
- * - YouTube → fetch captions via `youtube-transcript`; if unavailable, download
- *   the audio stream, transcribe it with OpenAI, then summarise the transcript.
- * - Uploads → transcribe audio/video with OpenAI, then summarise the transcript.
- * - Metadata is used only as context. It never replaces real transcript content.
+ * Pipeline:
+ * 1. Detect source (YouTube or TikTok). Other URLs are rejected.
+ * 2. Try to fetch a real transcript:
+ *    - YouTube: manual captions → ASR captions → HLS audio + Whisper.
+ *    - TikTok: resolve the share URL to a direct MP4, then Whisper.
+ * 3. Reject thin transcripts (<300 chars) hard — never let the model
+ *    summarise from title/description alone.
+ * 4. gpt-4o-mini turns the transcript into a structured JSON summary.
  *
- * Failure modes are surfaced as `{ error, hint }` JSON, never as 500s, so the
- * UI can render an actionable message (e.g. "captions disabled by uploader").
+ * The result tells the UI exactly *which* transcript source was used so silent
+ * failures stop being silent.
  */
 
 const SOURCE_YOUTUBE = "youtube" as const;
 const SOURCE_TIKTOK = "tiktok" as const;
-const SOURCE_UPLOAD = "upload" as const;
-type Source = typeof SOURCE_YOUTUBE | typeof SOURCE_TIKTOK | typeof SOURCE_UPLOAD;
+type Source = typeof SOURCE_YOUTUBE | typeof SOURCE_TIKTOK;
+
+const MIN_USABLE_TRANSCRIPT_CHARS = 300;
 
 interface SummaryResponse {
   source: Source;
   videoUrl: string;
-  fileName: string | null;
   title: string | null;
   author: string | null;
   thumbnailUrl: string | null;
   language: string | null;
   hasTranscript: boolean;
   transcriptCharCount: number;
+  transcriptSource: TranscriptSource;
   summary: string;
   keyPoints: string[];
   detailedNotes: Array<{ section: string; bullets: string[] }>;
@@ -47,7 +52,7 @@ interface SummaryResponse {
   actionItems: string[];
   outline: Array<{ section: string; bullets: string[] }>;
   transcriptCoverage: {
-    mode: "full" | "excerpted" | "metadata";
+    mode: "full" | "excerpted";
     inputCharCount: number;
     analyzedCharCount: number;
   };
@@ -63,6 +68,8 @@ interface SummaryResponse {
     outputCostUsd: number;
     totalCostUsd: number;
   } | null;
+  /** True when the transcript was loaded from the cache instead of re-fetched. */
+  transcriptCacheHit: boolean;
 }
 
 /**
@@ -77,23 +84,12 @@ const MODEL_PRICING_PER_MTOK: Record<string, { input: number; output: number }> 
   "gpt-4o-2024-08-06": { input: 2.5, output: 10 },
 };
 
-const MAX_UPLOAD_BYTES = 24 * 1024 * 1024;
-const MAX_TRANSCRIPTION_BYTES = MAX_UPLOAD_BYTES;
-const SUPPORTED_UPLOAD_TYPES = [
-  "audio/flac",
-  "audio/m4a",
-  "audio/mp3",
-  "audio/mp4",
-  "audio/mpeg",
-  "audio/ogg",
-  "audio/wav",
-  "audio/webm",
-  "video/mp4",
-  "video/mpeg",
-  "video/ogg",
-  "video/quicktime",
-  "video/webm",
-];
+/** OpenAI Whisper hard upload limit. */
+const MAX_TRANSCRIPTION_BYTES = 24 * 1024 * 1024;
+/** Refuse TikTok clips this short — almost always non-spoken memes. */
+const TIKTOK_MIN_DURATION_SEC = 6;
+/** Cap TikTok transcription cost; rejects long-form TikToks. */
+const TIKTOK_MAX_DURATION_SEC = 600;
 
 /** iOS HLS: each segment is a full GET; avoids googlevideo 403s on follow-up `range=` / Range requests. */
 const YT_HLS_HEADERS: Record<string, string> = {
@@ -329,41 +325,38 @@ async function fetchYouTubeOembed(url: string) {
   }
 }
 
-async function fetchTikTokOembed(url: string) {
-  try {
-    const res = await fetch(
-      `https://www.tiktok.com/oembed?url=${encodeURIComponent(url)}`,
-      {
-        headers: { "User-Agent": "Mozilla/5.0 (compatible; AI-Tools/1.0)" },
-        signal: AbortSignal.timeout(8000),
-      },
-    );
-    if (!res.ok) return null;
-    return (await res.json()) as {
-      title?: string;
-      author_name?: string;
-      thumbnail_url?: string;
-    };
-  } catch {
-    return null;
-  }
-}
+type YouTubeCaptionResult =
+  | { text: string; language: string | null; kind: "manual" | "asr" }
+  | null;
 
+/**
+ * Fetch YouTube captions, preferring manual over ASR. The `kind` lets the caller
+ * decide whether to fall back to Whisper even when *something* came back —
+ * very short ASR captions often aren't worth feeding to the summariser.
+ */
 async function fetchYouTubeTranscript(
   videoId: string,
-): Promise<{ text: string; language: string | null } | null> {
+  title: string | null,
+): Promise<YouTubeCaptionResult> {
+  // First try `youtube-transcript`; it doesn't tell us manual vs ASR, so only
+  // accept it when the result is substantively longer than the title (a common
+  // failure mode: it returns the auto-translated title alone).
   try {
     const items = await YoutubeTranscript.fetchTranscript(videoId);
-    if (!items || items.length === 0) return null;
-    const text = items
-      .map((it) => it.text)
-      .join(" ")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (!text) return null;
-    return { text, language: null };
+    if (items && items.length > 0) {
+      const text = items
+        .map((it) => it.text)
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (text && !looksLikeTitleEcho(text, title)) {
+        // We don't know whether this was manual or ASR; treat as ASR
+        // conservatively so the UI doesn't claim a higher quality than we can verify.
+        return { text, language: null, kind: "asr" };
+      }
+    }
   } catch {
-    // Fall through to InnerTube caption track fallback.
+    // fall through to InnerTube
   }
 
   try {
@@ -372,48 +365,71 @@ async function fetchYouTubeTranscript(
     const tracks = info.captions?.caption_tracks ?? [];
     if (tracks.length === 0) return null;
 
-    // Prefer regular captions over ASR; if only ASR exists, use that.
-    const selected =
-      tracks.find((t) => t.kind !== "asr" && typeof t.base_url === "string") ??
-      tracks.find((t) => typeof t.base_url === "string");
-    const baseUrl = selected?.base_url;
-    if (!baseUrl) return null;
+    const orderedTracks = [
+      ...tracks.filter((t) => t.kind !== "asr" && typeof t.base_url === "string"),
+      ...tracks.filter((t) => t.kind === "asr" && typeof t.base_url === "string"),
+    ];
 
-    const captionRes = await fetchWithRetries(
-      baseUrl.includes("fmt=") ? baseUrl : `${baseUrl}&fmt=srv3`,
-      { method: "GET", headers: { ...YT_HLS_FALLBACK_HEADERS } },
-      20000,
-      3,
-    );
-    if (!captionRes?.ok) return null;
-    const xml = await captionRes.text();
-    if (!xml) return null;
+    for (const track of orderedTracks) {
+      const baseUrl = track.base_url;
+      if (!baseUrl) continue;
+      const captionRes = await fetchWithRetries(
+        baseUrl.includes("fmt=") ? baseUrl : `${baseUrl}&fmt=srv3`,
+        { method: "GET", headers: { ...YT_HLS_FALLBACK_HEADERS } },
+        20000,
+        3,
+      );
+      if (!captionRes?.ok) continue;
+      const xml = await captionRes.text();
+      if (!xml) continue;
 
-    const decodeHtml = (s: string): string =>
-      s
-        .replace(/&#39;/g, "'")
-        .replace(/&quot;/g, '"')
-        .replace(/&amp;/g, "&")
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)));
+      const decodeHtml = (s: string): string =>
+        s
+          .replace(/&#39;/g, "'")
+          .replace(/&quot;/g, '"')
+          .replace(/&amp;/g, "&")
+          .replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">")
+          .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)));
 
-    const chunks = Array.from(xml.matchAll(/<text[^>]*>([\s\S]*?)<\/text>/g))
-      .map((m) => decodeHtml(m[1] ?? "").replace(/\s+/g, " ").trim())
-      .filter(Boolean);
-    const text = chunks.join(" ").replace(/\s+/g, " ").trim();
-    if (!text) return null;
+      const chunks = Array.from(xml.matchAll(/<text[^>]*>([\s\S]*?)<\/text>/g))
+        .map((m) => decodeHtml(m[1] ?? "").replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+      const text = chunks.join(" ").replace(/\s+/g, " ").trim();
+      if (!text || looksLikeTitleEcho(text, title)) continue;
 
-    return {
-      text,
-      language: selected?.language_code ?? null,
-    };
+      return {
+        text,
+        language: track.language_code ?? null,
+        kind: track.kind === "asr" ? "asr" : "manual",
+      };
+    }
+    return null;
   } catch {
     return null;
   }
 }
 
-async function transcribeUploadedFile(
+/**
+ * Return true when a "transcript" is really just the title repeated — a common
+ * failure mode for short videos where YouTube returns the title as a single ASR cue.
+ */
+function looksLikeTitleEcho(text: string, title: string | null): boolean {
+  if (!title) return false;
+  const t = text.replace(/\s+/g, " ").trim().toLowerCase();
+  const ti = title.replace(/\s+/g, " ").trim().toLowerCase();
+  if (!t || !ti) return false;
+  if (t.length < 200 && (t === ti || t.includes(ti) || ti.includes(t))) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Send an audio/video buffer to OpenAI for transcription. Used by both the
+ * YouTube HLS fallback and the TikTok direct-MP4 path.
+ */
+async function transcribeAudioBuffer(
   file: File,
 ): Promise<{ text: string; language: string | null; model: string } | null> {
   const key = process.env.OPENAI_API_KEY;
@@ -422,7 +438,7 @@ async function transcribeUploadedFile(
   const form = new FormData();
   form.append("model", "gpt-4o-mini-transcribe");
   form.append("response_format", "json");
-  form.append("file", file, file.name || "uploaded-video");
+  form.append("file", file, file.name || "audio");
 
   try {
     const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
@@ -446,6 +462,200 @@ async function transcribeUploadedFile(
     };
   } catch {
     return null;
+  }
+}
+
+interface TikTokMedia {
+  mp4Url: string;
+  durationSec: number;
+  caption: string | null;
+  author: string | null;
+  title: string | null;
+  thumbnailUrl: string | null;
+  music: string | null;
+}
+
+const TIKTOK_DESKTOP_HEADERS: Record<string, string> = {
+  "User-Agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+  "Accept-Language": "en-US,en;q=0.9",
+  Accept:
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+  Referer: "https://www.tiktok.com/",
+};
+
+/**
+ * Resolve a TikTok share URL to its direct MP4 + metadata.
+ *
+ * vt.tiktok.com / vm.tiktok.com short links 301-redirect to the real watch URL;
+ * Node's fetch follows by default, so we capture the final URL from `res.url`.
+ *
+ * The MP4 URL and metadata live in a JSON blob inside the page HTML at
+ * `<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__">…</script>`.
+ */
+async function resolveTikTokMedia(url: string): Promise<TikTokMedia | null> {
+  try {
+    const res = await fetch(url, {
+      headers: TIKTOK_DESKTOP_HEADERS,
+      redirect: "follow",
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+    if (!html) return null;
+
+    const scriptMatch = html.match(
+      /<script[^>]+id=["']__UNIVERSAL_DATA_FOR_REHYDRATION__["'][^>]*>([\s\S]*?)<\/script>/,
+    );
+    if (!scriptMatch?.[1]) return null;
+
+    let data: unknown;
+    try {
+      data = JSON.parse(scriptMatch[1]);
+    } catch {
+      return null;
+    }
+
+    const itemStruct = findItemStruct(data);
+    if (!itemStruct) return null;
+
+    const mp4Url =
+      typeof itemStruct.video?.playAddr === "string"
+        ? itemStruct.video.playAddr
+        : null;
+    if (!mp4Url) return null;
+
+    const durationSec =
+      typeof itemStruct.video?.duration === "number"
+        ? itemStruct.video.duration
+        : 0;
+
+    return {
+      mp4Url,
+      durationSec,
+      caption: typeof itemStruct.desc === "string" ? itemStruct.desc : null,
+      author:
+        typeof itemStruct.author?.uniqueId === "string"
+          ? itemStruct.author.uniqueId
+          : typeof itemStruct.author?.nickname === "string"
+            ? itemStruct.author.nickname
+            : null,
+      title: typeof itemStruct.desc === "string" ? itemStruct.desc.slice(0, 120) : null,
+      thumbnailUrl:
+        typeof itemStruct.video?.cover === "string"
+          ? itemStruct.video.cover
+          : typeof itemStruct.video?.dynamicCover === "string"
+            ? itemStruct.video.dynamicCover
+            : null,
+      music:
+        typeof itemStruct.music?.title === "string"
+          ? itemStruct.music.title
+          : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+interface TikTokItemStruct {
+  desc?: unknown;
+  author?: { uniqueId?: unknown; nickname?: unknown };
+  video?: {
+    playAddr?: unknown;
+    duration?: unknown;
+    cover?: unknown;
+    dynamicCover?: unknown;
+  };
+  music?: { title?: unknown };
+}
+
+/**
+ * The shape under `__UNIVERSAL_DATA_FOR_REHYDRATION__` shifts month-to-month.
+ * Walk the tree breadth-first looking for an object that has the shape of an
+ * item struct (a `video.playAddr` URL).
+ */
+function findItemStruct(root: unknown): TikTokItemStruct | null {
+  const queue: unknown[] = [root];
+  let visited = 0;
+  while (queue.length > 0 && visited < 5000) {
+    const node = queue.shift();
+    visited += 1;
+    if (!node || typeof node !== "object") continue;
+    const obj = node as Record<string, unknown>;
+    const video = obj.video as Record<string, unknown> | undefined;
+    if (
+      video &&
+      typeof video.playAddr === "string" &&
+      typeof obj.desc === "string"
+    ) {
+      return obj as TikTokItemStruct;
+    }
+    for (const v of Object.values(obj)) {
+      if (v && typeof v === "object") queue.push(v);
+    }
+  }
+  return null;
+}
+
+/**
+ * Download the MP4 from TikTok's CDN and wrap it in a File so it can be sent
+ * to OpenAI transcription. We don't need ffmpeg — Whisper accepts MP4 directly
+ * and pricing is per audio minute, not per byte.
+ */
+async function fetchTikTokAudioForTranscription(
+  mp4Url: string,
+): Promise<UrlAudioResult> {
+  try {
+    const res = await fetch(mp4Url, {
+      headers: TIKTOK_DESKTOP_HEADERS,
+      signal: AbortSignal.timeout(45000),
+    });
+    if (!res.ok) {
+      return {
+        ok: false,
+        reason: "unavailable",
+        message: `TikTok refused the video download (${res.status}).`,
+      };
+    }
+    const contentLengthHeader = res.headers.get("content-length");
+    if (
+      contentLengthHeader &&
+      Number(contentLengthHeader) > MAX_TRANSCRIPTION_BYTES
+    ) {
+      return {
+        ok: false,
+        reason: "too-large",
+        message: `The TikTok video is ${(Number(contentLengthHeader) / 1024 / 1024).toFixed(1)} MB — over the 24 MB transcription limit.`,
+      };
+    }
+    const buf = new Uint8Array(await res.arrayBuffer());
+    if (buf.byteLength === 0) {
+      return {
+        ok: false,
+        reason: "unavailable",
+        message: "TikTok returned an empty video body.",
+      };
+    }
+    if (buf.byteLength > MAX_TRANSCRIPTION_BYTES) {
+      return {
+        ok: false,
+        reason: "too-large",
+        message: `The TikTok video is ${(buf.byteLength / 1024 / 1024).toFixed(1)} MB — over the 24 MB transcription limit.`,
+      };
+    }
+    const file = new File([buf], "tiktok-video.mp4", { type: "video/mp4" });
+    return {
+      ok: true,
+      file,
+      formatDescription: "TikTok MP4",
+      byteLength: buf.byteLength,
+    };
+  } catch {
+    return {
+      ok: false,
+      reason: "unavailable",
+      message: "Couldn't download the TikTok video — try again or use a different URL.",
+    };
   }
 }
 
@@ -640,7 +850,7 @@ interface OpenAiUsage {
 }
 
 function buildTranscriptContext(
-  transcript: string | null,
+  transcript: string,
   budget: number,
 ): {
   text: string;
@@ -648,10 +858,6 @@ function buildTranscriptContext(
   inputCharCount: number;
   analyzedCharCount: number;
 } {
-  if (!transcript) {
-    return { text: "", mode: "metadata", inputCharCount: 0, analyzedCharCount: 0 };
-  }
-
   if (transcript.length <= budget) {
     return {
       text: transcript,
@@ -684,8 +890,13 @@ function buildTranscriptContext(
   };
 }
 
-function parseSummaryObject(raw: unknown): OpenAiSummary | null {
-  const obj = raw as Partial<OpenAiSummary>;
+function parseSummaryObject(
+  raw: unknown,
+): OpenAiSummary | { transcriptUsable: false } | null {
+  const obj = raw as Partial<OpenAiSummary> & { transcriptUsable?: unknown };
+  if (obj && obj.transcriptUsable === false) {
+    return { transcriptUsable: false };
+  }
   const summary = typeof obj.summary === "string" ? obj.summary.trim() : "";
   const keyPoints = Array.isArray(obj.keyPoints)
     ? obj.keyPoints.map((p) => String(p).trim()).filter(Boolean).slice(0, 15)
@@ -753,7 +964,7 @@ async function summariseWithOpenAi(args: {
   source: Source;
   title: string | null;
   author: string | null;
-  transcript: string | null;
+  transcript: string;
   description: string | null;
   extra: string[];
 }): Promise<{
@@ -773,8 +984,12 @@ async function summariseWithOpenAi(args: {
 
   const systemPrompt = [
     "You are a precise study/notes assistant. Summarise online videos for a busy reader who wants accurate detail without fluff.",
-    "You MUST reply with a single JSON object and nothing else (no markdown fences).",
-    "Schema:",
+    "The transcript is the ONLY source of facts. The title, author, and description are metadata; treat them as hints about who the speaker is, never as evidence about what was said.",
+    "If the transcript is empty, missing, or fewer than 300 characters, you MUST return:",
+    '  { "transcriptUsable": false, "summary": "", "keyPoints": [], "detailedNotes": [], "importantCommands": [], "actionItems": [], "outline": [] }',
+    "Do not guess content from the title or description in that case.",
+    "Otherwise reply with a single JSON object (no markdown fences) using this schema:",
+    '  "transcriptUsable": true',
     '  "summary": string  (3–5 concise sentences covering the topic, speaker if known, and main conclusion)',
     '  "keyPoints": string[]  (6–12 standalone takeaways, full sentences, ordered by importance)',
     '  "detailedNotes": Array<{ "section": string, "bullets": string[] }>  (4–7 sections covering the actual teaching, claims, examples, numbers, tools, and caveats)',
@@ -782,14 +997,13 @@ async function summariseWithOpenAi(args: {
     '  "actionItems": string[]  (practical next steps the viewer can take; [] if the video is purely informational)',
     '  "outline": Array<{ "section": string, "bullets": string[] }>  (3–6 sections, each with 2–6 short bullets — suitable for slides)',
     "Style rules:",
-    "- Be specific. Prefer concrete claims, numbers, names, examples from the source.",
-    "- Extract commands and setup steps aggressively; these are more important than generic prose.",
+    "- Every claim must be backed by a phrase that actually appears in the transcript. If a claim isn't in the transcript, omit it.",
+    "- Quote concrete numbers, names, commands, URLs, and settings directly from the transcript.",
     "- If the speaker lists a process, preserve the order.",
-    "- Include quantitative details such as costs, time windows, message counts, percentages, and named examples.",
-    "- Be more brief than a full transcript-derived article: compress repetition, but keep every distinct useful fact.",
-    "- Never invent facts that aren't in the source. If something is uncertain, omit it.",
+    "- Compress repetition, but keep every distinct useful fact.",
     "- Each key point should make sense without context.",
     "- Section titles should be short Title Case (3–6 words).",
+    "- Never invent facts that aren't in the transcript.",
   ].join("\n");
 
   const userParts: string[] = [
@@ -800,24 +1014,18 @@ async function summariseWithOpenAi(args: {
 
   if (args.description) {
     userParts.push(
-      `Author-written description / caption:\n${args.description.slice(0, 4000)}`,
+      `Author-written description / caption (metadata only; not a source of facts):\n${args.description.slice(0, 4000)}`,
     );
   }
   for (const x of args.extra) userParts.push(x);
 
-  if (transcriptContext.text) {
-    userParts.push(
-      `Transcript ${
-        transcriptContext.mode === "excerpted"
-          ? "(long video excerpted across beginning, middle, and end; analyze only the provided excerpts and avoid pretending this is complete)"
-          : "(complete)"
-      }:\n${transcriptContext.text}`,
-    );
-  } else {
-    userParts.push(
-      "(no spoken transcript was available — do not summarise metadata as if it were the video content.)",
-    );
-  }
+  userParts.push(
+    `Transcript ${
+      transcriptContext.mode === "excerpted"
+        ? "(long video excerpted across beginning, middle, and end; analyze only the provided excerpts and avoid pretending this is complete)"
+        : "(complete)"
+    }:\n${transcriptContext.text}`,
+  );
 
   try {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -862,8 +1070,14 @@ async function summariseWithOpenAi(args: {
     }
     const summary = parseSummaryObject(parsed);
     if (!summary) return null;
+    if ("transcriptUsable" in summary && summary.transcriptUsable === false) {
+      // The model itself flagged the transcript as too thin to summarise. We
+      // already rejected thin transcripts upstream, but this is a final guard
+      // — surface as null so the POST handler returns a clear error.
+      return null;
+    }
     return {
-      data: summary,
+      data: summary as OpenAiSummary,
       modelUsed,
       usage,
       transcriptCoverage: {
@@ -877,179 +1091,268 @@ async function summariseWithOpenAi(args: {
   }
 }
 
+interface AcquiredTranscript {
+  text: string;
+  source: TranscriptSource;
+  title: string | null;
+  author: string | null;
+  thumbnailUrl: string | null;
+  description: string | null;
+  descriptionExtra: string[];
+  warnings: string[];
+}
+
+type AcquireResult =
+  | { ok: true; transcript: AcquiredTranscript; cacheHit: boolean }
+  | { ok: false; status: number; error: string; hint?: string };
+
+async function acquireYouTubeTranscript(url: string): Promise<AcquireResult> {
+  const videoId = getYouTubeVideoId(url);
+  if (!videoId) {
+    return {
+      ok: false,
+      status: 400,
+      error: "Couldn't extract a video id from that YouTube URL.",
+    };
+  }
+
+  const [meta, page] = await Promise.all([
+    fetchYouTubeOembed(url),
+    fetchVideoPageDescription(`https://www.youtube.com/watch?v=${videoId}`),
+  ]);
+  const title = meta?.title ?? null;
+  const author = meta?.author_name ?? null;
+  const thumbnailUrl =
+    meta?.thumbnail_url ?? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+
+  // Cache hit short-circuits transcription entirely.
+  const cached = await readTranscriptCache(url);
+  if (cached) {
+    return {
+      ok: true,
+      cacheHit: true,
+      transcript: {
+        text: cached.text,
+        source: cached.source,
+        title,
+        author,
+        thumbnailUrl,
+        description: page?.description ?? null,
+        descriptionExtra: page?.extra ?? [],
+        warnings: [],
+      },
+    };
+  }
+
+  const captionResult = await fetchYouTubeTranscript(videoId, title);
+  if (
+    captionResult &&
+    captionResult.text.length >= MIN_USABLE_TRANSCRIPT_CHARS
+  ) {
+    const transcript: AcquiredTranscript = {
+      text: captionResult.text,
+      source: {
+        kind:
+          captionResult.kind === "manual"
+            ? "youtube-captions-manual"
+            : "youtube-captions-asr",
+        language: captionResult.language,
+        charCount: captionResult.text.length,
+      },
+      title,
+      author,
+      thumbnailUrl,
+      description: page?.description ?? null,
+      descriptionExtra: page?.extra ?? [],
+      warnings: [],
+    };
+    await writeTranscriptCache(url, "youtube", transcript);
+    return { ok: true, cacheHit: false, transcript };
+  }
+
+  // Captions missing or too thin — fall back to HLS audio + Whisper.
+  const audio = await fetchYouTubeAudioForTranscription(videoId);
+  if (!audio.ok) {
+    return {
+      ok: false,
+      status: audio.reason === "too-large" ? 413 : 422,
+      error: "Couldn't create a transcript for this YouTube URL.",
+      hint:
+        audio.reason === "too-large"
+          ? `${audio.message} Try a shorter video.`
+          : `${audio.message} The video may be private, region-locked, or have audio extraction blocked.`,
+    };
+  }
+
+  const transcription = await transcribeAudioBuffer(audio.file);
+  if (!transcription || transcription.text.length < MIN_USABLE_TRANSCRIPT_CHARS) {
+    return {
+      ok: false,
+      status: 422,
+      error: "The transcript came back too thin to summarise.",
+      hint:
+        "The audio was downloaded and sent to OpenAI, but the resulting transcript was empty or under 300 characters. The video may have very little spoken content.",
+    };
+  }
+
+  const transcript: AcquiredTranscript = {
+    text: transcription.text,
+    source: {
+      kind: "youtube-whisper",
+      language: transcription.language,
+      charCount: transcription.text.length,
+    },
+    title,
+    author,
+    thumbnailUrl,
+    description: page?.description ?? null,
+    descriptionExtra: page?.extra ?? [],
+    warnings: [
+      `No usable captions — transcribed ${(audio.byteLength / 1024 / 1024).toFixed(1)} MB of HLS audio with ${transcription.model}.`,
+    ],
+  };
+  await writeTranscriptCache(url, "youtube", transcript);
+  return { ok: true, cacheHit: false, transcript };
+}
+
+async function acquireTikTokTranscript(url: string): Promise<AcquireResult> {
+  const cached = await readTranscriptCache(url);
+  if (cached) {
+    // We don't re-resolve metadata on cache hit — the cached transcript already
+    // carries everything the summariser needs.
+    return {
+      ok: true,
+      cacheHit: true,
+      transcript: {
+        text: cached.text,
+        source: cached.source,
+        title: cached.title,
+        author: cached.author,
+        thumbnailUrl: cached.thumbnailUrl,
+        description: cached.description,
+        descriptionExtra: [],
+        warnings: [],
+      },
+    };
+  }
+
+  const meta = await resolveTikTokMedia(url);
+  if (!meta) {
+    return {
+      ok: false,
+      status: 502,
+      error: "Couldn't read this TikTok page.",
+      hint:
+        "TikTok blocked the request or its page layout changed. Try opening the share URL in your browser to confirm it loads, then retry.",
+    };
+  }
+
+  if (meta.durationSec > 0 && meta.durationSec < TIKTOK_MIN_DURATION_SEC) {
+    return {
+      ok: false,
+      status: 422,
+      error: "This TikTok is too short to summarise.",
+      hint: `Videos under ${TIKTOK_MIN_DURATION_SEC} seconds are almost always non-spoken meme clips. Try a longer TikTok.`,
+    };
+  }
+  if (meta.durationSec > TIKTOK_MAX_DURATION_SEC) {
+    return {
+      ok: false,
+      status: 413,
+      error: "This TikTok is too long to summarise.",
+      hint: `The clip is ${meta.durationSec}s — over the ${TIKTOK_MAX_DURATION_SEC}s cap to keep transcription cost predictable.`,
+    };
+  }
+
+  const audio = await fetchTikTokAudioForTranscription(meta.mp4Url);
+  if (!audio.ok) {
+    return {
+      ok: false,
+      status: audio.reason === "too-large" ? 413 : 422,
+      error: "Couldn't fetch the TikTok video for transcription.",
+      hint: audio.message,
+    };
+  }
+
+  const transcription = await transcribeAudioBuffer(audio.file);
+  if (!transcription || transcription.text.length < MIN_USABLE_TRANSCRIPT_CHARS) {
+    return {
+      ok: false,
+      status: 422,
+      error: "The TikTok transcript came back too thin to summarise.",
+      hint:
+        meta.music
+          ? `The audio is dominated by the track "${meta.music}" with little spoken content.`
+          : "The video may be background music or non-verbal — there isn't enough spoken content to summarise.",
+    };
+  }
+
+  const transcript: AcquiredTranscript = {
+    text: transcription.text,
+    source: {
+      kind: "tiktok-whisper",
+      language: transcription.language,
+      charCount: transcription.text.length,
+    },
+    title: meta.title,
+    author: meta.author,
+    thumbnailUrl: meta.thumbnailUrl,
+    description: meta.caption,
+    descriptionExtra: meta.music ? [`Background track: ${meta.music}`] : [],
+    warnings: [
+      `Transcribed TikTok MP4 (${(audio.byteLength / 1024 / 1024).toFixed(1)} MB) with ${transcription.model}.`,
+    ],
+  };
+  await writeTranscriptCache(url, "tiktok", transcript);
+  return { ok: true, cacheHit: false, transcript };
+}
+
 export async function POST(request: NextRequest) {
   try {
     const limited = enforceApiRateLimit(request, "video_summary");
     if (limited) return limited;
 
-    const contentType = request.headers.get("content-type") ?? "";
-    let url = "";
-    let uploadedFile: File | null = null;
+    const body = (await request.json().catch(() => ({}))) as { url?: string };
+    const url = typeof body.url === "string" ? body.url.trim() : "";
 
-    if (contentType.includes("multipart/form-data")) {
-      const form = await request.formData();
-      const file = form.get("file");
-      if (file instanceof File) {
-        uploadedFile = file;
-      }
-      const formUrl = form.get("url");
-      url = typeof formUrl === "string" ? formUrl.trim() : "";
-    } else {
-      const body = (await request.json().catch(() => ({}))) as { url?: string };
-      url = typeof body.url === "string" ? body.url.trim() : "";
-    }
-
-    if (!url && !uploadedFile) {
+    if (!url) {
       return NextResponse.json(
-        { error: "Provide a YouTube URL or upload an audio/video file." },
+        { error: "Paste a YouTube or TikTok URL to get started." },
         { status: 400 },
       );
     }
 
-    let source: Source = SOURCE_UPLOAD;
-    if (url) {
-      const detectedSource = detectSource(url);
-      if (!detectedSource) {
-        return NextResponse.json(
-          {
-            error: "Unsupported URL.",
-            hint:
-              "Use a YouTube URL, or upload the audio/video file so it can be transcribed first.",
-          },
-          { status: 400 },
-        );
-      }
-      source = detectedSource;
-    }
-
-    if (uploadedFile && uploadedFile.size > MAX_UPLOAD_BYTES) {
+    const source = detectSource(url);
+    if (!source) {
       return NextResponse.json(
         {
-          error: "File is too large.",
-          hint: "Upload an audio/video file under 24 MB, or compress/trim it first.",
-        },
-        { status: 413 },
-      );
-    }
-
-    if (
-      uploadedFile &&
-      uploadedFile.type &&
-      !SUPPORTED_UPLOAD_TYPES.includes(uploadedFile.type)
-    ) {
-      return NextResponse.json(
-        {
-          error: "Unsupported file type.",
-          hint:
-            "Upload a common audio/video file such as MP3, MP4, M4A, WAV, WEBM, MPEG, or MOV.",
+          error: "Unsupported URL.",
+          hint: "Only YouTube and TikTok URLs are supported.",
         },
         { status: 400 },
       );
     }
 
-    const warnings: string[] = [];
-    let title: string | null = null;
-    let author: string | null = null;
-    let thumbnailUrl: string | null = null;
-    let transcriptText: string | null = null;
-    let language: string | null = null;
-    let descriptionText: string | null = null;
-    let descriptionExtra: string[] = [];
-    let fileName: string | null = uploadedFile?.name || null;
+    const acquired =
+      source === SOURCE_YOUTUBE
+        ? await acquireYouTubeTranscript(url)
+        : await acquireTikTokTranscript(url);
 
-    if (uploadedFile) {
-      title = uploadedFile.name || "Uploaded video";
-      const transcription = await transcribeUploadedFile(uploadedFile);
-      if (!transcription) {
-        return NextResponse.json(
-          {
-            error: "Couldn't transcribe this file.",
-            hint:
-              "Make sure OPENAI_API_KEY is set and upload a clear audio/video file under 24 MB.",
-          },
-          { status: 502 },
-        );
-      }
-      transcriptText = transcription.text;
-      language = transcription.language;
-      warnings.push(
-        `Transcribed uploaded file with ${transcription.model}; summary is grounded in the generated transcript.`,
-      );
-    } else if (source === SOURCE_YOUTUBE) {
-      const videoId = getYouTubeVideoId(url);
-      if (!videoId) {
-        return NextResponse.json(
-          { error: "Couldn't extract a video id from that YouTube URL." },
-          { status: 400 },
-        );
-      }
-      const [meta, transcript, page] = await Promise.all([
-        fetchYouTubeOembed(url),
-        fetchYouTubeTranscript(videoId),
-        fetchVideoPageDescription(`https://www.youtube.com/watch?v=${videoId}`),
-      ]);
-      title = meta?.title ?? null;
-      author = meta?.author_name ?? null;
-      thumbnailUrl = meta?.thumbnail_url ?? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
-      descriptionText = page?.description ?? null;
-      descriptionExtra = page?.extra ?? [];
-      if (transcript) {
-        transcriptText = transcript.text;
-        language = transcript.language;
-      } else {
-        warnings.push(
-          "No captions were available, so the app generated its own transcript from the YouTube audio stream.",
-        );
-        const audio = await fetchYouTubeAudioForTranscription(videoId);
-        if (!audio.ok) {
-          return NextResponse.json(
-            {
-              error: "Couldn't create a transcript for this URL.",
-              hint:
-                audio.reason === "too-large"
-                  ? `${audio.message} Upload a shorter/compressed audio or video file instead.`
-                  : `${audio.message} Upload the audio/video file instead so it can be transcribed directly.`,
-            },
-            { status: audio.reason === "too-large" ? 413 : 422 },
-          );
-        } else {
-          const transcription = await transcribeUploadedFile(audio.file);
-          if (!transcription) {
-            return NextResponse.json(
-              {
-                error: "Couldn't transcribe this video's audio.",
-                hint:
-                  "The audio was extracted, but OpenAI transcription failed. Try again, or upload the audio/video file directly.",
-              },
-              { status: 502 },
-            );
-          } else {
-            transcriptText = transcription.text;
-            language = transcription.language;
-            warnings.push(
-              `Transcribed ${audio.formatDescription} (${(audio.byteLength / 1024 / 1024).toFixed(1)} MB) with ${transcription.model}.`,
-            );
-          }
-        }
-      }
-    } else {
+    if (!acquired.ok) {
       return NextResponse.json(
-        {
-          error: "TikTok URLs don't expose real transcripts.",
-          hint:
-            "Upload the TikTok audio/video file instead so the app can create its own transcript and summarize real spoken content.",
-        },
-        { status: 422 },
+        { error: acquired.error, hint: acquired.hint },
+        { status: acquired.status },
       );
     }
 
+    const t = acquired.transcript;
     const ai = await summariseWithOpenAi({
       source,
-      title,
-      author,
-      transcript: transcriptText,
-      description: descriptionText,
-      extra: descriptionExtra,
+      title: t.title,
+      author: t.author,
+      transcript: t.text,
+      description: t.description,
+      extra: t.descriptionExtra,
     });
 
     if (!ai) {
@@ -1057,32 +1360,36 @@ export async function POST(request: NextRequest) {
         {
           error: "Couldn't summarise this video.",
           hint:
-            "Make sure OPENAI_API_KEY is set on the server. If captions are disabled, the model has very little to work with.",
+            "Make sure OPENAI_API_KEY is set on the server. The transcript was usable but the summarisation step failed.",
         },
         { status: 502 },
       );
+    }
+
+    const warnings = [...t.warnings];
+    if (ai.transcriptCoverage.mode === "excerpted") {
+      warnings.push(
+        `Very long transcript — analyzed ${ai.transcriptCoverage.analyzedCharCount.toLocaleString()} of ${ai.transcriptCoverage.inputCharCount.toLocaleString()} characters across the beginning, middle, and end.`,
+      );
+    }
+    if (acquired.cacheHit) {
+      warnings.push("Transcript loaded from cache — no transcription cost incurred this run.");
     }
 
     const cost = ai.usage
       ? computeCost(ai.modelUsed, ai.usage.prompt_tokens, ai.usage.completion_tokens)
       : null;
 
-    if (ai.transcriptCoverage.mode === "excerpted") {
-      warnings.push(
-        `Very long transcript — analyzed ${ai.transcriptCoverage.analyzedCharCount.toLocaleString()} of ${ai.transcriptCoverage.inputCharCount.toLocaleString()} characters across the beginning, middle, and end.`,
-      );
-    }
-
     const payload: SummaryResponse = {
       source,
       videoUrl: url,
-      fileName,
-      title,
-      author,
-      thumbnailUrl,
-      language,
-      hasTranscript: Boolean(transcriptText),
-      transcriptCharCount: transcriptText?.length ?? 0,
+      title: t.title,
+      author: t.author,
+      thumbnailUrl: t.thumbnailUrl,
+      language: t.source.language,
+      hasTranscript: true,
+      transcriptCharCount: t.text.length,
+      transcriptSource: t.source,
       summary: ai.data.summary,
       keyPoints: ai.data.keyPoints,
       detailedNotes: ai.data.detailedNotes,
@@ -1093,6 +1400,7 @@ export async function POST(request: NextRequest) {
       generatedAt: new Date().toISOString(),
       warnings,
       cost,
+      transcriptCacheHit: acquired.cacheHit,
     };
     return NextResponse.json(payload);
   } catch (err) {
@@ -1103,3 +1411,4 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+

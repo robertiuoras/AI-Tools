@@ -58,6 +58,7 @@ export type RateLimitKind =
   | 'videos_analyze'
   | 'openai_test'
   | 'video_summary'
+  | 'video_summary_chat'
   | 'prompts_analyze'
   | 'prompts_improve'
   | 'cs2_prices'
@@ -106,6 +107,18 @@ const LIMITS: Record<RateLimitKind, { windowMs: number; max: number }[]> = {
     {
       windowMs: 3_600_000,
       max: envInt('RATE_LIMIT_VIDEO_SUMMARY_PER_HOUR', 80),
+    },
+  ],
+  // Q&A follow-ups against an already-summarised video. Single LLM call against
+  // the cached transcript, no transcription, so we can be more permissive.
+  video_summary_chat: [
+    {
+      windowMs: 60_000,
+      max: envInt('RATE_LIMIT_VIDEO_SUMMARY_CHAT_PER_MINUTE', 30),
+    },
+    {
+      windowMs: 3_600_000,
+      max: envInt('RATE_LIMIT_VIDEO_SUMMARY_CHAT_PER_HOUR', 240),
     },
   ],
   // Prompt analyser — small token footprint per call (just classification).

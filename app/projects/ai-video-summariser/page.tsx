@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -18,22 +18,35 @@ import {
   ExternalLink,
   Wand2,
   Coins,
+  MessageCircle,
+  Send,
+  Database,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 
+type TranscriptKind =
+  | "youtube-captions-manual"
+  | "youtube-captions-asr"
+  | "youtube-whisper"
+  | "tiktok-whisper";
+
 interface SummaryResult {
-  source: "youtube" | "tiktok" | "upload";
+  source: "youtube" | "tiktok";
   videoUrl: string;
-  fileName: string | null;
   title: string | null;
   author: string | null;
   thumbnailUrl: string | null;
   language: string | null;
   hasTranscript: boolean;
   transcriptCharCount: number;
+  transcriptSource: {
+    kind: TranscriptKind;
+    language: string | null;
+    charCount: number;
+  };
   summary: string;
   keyPoints: string[];
   detailedNotes: Array<{ section: string; bullets: string[] }>;
@@ -41,7 +54,7 @@ interface SummaryResult {
   actionItems: string[];
   outline: Array<{ section: string; bullets: string[] }>;
   transcriptCoverage: {
-    mode: "full" | "excerpted" | "metadata";
+    mode: "full" | "excerpted";
     inputCharCount: number;
     analyzedCharCount: number;
   };
@@ -56,14 +69,27 @@ interface SummaryResult {
     outputCostUsd: number;
     totalCostUsd: number;
   } | null;
+  transcriptCacheHit: boolean;
 }
 
 const SAVED_RESULT_KEY = "ai-video-summariser:last-result";
 
 function sourceLabel(source: SummaryResult["source"]): string {
   if (source === "youtube") return "YouTube";
-  if (source === "tiktok") return "TikTok";
-  return "Uploaded file";
+  return "TikTok";
+}
+
+function transcriptKindLabel(kind: TranscriptKind): string {
+  switch (kind) {
+    case "youtube-captions-manual":
+      return "YouTube manual captions";
+    case "youtube-captions-asr":
+      return "YouTube auto-captions";
+    case "youtube-whisper":
+      return "Whisper (YouTube audio)";
+    case "tiktok-whisper":
+      return "Whisper (TikTok audio)";
+  }
 }
 
 /** Format a USD amount that's typically a fraction of a cent. */
@@ -83,21 +109,16 @@ function buildMarkdown(s: SummaryResult): string {
   lines.push("");
   lines.push(`**Source:** ${sourceLabel(s.source)}  `);
   if (s.videoUrl) lines.push(`**URL:** ${s.videoUrl}  `);
-  if (s.fileName) lines.push(`**File:** ${s.fileName}  `);
   lines.push(
     `**Generated:** ${new Date(s.generatedAt).toLocaleString()}  `,
   );
-  if (s.hasTranscript) {
-    lines.push(
-      `**Transcript:** ${
-        s.transcriptCoverage.mode === "excerpted"
-          ? `${s.transcriptCoverage.analyzedCharCount.toLocaleString()} / ${s.transcriptCoverage.inputCharCount.toLocaleString()} chars analyzed`
-          : `${s.transcriptCharCount.toLocaleString()} chars`
-      }`,
-    );
-  } else {
-    lines.push(`**Transcript:** unavailable`);
-  }
+  lines.push(
+    `**Transcript:** ${transcriptKindLabel(s.transcriptSource.kind)} • ${
+      s.transcriptCoverage.mode === "excerpted"
+        ? `${s.transcriptCoverage.analyzedCharCount.toLocaleString()} / ${s.transcriptCoverage.inputCharCount.toLocaleString()} chars analyzed`
+        : `${s.transcriptCharCount.toLocaleString()} chars`
+    }`,
+  );
   if (s.cost) {
     lines.push(
       `**Cost:** ${formatUsd(s.cost.totalCostUsd)} (${s.cost.totalTokens.toLocaleString()} tokens, ${s.cost.model})`,
@@ -176,7 +197,7 @@ async function downloadPdf(s: SummaryResult): Promise<void> {
   writeWrapped(s.title ?? "Video summary", { size: 22, bold: true, gap: 8 });
   if (s.author) writeWrapped(`by ${s.author}`, { size: 11, gap: 4 });
   writeWrapped(
-    [sourceLabel(s.source), s.videoUrl || s.fileName].filter(Boolean).join("  •  "),
+    [sourceLabel(s.source), s.videoUrl].filter(Boolean).join("  •  "),
     { size: 9, gap: 18 },
   );
 
@@ -267,15 +288,25 @@ function detectPlatform(url: string): "youtube" | "tiktok" | null {
   }
 }
 
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
 export default function AiVideoSummariserPage() {
   const [url, setUrl] = useState("");
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<{ message: string; hint?: string } | null>(
     null,
   );
   const [result, setResult] = useState<SummaryResult | null>(null);
   const [copied, setCopied] = useState<"md" | null>(null);
+
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
 
   const detected = detectPlatform(url.trim());
 
@@ -296,8 +327,17 @@ export default function AiVideoSummariserPage() {
     }
   }, []);
 
+  // Auto-scroll chat to the latest message.
+  useEffect(() => {
+    if (chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    }
+  }, [chatHistory.length, chatLoading]);
+
   const saveResult = useCallback((nextResult: SummaryResult, nextUrl: string) => {
     setResult(nextResult);
+    setChatHistory([]);
+    setChatError(null);
     try {
       window.localStorage.setItem(
         SAVED_RESULT_KEY,
@@ -312,27 +352,15 @@ export default function AiVideoSummariserPage() {
     async (e: React.FormEvent) => {
       e.preventDefault();
       const trimmed = url.trim();
-      if (!trimmed && !selectedFile) return;
+      if (!trimmed) return;
       setLoading(true);
       setError(null);
       try {
-        const request =
-          selectedFile != null
-            ? (() => {
-                const form = new FormData();
-                form.append("file", selectedFile);
-                if (trimmed) form.append("url", trimmed);
-                return fetch("/api/projects/video-summary", {
-                  method: "POST",
-                  body: form,
-                });
-              })()
-            : fetch("/api/projects/video-summary", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ url: trimmed }),
-              });
-        const res = await request;
+        const res = await fetch("/api/projects/video-summary", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: trimmed }),
+        });
         const data = (await res.json().catch(() => null)) as
           | (SummaryResult & { error?: undefined })
           | { error: string; hint?: string }
@@ -356,7 +384,59 @@ export default function AiVideoSummariserPage() {
         setLoading(false);
       }
     },
-    [saveResult, selectedFile, url],
+    [saveResult, url],
+  );
+
+  const onChatSubmit = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      const question = chatInput.trim();
+      if (!question || !result || chatLoading) return;
+      setChatError(null);
+      setChatLoading(true);
+      const next: ChatMessage[] = [
+        ...chatHistory,
+        { role: "user", content: question },
+      ];
+      setChatHistory(next);
+      setChatInput("");
+      try {
+        const res = await fetch("/api/projects/video-summary/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: result.videoUrl,
+            question,
+            history: chatHistory,
+          }),
+        });
+        const data = (await res.json().catch(() => null)) as
+          | { answer: string }
+          | { error: string; hint?: string }
+          | null;
+        if (!res.ok || !data || "error" in data) {
+          setChatError(
+            (data && "error" in data && data.error) ||
+              "Chat request failed.",
+          );
+          // Roll back the user message so the input doesn't look stuck.
+          setChatHistory(chatHistory);
+          return;
+        }
+        setChatHistory([
+          ...next,
+          { role: "assistant", content: data.answer },
+        ]);
+      } catch (err) {
+        setChatError(
+          err instanceof Error ? err.message : "Network error — try again.",
+        );
+        setChatHistory(chatHistory);
+      } finally {
+        setChatLoading(false);
+      }
+    },
+    [chatHistory, chatInput, chatLoading, result],
   );
 
   const onCopyMarkdown = async () => {
@@ -400,9 +480,10 @@ export default function AiVideoSummariserPage() {
             <span>Summariser</span>
           </h1>
           <p className="mt-2 max-w-2xl text-base text-muted-foreground">
-            Paste a YouTube URL or upload an audio/video file. If captions are
-            missing, the app creates its own transcript from the audio before
-            summarising.
+            Paste a YouTube or TikTok URL. The app pulls captions when they
+            exist and falls back to transcribing the audio with Whisper, so
+            every summary is grounded in real spoken content — never just the
+            title.
           </p>
         </header>
 
@@ -414,7 +495,7 @@ export default function AiVideoSummariserPage() {
             htmlFor="video-url"
             className="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
           >
-            Video URL
+            YouTube or TikTok URL
           </Label>
           <div className="mt-2 flex flex-col gap-2 sm:flex-row">
             <div className="relative flex-1">
@@ -422,7 +503,7 @@ export default function AiVideoSummariserPage() {
                 id="video-url"
                 type="url"
                 inputMode="url"
-                placeholder="https://www.youtube.com/watch?v=…"
+                placeholder="https://www.youtube.com/watch?v=…  or  https://www.tiktok.com/@user/video/…"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 className="pr-24"
@@ -447,7 +528,7 @@ export default function AiVideoSummariserPage() {
             </div>
             <Button
               type="submit"
-              disabled={loading || (!url.trim() && !selectedFile)}
+              disabled={loading || !url.trim()}
               className="gap-1.5 bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white hover:from-violet-700 hover:to-fuchsia-700"
             >
               {loading ? (
@@ -458,47 +539,23 @@ export default function AiVideoSummariserPage() {
               ) : (
                 <>
                   <Wand2 className="h-4 w-4" />
-                  {selectedFile ? "Transcribe & summarise" : "Summarise"}
+                  Summarise
                 </>
               )}
             </Button>
           </div>
-          <div className="mt-4 rounded-xl border border-dashed border-border/70 bg-background/50 p-4">
-            <Label
-              htmlFor="video-file"
-              className="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
-            >
-              Optional audio/video upload
-            </Label>
-            <Input
-              id="video-file"
-              type="file"
-              accept="audio/*,video/mp4,video/webm,video/quicktime,video/mpeg"
-              className="mt-2"
-              onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
-            />
-            {selectedFile && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                Selected:{" "}
-                <span className="font-medium text-foreground">
-                  {selectedFile.name}
-                </span>{" "}
-                ({(selectedFile.size / 1024 / 1024).toFixed(1)} MB)
-              </p>
-            )}
-          </div>
-          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground/80">
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground/80">
             <p>
-              Results stay saved in this browser while you move between Notes
-              and the summariser. Captionless YouTube URLs are transcribed from
-              audio automatically; uploads are best for large or blocked videos.
+              YouTube: captions when available, otherwise auto-transcribed.
+              TikTok: always Whisper-transcribed from the audio. Re-running the
+              same URL is free (cached transcript).
             </p>
             <span
               className="inline-flex items-center gap-1 rounded-full border border-border/40 bg-muted/40 px-2 py-0.5 font-medium"
-              title="Estimated OpenAI summary cost using gpt-4o-mini ($0.15/M input, $0.60/M output tokens). Auto-transcription cost is separate."
+              title="gpt-4o-mini for summary, gpt-4o-mini-transcribe for Whisper. Cached re-runs cost only the summary."
             >
               <Coins className="h-3 w-3" />
-              Est. cost: ~$0.0003 – $0.005 per video
+              Est. cost: ~$0.0005 – $0.04 per video
             </span>
           </div>
         </form>
@@ -546,17 +603,27 @@ export default function AiVideoSummariserPage() {
                   <span className="rounded-full bg-muted px-2 py-0.5 font-semibold uppercase tracking-wider">
                     {sourceLabel(result.source)}
                   </span>
-                  {result.hasTranscript ? (
-                    <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
-                      <CheckCircle2 className="h-3.5 w-3.5" />
-                      {result.transcriptCoverage.mode === "excerpted"
-                        ? `Transcript excerpted • ${result.transcriptCoverage.analyzedCharCount.toLocaleString()} / ${result.transcriptCoverage.inputCharCount.toLocaleString()} chars`
-                        : `Transcript • ${result.transcriptCharCount.toLocaleString()} chars`}
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
-                      <AlertTriangle className="h-3.5 w-3.5" />
-                      Transcript unavailable
+                  <span
+                    className="inline-flex items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/8 px-2 py-0.5 font-medium text-emerald-700 dark:text-emerald-400"
+                    title={`Transcript provenance: ${transcriptKindLabel(result.transcriptSource.kind)}${
+                      result.transcriptSource.language
+                        ? ` • ${result.transcriptSource.language}`
+                        : ""
+                    } • ${result.transcriptSource.charCount.toLocaleString()} chars`}
+                  >
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    {transcriptKindLabel(result.transcriptSource.kind)}
+                    {result.transcriptCoverage.mode === "excerpted"
+                      ? ` • ${result.transcriptCoverage.analyzedCharCount.toLocaleString()} / ${result.transcriptCoverage.inputCharCount.toLocaleString()} chars`
+                      : ` • ${result.transcriptCharCount.toLocaleString()} chars`}
+                  </span>
+                  {result.transcriptCacheHit && (
+                    <span
+                      className="inline-flex items-center gap-1 rounded-full border border-cyan-500/25 bg-cyan-500/8 px-2 py-0.5 font-medium text-cyan-700 dark:text-cyan-300"
+                      title="Transcript was loaded from the cache — no transcription cost incurred."
+                    >
+                      <Database className="h-3.5 w-3.5" />
+                      Cached
                     </span>
                   )}
                   {result.cost && (
@@ -575,11 +642,6 @@ export default function AiVideoSummariserPage() {
                 {result.author && (
                   <p className="text-sm text-muted-foreground">
                     by {result.author}
-                  </p>
-                )}
-                {result.fileName && (
-                  <p className="text-sm text-muted-foreground">
-                    file: {result.fileName}
                   </p>
                 )}
                 <div className="mt-4 flex flex-wrap gap-2">
@@ -739,6 +801,76 @@ export default function AiVideoSummariserPage() {
                   </div>
                 ))}
               </div>
+            </section>
+
+            <section className="rounded-2xl border border-border/50 bg-card/90 p-5 shadow-md backdrop-blur-sm">
+              <h3 className="mb-3 inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-muted-foreground">
+                <MessageCircle className="h-4 w-4 text-fuchsia-500" />
+                Ask a question about this video
+              </h3>
+              <div
+                ref={chatScrollRef}
+                className={cn(
+                  "max-h-72 overflow-y-auto rounded-xl border border-border/40 bg-background/50 p-3",
+                  chatHistory.length === 0 && !chatLoading && "hidden",
+                )}
+              >
+                <ul className="space-y-3 text-sm">
+                  {chatHistory.map((m, i) => (
+                    <li
+                      key={i}
+                      className={cn(
+                        "rounded-lg px-3 py-2 leading-relaxed",
+                        m.role === "user"
+                          ? "ml-8 bg-violet-500/10 text-foreground"
+                          : "mr-8 bg-muted/60 text-foreground",
+                      )}
+                    >
+                      <span className="mr-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        {m.role === "user" ? "You" : "Answer"}
+                      </span>
+                      {m.content}
+                    </li>
+                  ))}
+                  {chatLoading && (
+                    <li className="mr-8 inline-flex items-center gap-2 rounded-lg bg-muted/60 px-3 py-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Thinking…
+                    </li>
+                  )}
+                </ul>
+              </div>
+              <form
+                onSubmit={onChatSubmit}
+                className="mt-3 flex flex-col gap-2 sm:flex-row"
+              >
+                <Input
+                  type="text"
+                  placeholder="e.g. what tools does the speaker recommend?"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  disabled={chatLoading}
+                  className="flex-1"
+                />
+                <Button
+                  type="submit"
+                  disabled={chatLoading || !chatInput.trim()}
+                  className="gap-1.5"
+                  variant="outline"
+                >
+                  <Send className="h-3.5 w-3.5" />
+                  Ask
+                </Button>
+              </form>
+              {chatError && (
+                <p className="mt-2 text-xs text-red-600 dark:text-red-400">
+                  {chatError}
+                </p>
+              )}
+              <p className="mt-2 text-[11px] text-muted-foreground/70">
+                Answers come from the cached transcript only — the model is
+                instructed to refuse anything not in the video.
+              </p>
             </section>
 
             <p className="text-center text-xs text-muted-foreground/60">
