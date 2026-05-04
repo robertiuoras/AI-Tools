@@ -2036,6 +2036,11 @@ export default function AiBettingBotPage() {
   const [betsLoading, setBetsLoading] = useState<boolean>(false);
   const [refreshingBetId, setRefreshingBetId] = useState<string | null>(null);
 
+  // Top-level view: "analyse" (composer + verdict) or "tracked" (bet history
+  // + calibration). The tracked tab is the place to come back to after a
+  // game finishes — the existing settlement loop auto-grades the result.
+  const [activeView, setActiveView] = useState<"analyse" | "tracked">("analyse");
+
   const oddsParsed: ParsedOdds | null = useMemo(
     () => (odds.trim() ? parseOdds(odds) : null),
     [odds],
@@ -2465,6 +2470,35 @@ export default function AiBettingBotPage() {
           </div>
         </header>
 
+        {/* Tabs: analyse vs tracked bets. */}
+        <div className="mb-6 flex flex-wrap items-center gap-2 border-b border-border/60">
+          {(
+            [
+              { key: "analyse", label: "Analyse" },
+              {
+                key: "tracked",
+                label: bets.length > 0 ? `My bets · ${bets.length}` : "My bets",
+              },
+            ] as const
+          ).map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setActiveView(tab.key)}
+              className={cn(
+                "relative -mb-px border-b-2 px-3 py-2 text-sm font-semibold transition-colors",
+                activeView === tab.key
+                  ? "border-amber-500 text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {activeView === "tracked" ? null : (
+        <>
         {/* Chat composer */}
         <section className="mb-8">
           <div className="rounded-3xl border border-border/60 bg-card/40 p-5 shadow-sm md:p-6">
@@ -3120,9 +3154,14 @@ export default function AiBettingBotPage() {
           </div>
         ) : null}
 
-        {/* Tracked bets + self-calibration — always visible when the user has any */}
-        {(bets.length > 0 || betsLoading) ? (
-          <div className="mt-10 space-y-6">
+        </>
+        )}
+
+        {/* Tracked bets + self-calibration. On the "tracked" tab this is the
+            primary view; on the "analyse" tab it stays inline below the
+            verdict whenever the user has any bets. */}
+        {(activeView === "tracked" || bets.length > 0 || betsLoading) ? (
+          <div className={cn(activeView === "tracked" ? "space-y-6" : "mt-10 space-y-6") }>
             {calibration ? <CalibrationCard summary={calibration} /> : null}
             <section aria-labelledby="my-bets-heading" className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
