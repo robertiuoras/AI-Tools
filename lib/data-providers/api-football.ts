@@ -5,6 +5,7 @@ import type {
   BettingProviderPrediction,
   BettingRealDataPlayer,
 } from "@/lib/betting-bot";
+import type { EspnPastGame } from "@/lib/sports-data";
 import { cached, SPORTS_CACHE_TTL } from "@/lib/sports-cache";
 
 /**
@@ -70,14 +71,14 @@ async function get<T>(path: string): Promise<T | null> {
 }
 
 interface AfTeam {
-  team?: { id?: number; name?: string };
+  team?: { id?: number; name?: string; logo?: string };
 }
 interface AfFixture {
-  fixture?: { id?: number; date?: string; venue?: { name?: string } };
+  fixture?: { id?: number; date?: string; venue?: { name?: string }; status?: { short?: string } };
   league?: { season?: number };
   teams?: {
-    home?: { id?: number; name?: string };
-    away?: { id?: number; name?: string };
+    home?: { id?: number; name?: string; logo?: string; winner?: boolean | null };
+    away?: { id?: number; name?: string; logo?: string; winner?: boolean | null };
   };
   goals?: { home?: number | null; away?: number | null };
 }
@@ -96,6 +97,18 @@ interface AfPredictionItem {
     percent?: { home?: string; draw?: string; away?: string };
     advice?: string;
   };
+}
+
+/**
+ * api-football labels each season by its start year. La Liga 2024-25 is
+ * `season=2024`, EPL 2025-26 is `season=2025`. So in May we still want
+ * the previous calendar year. Pass this everywhere we need a season param.
+ */
+function currentSoccerSeason(): number {
+  const now = new Date();
+  // European seasons start in August. Months 0-6 (Jan-Jul) are inside the
+  // season that started the previous calendar year.
+  return now.getMonth() >= 7 ? now.getFullYear() : now.getFullYear() - 1;
 }
 
 async function resolveTeamId(name: string): Promise<number | null> {
@@ -170,7 +183,7 @@ export async function apiFootballInjuries(
     SPORTS_CACHE_TTL.injuries,
     async () => {
       const data = await get<{ response?: AfInjuryItem[] }>(
-        `/injuries?team=${id}&season=${new Date().getFullYear()}`,
+        `/injuries?team=${id}&season=${currentSoccerSeason()}`,
       );
       const rows = data?.response ?? [];
       const seen = new Set<string>();
@@ -279,6 +292,75 @@ export async function apiFootballPrediction(
         awayWinPct: num(p.percent?.away),
         advice: p.advice ?? null,
       };
+    },
+  );
+}
+
+/**
+ * Last `limit` completed fixtures for a team — used as a soccer fallback
+ * when ESPN's schedule endpoint comes back empty (which it often does
+ * for European leagues). Returns the same EspnPastGame shape so the
+ * existing form / streak / margin helpers work without translation.
+ */
+export async function apiFootballRecentGames(
+  teamName: string,
+  limit = 10,
+): Promise<EspnPastGame[]> {
+  if (!authConfig()) return [];
+  const id = await resolveTeamId(teamName);
+  if (!id) return [];
+  return cached(
+    `apifootball:recent:${id}:${limit}`,
+    SPORTS_CACHE_TTL.schedule,
+    async () => {
+      const data = await get<{ response?: AfFixture[] }>(
+        `/fixtures?team=${id}&last=${limit}`,
+      );
+      const rows = data?.response ?? [];
+      const out: EspnPastGame[] = [];
+      for (const fx of rows) {
+        const home = fx.teams?.home;
+        const away = fx.teams?.away;
+        const date = fx.fixture?.date ?? "";
+        if (!home || !away || !date) continue;
+        // Only count completed games — short codes: FT (full time),
+        // AET (after extra time), PEN (after penalties).
+        const short = fx.fixture?.status?.short ?? "";
+        if (!["FT", "AET", "PEN"].includes(short)) continue;
+        const isHome = home.id === id;
+        const me = isHome ? home : away;
+        const opp = isHome ? away : home;
+        const myScore = (isHome ? fx.goals?.home : fx.goals?.away) ?? null;
+        const oppScore = (isHome ? fx.goals?.away : fx.goals?.home) ?? null;
+        const wonFlag = me.winner;
+        const result: "W" | "L" | "T" | null =
+          wonFlag === true
+            ? "W"
+            : wonFlag === false
+              ? "L"
+              : myScore != null && oppScore != null
+                ? myScore > oppScore
+                  ? "W"
+                  : myScore < oppScore
+                    ? "L"
+                    : "T"
+                : null;
+        out.push({
+          id: String(fx.fixture?.id ?? ""),
+          date,
+          opponent: {
+            id: String(opp.id ?? ""),
+            displayName: opp.name ?? "",
+            abbreviation: (opp.name ?? "").slice(0, 3).toUpperCase(),
+            logo: opp.logo ?? null,
+          },
+          homeAway: isHome ? "home" : "away",
+          teamScore: myScore,
+          oppScore,
+          result,
+        });
+      }
+      return out;
     },
   );
 }

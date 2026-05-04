@@ -53,6 +53,7 @@ import {
   apiFootballInjuries,
   apiFootballLineupForFixture,
   apiFootballPrediction,
+  apiFootballRecentGames,
 } from "@/lib/data-providers/api-football";
 import { balldontlieH2H } from "@/lib/data-providers/balldontlie";
 import { nhlHeadToHead } from "@/lib/data-providers/nhl";
@@ -520,10 +521,10 @@ async function collectRealData(
 
   // Parallelise everything — providers above + ESPN + odds-API.
   const [
-    homeInjuries,
-    awayInjuries,
-    homeGames,
-    awayGames,
+    homeInjuriesEspn,
+    awayInjuriesEspn,
+    homeGamesEspn,
+    awayGamesEspn,
     espnHeadToHead,
     homeStyle,
     awayStyle,
@@ -559,6 +560,20 @@ async function collectRealData(
     predictionPromise,
     weatherPromise,
   ]);
+
+  // ESPN's per-team schedule endpoint is patchy for European soccer (often
+  // returns no past matches at all). Fall back to api-football for recent
+  // games + form so the form / margin / last-10 panels actually populate.
+  const [homeGames, awayGames] = await Promise.all([
+    homeGamesEspn.length > 0 || family !== "soccer"
+      ? Promise.resolve(homeGamesEspn)
+      : apiFootballRecentGames(homeName, 10),
+    awayGamesEspn.length > 0 || family !== "soccer"
+      ? Promise.resolve(awayGamesEspn)
+      : apiFootballRecentGames(awayName, 10),
+  ]);
+  const homeInjuries = homeInjuriesEspn;
+  const awayInjuries = awayInjuriesEspn;
 
   // Books: Entain family first (Ladbrokes / Neds — Betcha's sister books),
   // then ESPN pickcenter as sanity check. De-dup by key.
