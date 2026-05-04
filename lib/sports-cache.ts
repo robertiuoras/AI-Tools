@@ -81,8 +81,11 @@ export async function writeCache(
  * cached value if present and fresh; otherwise calls the fetcher and
  * caches the result before returning.
  *
- * Cached values may be `null` when the fetcher returned null — we still
- * cache those so we don't re-attempt failed lookups inside the TTL.
+ * Empty results (null, undefined, []) are NOT cached. If a fetcher
+ * returns nothing because an env var was missing, an upstream API was
+ * briefly down, or the team id hadn't resolved yet, we want the next
+ * request to retry instead of seeing a stale empty for the TTL window.
+ * Real, populated results cache for the full TTL.
  */
 export async function cached<T>(
   key: string,
@@ -90,15 +93,23 @@ export async function cached<T>(
   fetcher: () => Promise<T>,
 ): Promise<T> {
   const hit = await readCache<T>(key);
-  if (hit !== null) return hit;
+  if (hit !== null) {
+    // Defensive: a previously-cached empty array (from before this guard
+    // was added) would still come back as []. Treat it as a miss so the
+    // fetcher gets a chance to repopulate.
+    if (!isEmptyish(hit)) return hit;
+  }
   const fresh = await fetcher();
-  // Avoid caching giant objects forever; nulls/empties get a shorter TTL.
-  const isEmptyish =
-    fresh === null ||
-    fresh === undefined ||
-    (Array.isArray(fresh) && fresh.length === 0);
-  await writeCache(key, fresh ?? null, isEmptyish ? Math.min(ttlSeconds, 300) : ttlSeconds);
+  if (!isEmptyish(fresh)) {
+    await writeCache(key, fresh, ttlSeconds);
+  }
   return fresh;
+}
+
+function isEmptyish(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  if (Array.isArray(value) && value.length === 0) return true;
+  return false;
 }
 
 export const SPORTS_CACHE_TTL = {

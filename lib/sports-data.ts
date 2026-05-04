@@ -106,6 +106,29 @@ export type EspnFixture = {
   } | null;
 };
 
+/**
+ * Was this event completed? ESPN uses different `type.name` values per sport
+ * (STATUS_FINAL for NBA/NFL/NHL, STATUS_FULL_TIME / STATUS_AFTER_PENALTIES /
+ * STATUS_AFTER_EXTRA_TIME for soccer). The universal signals are
+ * `type.completed === true` and `type.state === "post"` — prefer those, fall
+ * back to a name pattern for older payloads that don't include them.
+ */
+function isCompletedEvent(event: { status?: RawEvent["status"] }): boolean {
+  const t = event.status?.type;
+  if (!t) return false;
+  if (t.completed === true) return true;
+  if (t.state === "post") return true;
+  const name = t.name ?? "";
+  return (
+    name === "STATUS_FINAL" ||
+    name === "STATUS_FULL_TIME" ||
+    name === "STATUS_AFTER_PENALTIES" ||
+    name === "STATUS_AFTER_EXTRA_TIME" ||
+    name === "STATUS_FINAL_PEN" ||
+    name === "STATUS_FINAL_AET"
+  );
+}
+
 async function espnGet<T = unknown>(url: string): Promise<T | null> {
   try {
     const res = await fetch(url, {
@@ -131,7 +154,13 @@ type RawEvent = {
   date?: string;
   name?: string;
   shortName?: string;
-  status?: { type?: { name?: string } };
+  status?: {
+    type?: {
+      name?: string;
+      state?: string; // "pre" | "in" | "post"
+      completed?: boolean;
+    };
+  };
   competitions?: Array<{
     venue?: {
       fullName?: string;
@@ -452,9 +481,7 @@ export async function getRecentGames(
         `${ESPN_BASE}/${sportPath}/teams/${teamId}/schedule`,
       );
       if (!data?.events?.length) return [];
-      const past = data.events.filter(
-        (e) => e.status?.type?.name === "STATUS_FINAL",
-      );
+      const past = data.events.filter((e) => isCompletedEvent(e));
       past.sort(
         (a, b) =>
           new Date(b.date ?? "").getTime() - new Date(a.date ?? "").getTime(),
@@ -539,11 +566,12 @@ export async function getEventSummary(
   if (!home || !away) return null;
 
   const statusName = event.status?.type?.name ?? "UNKNOWN";
+  const completed = isCompletedEvent(event);
   return {
     id: eventId,
     date: event.date ?? "",
     status: statusName,
-    completed: statusName === "STATUS_FINAL",
+    completed,
     homeTeamId: String(home.team?.id ?? ""),
     awayTeamId: String(away.team?.id ?? ""),
     homeScore: home.score != null ? Number(home.score) : null,
@@ -686,7 +714,7 @@ export async function getHeadToHead(
   for (const ev of events) {
     const id = String(ev.id ?? "");
     if (!id || seen.has(id)) continue;
-    if (ev.status?.type?.name !== "STATUS_FINAL") continue;
+    if (!isCompletedEvent(ev)) continue;
     const comp = ev.competitions?.[0];
     if (!comp) continue;
     const home = comp.competitors?.find((c) => c.homeAway === "home");
