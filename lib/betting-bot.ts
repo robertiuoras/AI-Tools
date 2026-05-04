@@ -193,6 +193,21 @@ export interface BettingRealDataTeam {
   /** Generic sport-agnostic style stats (key/label/value). Filled when ESPN
    *  exposes team statistics for the sport (NBA/NFL/NHL/EPL all tend to). */
   style: Array<{ key: string; label: string; value: string }>;
+  /** Internal Elo rating for this team (rolling, computed in lib/elo.ts).
+   *  null = no Elo yet (sport not bootstrapped). */
+  elo: number | null;
+  /** How many games went into the current Elo. Drives confidence weighting. */
+  eloGames: number;
+  /** Confirmed/predicted starting lineup, when a provider exposes it. */
+  lineup: BettingLineupPlayer[];
+}
+
+export interface BettingLineupPlayer {
+  name: string;
+  position: string | null;
+  /** "starter" | "bench" | "out" | "doubt" | string the provider reports. */
+  status: string;
+  number: number | null;
 }
 
 /** A single head-to-head meeting. */
@@ -246,6 +261,59 @@ export interface BettingRealData {
   books: BettingBookOdds[];
   /** Last N head-to-head meetings, most-recent first. */
   headToHead: BettingHeadToHeadGame[];
+  /** Elo-implied home win probability (0-100), null when no Elo data. */
+  eloHomeWinProbPct: number | null;
+  /** Opening vs current line + RLM detection from odds_snapshots. */
+  lineMovement: BettingLineMovement | null;
+  /** Forecast for outdoor sports (soccer); null otherwise. */
+  weather: BettingWeather | null;
+  /** Provider's own win-prob prediction (e.g. API-Football /predictions). */
+  providerPrediction: BettingProviderPrediction | null;
+  /** How many independent providers contributed to the team data above
+   *  (1 = ESPN only, 2 = ESPN + balldontlie, etc.). Drives the verdict
+   *  confidence ceiling — richer data deserves a higher ceiling. */
+  providerCount: number;
+}
+
+export interface BettingLineMovement {
+  /** Earliest snapshot we have for this fixture. */
+  openCapturedAt: string;
+  /** Most recent snapshot. */
+  currentCapturedAt: string;
+  snapshotCount: number;
+  /** Spread move: positive = line moved AGAINST the home team. */
+  spreadMove: number | null;
+  /** Total move: positive = total moved up. */
+  totalMove: number | null;
+  /** Home moneyline move (decimal odds delta). */
+  homeMlMove: number | null;
+  /** True when the line moved opposite the public-money side
+   *  (a classic reverse-line-movement / sharp signal). */
+  reverseLineMove: boolean;
+  /** Pinnacle's current price as the sharpest consensus, when available. */
+  pinnacle: {
+    moneylineHome: number | null;
+    moneylineAway: number | null;
+    spreadPoint: number | null;
+    total: number | null;
+  } | null;
+}
+
+export interface BettingWeather {
+  tempC: number | null;
+  windKph: number | null;
+  precipMm: number | null;
+  conditions: string | null;
+  /** Free-form summary for the prompt. */
+  summary: string;
+}
+
+export interface BettingProviderPrediction {
+  source: string; // "api-football" | ...
+  homeWinPct: number | null;
+  drawPct: number | null;
+  awayWinPct: number | null;
+  advice: string | null;
 }
 
 export interface BettingAnalysisResult {

@@ -681,6 +681,175 @@ function TeamDataPanel({
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
+/*  Power ratings + line movement + weather + lineups                         */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+function PowerAndContextPanel({ data }: { data: BettingRealData }) {
+  const elo =
+    data.homeTeam?.elo != null && data.awayTeam?.elo != null
+      ? {
+          home: data.homeTeam.elo,
+          away: data.awayTeam.elo,
+          homeGames: data.homeTeam.eloGames,
+          awayGames: data.awayTeam.eloGames,
+          homeProbPct: data.eloHomeWinProbPct,
+        }
+      : null;
+  const lm = data.lineMovement;
+  const weather = data.weather;
+  const homeLineup = data.homeTeam?.lineup ?? [];
+  const awayLineup = data.awayTeam?.lineup ?? [];
+  const prediction = data.providerPrediction;
+
+  // Render nothing if every block is empty — keeps the page tidy when no
+  // sport-specific augmentations apply.
+  if (!elo && !lm && !weather && homeLineup.length === 0 && awayLineup.length === 0 && !prediction) {
+    return null;
+  }
+
+  return (
+    <div className="grid gap-3 md:grid-cols-2">
+      {elo ? (
+        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700 dark:text-amber-300">
+            Power ratings · internal Elo
+          </p>
+          <div className="mt-2 flex items-baseline gap-3">
+            <span className="text-2xl font-black tabular-nums">
+              {elo.home.toFixed(0)}
+            </span>
+            <span className="text-xs text-muted-foreground">
+              vs <strong className="font-bold tabular-nums">{elo.away.toFixed(0)}</strong>
+            </span>
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {elo.homeProbPct != null
+              ? `Elo-implied home win prob ${elo.homeProbPct.toFixed(1)}%`
+              : "Elo prob not yet available"}{" "}
+            · {elo.homeGames} / {elo.awayGames} games on file
+          </p>
+        </div>
+      ) : null}
+
+      {lm ? (
+        <div className="rounded-2xl border border-sky-500/30 bg-sky-500/5 p-4">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-sky-700 dark:text-sky-300">
+            Line movement · {lm.snapshotCount} snapshot{lm.snapshotCount === 1 ? "" : "s"}
+          </p>
+          <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+            <div>
+              <p className="text-[10px] text-muted-foreground">Spread Δ</p>
+              <p className="font-bold tabular-nums">{lm.spreadMove ?? "—"}</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-muted-foreground">Total Δ</p>
+              <p className="font-bold tabular-nums">{lm.totalMove ?? "—"}</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-muted-foreground">Home ML Δ</p>
+              <p className="font-bold tabular-nums">{lm.homeMlMove ?? "—"}</p>
+            </div>
+          </div>
+          {lm.reverseLineMove ? (
+            <p className="mt-2 inline-flex items-center gap-1 rounded-full border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-rose-700 dark:text-rose-300">
+              RLM · sharp signal
+            </p>
+          ) : null}
+          {lm.pinnacle ? (
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Pinnacle · ML {lm.pinnacle.moneylineHome ?? "?"}/
+              {lm.pinnacle.moneylineAway ?? "?"} · spread{" "}
+              {lm.pinnacle.spreadPoint ?? "?"} · total {lm.pinnacle.total ?? "?"}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {weather ? (
+        <div className="rounded-2xl border border-cyan-500/30 bg-cyan-500/5 p-4">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-700 dark:text-cyan-300">
+            Weather · venue
+          </p>
+          <p className="mt-1 text-sm font-semibold">{weather.summary}</p>
+          {weather.windKph != null && weather.windKph >= 25 ? (
+            <p className="mt-1 inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-300">
+              High wind · drags totals
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {prediction ? (
+        <div className="rounded-2xl border border-violet-500/30 bg-violet-500/5 p-4">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-violet-700 dark:text-violet-300">
+            Provider prediction · {prediction.source}
+          </p>
+          <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+            <div>
+              <p className="text-[10px] text-muted-foreground">Home</p>
+              <p className="font-bold tabular-nums">
+                {prediction.homeWinPct ?? "—"}%
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] text-muted-foreground">Draw</p>
+              <p className="font-bold tabular-nums">
+                {prediction.drawPct ?? "—"}%
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] text-muted-foreground">Away</p>
+              <p className="font-bold tabular-nums">
+                {prediction.awayWinPct ?? "—"}%
+              </p>
+            </div>
+          </div>
+          {prediction.advice ? (
+            <p className="mt-2 text-[11px] italic text-muted-foreground">
+              &ldquo;{prediction.advice}&rdquo;
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {homeLineup.length + awayLineup.length > 0 ? (
+        <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-4 md:col-span-2">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-700 dark:text-emerald-300">
+            Predicted / confirmed lineups
+          </p>
+          <div className="mt-2 grid gap-3 md:grid-cols-2">
+            <div>
+              <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                Home XI
+              </p>
+              <p className="text-xs">
+                {homeLineup
+                  .filter((p) => p.status === "starter")
+                  .slice(0, 11)
+                  .map((p) => p.name)
+                  .join(", ") || <span className="text-muted-foreground">—</span>}
+              </p>
+            </div>
+            <div>
+              <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                Away XI
+              </p>
+              <p className="text-xs">
+                {awayLineup
+                  .filter((p) => p.status === "starter")
+                  .slice(0, 11)
+                  .map((p) => p.name)
+                  .join(", ") || <span className="text-muted-foreground">—</span>}
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
 /*  Head-to-head + market board                                               */
 /* ────────────────────────────────────────────────────────────────────────── */
 
@@ -2588,6 +2757,11 @@ export default function AiBettingBotPage() {
                     />
                   ) : null}
                 </div>
+
+                {/* Power-ratings, line-movement, weather, and lineup
+                    chips — grounds the prompt's heaviest-weight metrics
+                    that ESPN data alone can't fill. */}
+                <PowerAndContextPanel data={result.realData} />
 
                 {/* Head-to-head history — grounds the "H2H" metric. */}
                 <HeadToHeadPanel data={result.realData} />

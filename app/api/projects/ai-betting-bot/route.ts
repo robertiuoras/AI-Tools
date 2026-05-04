@@ -39,6 +39,33 @@ import {
   formatCalibrationForPrompt,
   listTrackedBets,
 } from "@/lib/betting-bot-bets";
+import { eloWinProbability, getEloRatings } from "@/lib/elo";
+import {
+  eventKeyFor,
+  getLineMovement,
+  readH2HHistory,
+  snapshotOdds,
+  writeH2HHistory,
+} from "@/lib/odds-history";
+import { familyFromSportPath, isOutdoorSport } from "@/lib/data-providers";
+import {
+  apiFootballHeadToHead,
+  apiFootballInjuries,
+  apiFootballLineupForFixture,
+  apiFootballPrediction,
+} from "@/lib/data-providers/api-football";
+import { balldontlieH2H } from "@/lib/data-providers/balldontlie";
+import { nhlHeadToHead } from "@/lib/data-providers/nhl";
+import { euroleagueH2H } from "@/lib/data-providers/euroleague";
+import { sportsdbHeadToHead } from "@/lib/data-providers/sportsdb";
+import { openWeatherForVenue } from "@/lib/data-providers/openweather";
+import type {
+  BettingHeadToHeadGame,
+  BettingLineupPlayer,
+  BettingProviderPrediction,
+  BettingRealDataPlayer,
+  BettingWeather,
+} from "@/lib/betting-bot";
 
 /**
  * AI Betting Bot — streaming endpoint, grounded in ESPN's public sports API
@@ -423,17 +450,92 @@ async function collectRealData(
   sportLabel: string,
   fixture: EspnFixture,
 ): Promise<BettingRealData> {
-  // Parallelise everything — these are independent ESPN/odds-API calls.
+  const family = familyFromSportPath(sportPath);
+  const homeName = fixture.homeTeam.displayName;
+  const awayName = fixture.awayTeam.displayName;
+
+  // Per-sport provider chains, each independent — fan out in parallel.
+  const providerH2HPromise = (async (): Promise<{
+    games: BettingHeadToHeadGame[];
+    source: string | null;
+  }> => {
+    if (family === "soccer") {
+      const r = await apiFootballHeadToHead(homeName, awayName);
+      if (r.length) return { games: r, source: "api-football" };
+    }
+    if (family === "nba") {
+      const r = await balldontlieH2H(homeName, awayName);
+      if (r.length) return { games: r, source: "balldontlie" };
+    }
+    if (family === "nhl") {
+      const r = await nhlHeadToHead(homeName, awayName);
+      if (r.length) return { games: r, source: "nhl-stats" };
+    }
+    if (family === "euroleague") {
+      const r = await euroleagueH2H(homeName, awayName);
+      if (r.length) return { games: r, source: "euroleague" };
+    }
+    return { games: [], source: null };
+  })();
+
+  const providerInjuriesPromise = (async (): Promise<{
+    home: BettingRealDataPlayer[];
+    away: BettingRealDataPlayer[];
+    source: string | null;
+  }> => {
+    if (family === "soccer") {
+      const [h, a] = await Promise.all([
+        apiFootballInjuries(homeName),
+        apiFootballInjuries(awayName),
+      ]);
+      if (h.length || a.length) {
+        return { home: h, away: a, source: "api-football" };
+      }
+    }
+    return { home: [], away: [], source: null };
+  })();
+
+  const lineupsPromise = (async (): Promise<{
+    home: BettingLineupPlayer[];
+    away: BettingLineupPlayer[];
+  }> => {
+    if (family !== "soccer") return { home: [], away: [] };
+    const r = await apiFootballLineupForFixture(
+      homeName,
+      awayName,
+      fixture.date || null,
+    );
+    return r ?? { home: [], away: [] };
+  })();
+
+  const predictionPromise: Promise<BettingProviderPrediction | null> = (() => {
+    if (family !== "soccer") return Promise.resolve(null);
+    return apiFootballPrediction(homeName, awayName);
+  })();
+
+  const weatherPromise: Promise<BettingWeather | null> = (() => {
+    if (!isOutdoorSport(family)) return Promise.resolve(null);
+    return openWeatherForVenue(homeName, fixture.date || null);
+  })();
+
+  // Parallelise everything — providers above + ESPN + odds-API.
   const [
     homeInjuries,
     awayInjuries,
     homeGames,
     awayGames,
-    headToHead,
+    espnHeadToHead,
     homeStyle,
     awayStyle,
     pickcenter,
     entainBooks,
+    eloRatings,
+    storedH2H,
+    providerH2H,
+    providerInjuries,
+    lineups,
+    prediction,
+    weather,
   ] = await Promise.all([
     getTeamInjuries(sportPath, fixture.homeTeam.id),
     getTeamInjuries(sportPath, fixture.awayTeam.id),
@@ -449,6 +551,13 @@ async function collectRealData(
       fixture.awayTeam.displayName,
       fixture.date || null,
     ),
+    getEloRatings(sportPath, [fixture.homeTeam.id, fixture.awayTeam.id]),
+    readH2HHistory(sportPath, fixture.homeTeam.id, fixture.awayTeam.id, 10),
+    providerH2HPromise,
+    providerInjuriesPromise,
+    lineupsPromise,
+    predictionPromise,
+    weatherPromise,
   ]);
 
   // Books: Entain family first (Ladbrokes / Neds — Betcha's sister books),
@@ -460,27 +569,171 @@ async function collectRealData(
     return true;
   });
 
+  // SportsDB universal H2H fallback when nothing else found anything.
+  let sportsDbH2H: BettingHeadToHeadGame[] = [];
+  if (espnHeadToHead.length === 0 && providerH2H.games.length === 0 && storedH2H.length === 0) {
+    sportsDbH2H = await sportsdbHeadToHead(homeName, awayName);
+  }
+
+  // Merge H2H sources: persisted store + ESPN + provider + sportsDB,
+  // de-dup by date (day precision) so the same game isn't doubled.
+  const h2hMerged = mergeH2H([
+    ...storedH2H.map(
+      (r): BettingHeadToHeadGame => ({
+        date: `${r.game_date}T00:00:00Z`,
+        season: null,
+        homeTeam: "",
+        awayTeam: "",
+        homeScore: r.home_score,
+        awayScore: r.away_score,
+        winner:
+          r.home_score == null || r.away_score == null
+            ? null
+            : r.home_score > r.away_score
+              ? "home"
+              : r.home_score < r.away_score
+                ? "away"
+                : "tie",
+        venue: r.venue,
+      }),
+    ),
+    ...espnHeadToHead,
+    ...providerH2H.games,
+    ...sportsDbH2H,
+  ]);
+
+  // Persist any newly-discovered H2H rows so future requests benefit
+  // (multi-season accumulation; ESPN only exposes the current season).
+  const toStore = [...espnHeadToHead, ...providerH2H.games, ...sportsDbH2H]
+    .filter((g) => g.date && g.homeScore != null && g.awayScore != null)
+    .map((g) => ({
+      game_date: g.date.slice(0, 10),
+      home_id:
+        g.homeTeam.toLowerCase() === homeName.toLowerCase()
+          ? fixture.homeTeam.id
+          : g.homeTeam.toLowerCase() === awayName.toLowerCase()
+            ? fixture.awayTeam.id
+            : "",
+      away_id:
+        g.awayTeam.toLowerCase() === awayName.toLowerCase()
+          ? fixture.awayTeam.id
+          : g.awayTeam.toLowerCase() === homeName.toLowerCase()
+            ? fixture.homeTeam.id
+            : "",
+      home_score: g.homeScore,
+      away_score: g.awayScore,
+      venue: g.venue,
+      source: providerH2H.source ?? "espn",
+    }))
+    .filter((r) => r.home_id && r.away_id);
+  if (toStore.length) {
+    void writeH2HHistory(sportPath, toStore);
+  }
+
+  // Snapshot the current odds so future requests can compute line movement.
+  const evKey = eventKeyFor({
+    homeTeamName: homeName,
+    awayTeamName: awayName,
+    kickoffIso: fixture.date || null,
+  });
+  if (books.length) {
+    void snapshotOdds({
+      sport: sportPath,
+      eventKey: evKey,
+      espnEventId: fixture.id || null,
+      books,
+    });
+  }
+  const lineMovement = await getLineMovement(evKey);
+
+  // Elo-implied home win probability (uses both ratings + sport-specific
+  // home-court advantage). Null when neither team has a rating yet.
+  const homeElo = eloRatings.get(fixture.homeTeam.id);
+  const awayElo = eloRatings.get(fixture.awayTeam.id);
+  const eloHomeWinProbPct =
+    homeElo && awayElo
+      ? Number(
+          (eloWinProbability(homeElo.rating, awayElo.rating, sportPath) * 100).toFixed(2),
+        )
+      : null;
+
+  // Provider count for confidence ceiling: ESPN always counts as 1.
+  let providerCount = 1;
+  if (providerH2H.source) providerCount += 1;
+  if (providerInjuries.source) providerCount += 1;
+  if (prediction) providerCount += 1;
+  if (lineMovement && lineMovement.snapshotCount >= 2) providerCount += 1;
+
   return {
     source: "espn",
     sportLabel,
     homeTeam: toRealDataTeam(
       fixture.homeTeam,
-      homeInjuries,
+      mergeInjuries(homeInjuries, providerInjuries.home),
       homeGames,
       homeStyle,
       fixture.date || null,
+      homeElo?.rating ?? null,
+      homeElo?.games_count ?? 0,
+      lineups.home,
     ),
     awayTeam: toRealDataTeam(
       fixture.awayTeam,
-      awayInjuries,
+      mergeInjuries(awayInjuries, providerInjuries.away),
       awayGames,
       awayStyle,
       fixture.date || null,
+      awayElo?.rating ?? null,
+      awayElo?.games_count ?? 0,
+      lineups.away,
     ),
     marketOdds: fixture.odds,
     books,
-    headToHead,
+    headToHead: h2hMerged.slice(0, 8),
+    eloHomeWinProbPct,
+    lineMovement,
+    weather,
+    providerPrediction: prediction,
+    providerCount,
   };
+}
+
+/** Merge ESPN-style injuries with provider injuries by player name. */
+function mergeInjuries(
+  espn: EspnInjury[],
+  provider: BettingRealDataPlayer[],
+): EspnInjury[] {
+  if (provider.length === 0) return espn;
+  const seen = new Set(espn.map((i) => i.playerName.toLowerCase()));
+  const extras: EspnInjury[] = [];
+  for (const p of provider) {
+    const key = p.name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    extras.push({
+      playerId: "",
+      playerName: p.name,
+      position: p.position,
+      status: p.status,
+      detail: p.detail,
+      headshot: p.headshot,
+    });
+  }
+  return [...espn, ...extras].slice(0, 16);
+}
+
+/** De-dup H2H rows by date (day precision). Keeps the first occurrence. */
+function mergeH2H(rows: BettingHeadToHeadGame[]): BettingHeadToHeadGame[] {
+  const seen = new Set<string>();
+  const out: BettingHeadToHeadGame[] = [];
+  for (const r of rows) {
+    const key = (r.date || "").slice(0, 10);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
+  }
+  out.sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+  return out;
 }
 
 function toRealDataTeam(
@@ -489,6 +742,9 @@ function toRealDataTeam(
   games: EspnPastGame[],
   style: Array<{ key: string; label: string; value: string }>,
   kickoffIso: string | null,
+  elo: number | null,
+  eloGames: number,
+  lineup: BettingLineupPlayer[],
 ): BettingRealDataTeam {
   const avg = averageScore(games);
   return {
@@ -526,6 +782,9 @@ function toRealDataTeam(
       result: g.result,
     })),
     style,
+    elo: elo != null ? Number(elo.toFixed(1)) : null,
+    eloGames,
+    lineup,
   };
 }
 
@@ -607,10 +866,43 @@ function summariseRealData(data: BettingRealData | null): string {
       ? `Scoreboard odds fallback (${data.marketOdds.provider ?? "ESPN"}): spread ${data.marketOdds.spread ?? "n/a"}, total ${data.marketOdds.overUnder ?? "n/a"}, ML home ${data.marketOdds.homeMoneyline ?? "n/a"} / away ${data.marketOdds.awayMoneyline ?? "n/a"}.`
       : "";
 
+  // Power-ratings block (internal Elo). Populates the 16%-weight rubric
+  // factor that the free ESPN feed doesn't cover (no EPA/xG/KenPom).
+  const eloLine =
+    data.homeTeam?.elo != null && data.awayTeam?.elo != null && data.eloHomeWinProbPct != null
+      ? `POWER RATINGS (internal Elo): HOME ${data.homeTeam.elo} (${data.homeTeam.eloGames} games) vs AWAY ${data.awayTeam.elo} (${data.awayTeam.eloGames} games) → Elo-implied home win prob ${data.eloHomeWinProbPct}%.`
+      : "POWER RATINGS: not yet computed for this sport (Elo bootstraps after a few settled games).";
+
+  // Line-movement block. Drives the 14%-weight rubric factor.
+  const lmLine = data.lineMovement
+    ? `LINE MOVEMENT (${data.lineMovement.snapshotCount} snapshots): spread Δ ${data.lineMovement.spreadMove ?? "n/a"}, total Δ ${data.lineMovement.totalMove ?? "n/a"}, home ML Δ ${data.lineMovement.homeMlMove ?? "n/a"}.${data.lineMovement.reverseLineMove ? " RLM signal detected (line moved against the public favorite — sharp money)." : ""}${data.lineMovement.pinnacle ? ` Pinnacle current: ML ${data.lineMovement.pinnacle.moneylineHome ?? "?"}/${data.lineMovement.pinnacle.moneylineAway ?? "?"}, spread ${data.lineMovement.pinnacle.spreadPoint ?? "?"}, total ${data.lineMovement.pinnacle.total ?? "?"}.` : ""}`
+    : "LINE MOVEMENT: no historical snapshots yet for this fixture (this is the first request — future requests will see deltas).";
+
+  // Lineups (soccer only; from API-Football).
+  const lineupLine =
+    (data.homeTeam?.lineup?.length ?? 0) + (data.awayTeam?.lineup?.length ?? 0) > 0
+      ? `LINEUPS (confirmed/predicted): HOME starters: ${(data.homeTeam?.lineup ?? []).filter((p) => p.status === "starter").map((p) => p.name).slice(0, 11).join(", ") || "n/a"}. AWAY starters: ${(data.awayTeam?.lineup ?? []).filter((p) => p.status === "starter").map((p) => p.name).slice(0, 11).join(", ") || "n/a"}.`
+      : "";
+
+  // Provider prediction (currently only API-Football for soccer).
+  const predictionLine = data.providerPrediction
+    ? `PROVIDER PREDICTION (${data.providerPrediction.source}): home ${data.providerPrediction.homeWinPct ?? "?"}% / draw ${data.providerPrediction.drawPct ?? "?"}% / away ${data.providerPrediction.awayWinPct ?? "?"}%${data.providerPrediction.advice ? ` — advice: "${data.providerPrediction.advice}"` : ""}.`
+    : "";
+
+  // Weather (outdoor sports only).
+  const weatherLine = data.weather
+    ? `WEATHER (kickoff venue): ${data.weather.summary}.${data.weather.windKph != null && data.weather.windKph >= 25 ? " High-wind alert: meaningful for goals/totals." : ""}`
+    : "";
+
   return [
     part("HOME", data.homeTeam),
     part("AWAY", data.awayTeam),
     h2hLine,
+    eloLine,
+    lmLine,
+    lineupLine,
+    predictionLine,
+    weatherLine,
     bookLines,
     legacyLine,
   ]
@@ -758,19 +1050,23 @@ data IS in the REAL DATA block above):
                  splits, rest days, any back-to-back flag, and any injury
                  names from the block.
   • h2h:         use the HEAD-TO-HEAD block above. Quote specific prior
-                 meeting dates + scores. Only say "no meetings" if the
-                 block literally says none.
+                 meeting dates + scores across MULTIPLE seasons when the
+                 block has them. Only say "no meetings" if the block
+                 literally says none.
   • tactical:    reason from pace (ppg + opp ppg → projected total) and the
                  style stats (FG%, 3P%, rebounds, turnovers, etc) that are
-                 present. If one team averages 115 for vs a team allowing
-                 110, name those numbers.
-  • market:     quote the MARKET BOARD lines above — compare Entain/Betcha-
-                 equivalent prices to other books, and compare the projected
-                 pace/total vs the posted total for O/U trend reads.
-  • value:       compute fair win probability from form + H2H + injuries,
-                 convert to fair decimal (1/prob), then compare to the
-                 user/auto-resolved price. Name the edge in %. If no odds
-                 exist say so explicitly.
+                 present. Quote LINEUPS block when available (soccer).
+  • market:     quote the MARKET BOARD + LINE MOVEMENT blocks. If RLM is
+                 flagged, name it as a sharp signal. Compare Pinnacle's
+                 current price (when present) to your fair price.
+  • value:       compute fair win probability from form + H2H + injuries +
+                 POWER RATINGS (Elo) + provider prediction (when present).
+                 If Elo and the model's own fair prob disagree by >5%,
+                 say so explicitly. Convert to fair decimal (1/prob), then
+                 compare to the user/auto-resolved price. Name the edge in %.
+                 If no odds exist say so explicitly.
+  • weather:    when the WEATHER block is present (outdoor sports), tie wind
+                 / rain to expected total impact (≥25 km/h wind drags goals).
 
 Emit your research as a STREAM using EXACTLY this protocol, one item per line:
   STAGE:: <stage-id>        (starts a stage)
@@ -844,20 +1140,29 @@ RULES:
 2. fairWinProbabilityPct must be 1–99 and must be consistent with the
    9 scores and the real-data picture (e.g. a favourite with injury-healthy
    starters at home should typically price higher than 45%).
-3. confidencePct: 0–80 (cap 80). If > 4 metrics have confidence ≤ 3,
-   cap at 55.
-4. Verdict rules (ONLY when odds were provided):
+3. confidencePct: 0–90 (server-side cap depends on data depth — be honest
+   about uncertainty). If > 4 metrics have confidence ≤ 3, cap at 55.
+4. SPECIFIC RUBRIC NOTES (use the REAL DATA block, not external knowledge):
+   - "Power ratings & advanced metrics": cite the Elo block. If Elo is
+     missing, score confidence ≤ 3 — do NOT invent a power-rating number.
+   - "Line movement & sharp action": cite the LINE MOVEMENT block. If
+     "no historical snapshots yet" appears, score confidence ≤ 3.
+   - "Weather & venue": cite the WEATHER block when present, otherwise
+     score confidence ≤ 3. Indoor sports default to neutral (5/3).
+   - "Head-to-head history": prefer multi-season meetings when the H2H
+     block lists them.
+5. Verdict rules (ONLY when odds were provided):
    - edge ≥ +4% AND confidence ≥ 65 AND ≤ 2 against-metrics  → "strong_bet"
    - edge ≥ +2% AND confidence ≥ 55                           → "bet"
    - edge ≥ +1% AND confidence ≥ 45                           → "lean"
    - edge between −1% and +1% OR confidence < 45              → "pass"
    - edge ≤ −2% with high-confidence against metrics          → "fade"
    When odds are NOT provided, follow the oddsContext rule above.
-5. summary: 2–4 paragraphs separated by \\n\\n. Reference specific players
+6. summary: 2–4 paragraphs separated by \\n\\n. Reference specific players
    / teams from the real data block. The first paragraph is the thesis.
-6. risks: 3–5 concrete losing scenarios, named where possible (e.g.
+7. risks: 3–5 concrete losing scenarios, named where possible (e.g.
    "if [Player X] is upgraded to active, the line shifts...").
-7. informationGaps: 3–5 concrete checks the user should still run.
+8. informationGaps: 3–5 concrete checks the user should still run.
 
 Return ONLY valid JSON in EXACTLY this shape:
 {
@@ -1641,16 +1946,31 @@ export async function POST(request: NextRequest) {
           (finalContent as { confidencePct?: number }).confidencePct ?? 0,
         ),
         0,
-        80,
+        90,
       );
       const hasUserNotes = notes.length >= 40;
       const hasRealData = !!(
         realData &&
         (realData.homeTeam || realData.awayTeam)
       );
-      // When we have real ESPN data, we allow the raw ceiling; otherwise
-      // clamp because the model was operating on memory alone.
-      const baseCeiling = hasRealData ? 80 : hasUserNotes ? 65 : 55;
+      // Reward richer data: each independent provider lifts the ceiling.
+      // 1 source (ESPN only) → 80, 2-3 sources → 85, 4+ sources or
+      // Elo+linemove+injuries combined → 90. No data → 55-65 floor as
+      // before so the model can't claim certainty from memory alone.
+      const providerCount = realData?.providerCount ?? (hasRealData ? 1 : 0);
+      const hasEloAndMovement =
+        !!realData?.eloHomeWinProbPct &&
+        !!realData?.lineMovement &&
+        realData.lineMovement.snapshotCount >= 2;
+      const baseCeiling = !hasRealData
+        ? hasUserNotes
+          ? 65
+          : 55
+        : hasEloAndMovement && providerCount >= 3
+          ? 90
+          : providerCount >= 3
+            ? 85
+            : 80;
       const confidencePct = Math.min(rawConfidence, baseCeiling);
 
       // Force verdict to "pass" when no odds — we cannot price an edge.

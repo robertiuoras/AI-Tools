@@ -4,6 +4,7 @@ import type {
   BettingBookOdds,
   BettingHeadToHeadGame,
 } from "@/lib/betting-bot";
+import { cached, SPORTS_CACHE_TTL } from "@/lib/sports-cache";
 
 /**
  * Wrappers around ESPN's free public (unofficial) JSON endpoints.
@@ -386,30 +387,36 @@ export async function getTeamInjuries(
   teamId: string,
 ): Promise<EspnInjury[]> {
   if (!teamId) return [];
-  const data = await espnGet<InjuriesResponse>(
-    `${ESPN_BASE}/${sportPath}/injuries?limit=300`,
+  return cached(
+    `espn:injuries:${sportPath}:${teamId}`,
+    SPORTS_CACHE_TTL.injuries,
+    async () => {
+      const data = await espnGet<InjuriesResponse>(
+        `${ESPN_BASE}/${sportPath}/injuries?limit=300`,
+      );
+      if (!data?.injuries?.length) return [];
+      const block =
+        data.injuries.find((t) => String(t.id ?? "") === teamId) ??
+        data.injuries.find((t) => String(t.team?.id ?? "") === teamId);
+      if (!block?.injuries?.length) return [];
+      return block.injuries
+        .map(
+          (inj): EspnInjury => ({
+            playerId: String(inj.athlete?.id ?? ""),
+            playerName: inj.athlete?.displayName ?? "Unknown",
+            position: inj.athlete?.position?.abbreviation ?? null,
+            status: (inj.status ?? "Questionable").trim(),
+            detail:
+              inj.longComment?.trim() ||
+              inj.shortComment?.trim() ||
+              inj.type?.description?.trim() ||
+              "",
+            headshot: inj.athlete?.headshot?.href ?? null,
+          }),
+        )
+        .slice(0, 12);
+    },
   );
-  if (!data?.injuries?.length) return [];
-  const block =
-    data.injuries.find((t) => String(t.id ?? "") === teamId) ??
-    data.injuries.find((t) => String(t.team?.id ?? "") === teamId);
-  if (!block?.injuries?.length) return [];
-  return block.injuries
-    .map(
-      (inj): EspnInjury => ({
-        playerId: String(inj.athlete?.id ?? ""),
-        playerName: inj.athlete?.displayName ?? "Unknown",
-        position: inj.athlete?.position?.abbreviation ?? null,
-        status: (inj.status ?? "Questionable").trim(),
-        detail:
-          inj.longComment?.trim() ||
-          inj.shortComment?.trim() ||
-          inj.type?.description?.trim() ||
-          "",
-        headshot: inj.athlete?.headshot?.href ?? null,
-      }),
-    )
-    .slice(0, 12);
 }
 
 /* ── Recent games ─────────────────────────────────────────────────────── */
@@ -437,46 +444,52 @@ export async function getRecentGames(
   limit = 10,
 ): Promise<EspnPastGame[]> {
   if (!teamId) return [];
-  const data = await espnGet<ScheduleResponse>(
-    `${ESPN_BASE}/${sportPath}/teams/${teamId}/schedule`,
-  );
-  if (!data?.events?.length) return [];
-  const past = data.events.filter(
-    (e) => e.status?.type?.name === "STATUS_FINAL",
-  );
-  past.sort(
-    (a, b) =>
-      new Date(b.date ?? "").getTime() - new Date(a.date ?? "").getTime(),
-  );
+  return cached(
+    `espn:schedule:${sportPath}:${teamId}:${limit}`,
+    SPORTS_CACHE_TTL.schedule,
+    async () => {
+      const data = await espnGet<ScheduleResponse>(
+        `${ESPN_BASE}/${sportPath}/teams/${teamId}/schedule`,
+      );
+      if (!data?.events?.length) return [];
+      const past = data.events.filter(
+        (e) => e.status?.type?.name === "STATUS_FINAL",
+      );
+      past.sort(
+        (a, b) =>
+          new Date(b.date ?? "").getTime() - new Date(a.date ?? "").getTime(),
+      );
 
-  const out: EspnPastGame[] = [];
-  for (const event of past.slice(0, limit)) {
-    const comp = event.competitions?.[0];
-    if (!comp) continue;
-    const me = comp.competitors?.find(
-      (c) => String(c.team?.id ?? "") === teamId,
-    );
-    const opp = comp.competitors?.find(
-      (c) => String(c.team?.id ?? "") !== teamId,
-    );
-    if (!me || !opp) continue;
-    out.push({
-      id: String(event.id ?? ""),
-      date: event.date ?? "",
-      opponent: {
-        id: String(opp.team?.id ?? ""),
-        displayName: opp.team?.displayName ?? "",
-        abbreviation: opp.team?.abbreviation ?? "",
-        logo: opp.team?.logo ?? null,
-      },
-      homeAway: me.homeAway === "home" ? "home" : "away",
-      teamScore: me.score != null ? Number(me.score) : null,
-      oppScore: opp.score != null ? Number(opp.score) : null,
-      result:
-        me.winner === true ? "W" : me.winner === false ? "L" : null,
-    });
-  }
-  return out;
+      const out: EspnPastGame[] = [];
+      for (const event of past.slice(0, limit)) {
+        const comp = event.competitions?.[0];
+        if (!comp) continue;
+        const me = comp.competitors?.find(
+          (c) => String(c.team?.id ?? "") === teamId,
+        );
+        const opp = comp.competitors?.find(
+          (c) => String(c.team?.id ?? "") !== teamId,
+        );
+        if (!me || !opp) continue;
+        out.push({
+          id: String(event.id ?? ""),
+          date: event.date ?? "",
+          opponent: {
+            id: String(opp.team?.id ?? ""),
+            displayName: opp.team?.displayName ?? "",
+            abbreviation: opp.team?.abbreviation ?? "",
+            logo: opp.team?.logo ?? null,
+          },
+          homeAway: me.homeAway === "home" ? "home" : "away",
+          teamScore: me.score != null ? Number(me.score) : null,
+          oppScore: opp.score != null ? Number(opp.score) : null,
+          result:
+            me.winner === true ? "W" : me.winner === false ? "L" : null,
+        });
+      }
+      return out;
+    },
+  );
 }
 
 /* ── Event summary (used by the settlement job) ───────────────────────── */
@@ -646,12 +659,23 @@ export async function getHeadToHead(
 
   // Pull both teams' schedules in parallel — some seasons the "home" side
   // doesn't have the meeting on its schedule yet but the visitor's does.
+  // Each schedule is independently cached via getRecentGames-style key.
   const [aData, bData] = await Promise.all([
-    espnGet<ScheduleResponse>(
-      `${ESPN_BASE}/${sportPath}/teams/${homeTeamId}/schedule`,
+    cached(
+      `espn:schedule-raw:${sportPath}:${homeTeamId}`,
+      SPORTS_CACHE_TTL.schedule,
+      () =>
+        espnGet<ScheduleResponse>(
+          `${ESPN_BASE}/${sportPath}/teams/${homeTeamId}/schedule`,
+        ),
     ),
-    espnGet<ScheduleResponse>(
-      `${ESPN_BASE}/${sportPath}/teams/${awayTeamId}/schedule`,
+    cached(
+      `espn:schedule-raw:${sportPath}:${awayTeamId}`,
+      SPORTS_CACHE_TTL.schedule,
+      () =>
+        espnGet<ScheduleResponse>(
+          `${ESPN_BASE}/${sportPath}/teams/${awayTeamId}/schedule`,
+        ),
     ),
   ]);
 
@@ -804,28 +828,34 @@ export async function getTeamStyle(
   teamId: string,
 ): Promise<Array<{ key: string; label: string; value: string }>> {
   if (!teamId) return [];
-  const data = await espnGet<TeamStatsResponse>(
-    `${ESPN_BASE}/${sportPath}/teams/${teamId}/statistics`,
-  );
-  const categories =
-    data?.splits?.categories ?? data?.results?.stats?.splitCategories ?? [];
-  if (!categories.length) return [];
+  return cached(
+    `espn:team-style:${sportPath}:${teamId}`,
+    SPORTS_CACHE_TTL.teamStats,
+    async () => {
+      const data = await espnGet<TeamStatsResponse>(
+        `${ESPN_BASE}/${sportPath}/teams/${teamId}/statistics`,
+      );
+      const categories =
+        data?.splits?.categories ?? data?.results?.stats?.splitCategories ?? [];
+      if (!categories.length) return [];
 
-  const wanted = new Set(STYLE_STAT_KEYS[sportPath] ?? DEFAULT_STYLE_KEYS);
-  const hits: Array<{ key: string; label: string; value: string }> = [];
-  for (const cat of categories) {
-    for (const s of cat.stats ?? []) {
-      const k = s.name ?? s.abbreviation ?? "";
-      if (!k || !wanted.has(k)) continue;
-      const label = s.displayName ?? s.shortDisplayName ?? k;
-      const value = s.displayValue ?? String(s.value ?? "");
-      if (!value) continue;
-      hits.push({ key: k, label, value });
-      if (hits.length >= 10) break;
-    }
-    if (hits.length >= 10) break;
-  }
-  return hits;
+      const wanted = new Set(STYLE_STAT_KEYS[sportPath] ?? DEFAULT_STYLE_KEYS);
+      const hits: Array<{ key: string; label: string; value: string }> = [];
+      for (const cat of categories) {
+        for (const s of cat.stats ?? []) {
+          const k = s.name ?? s.abbreviation ?? "";
+          if (!k || !wanted.has(k)) continue;
+          const label = s.displayName ?? s.shortDisplayName ?? k;
+          const value = s.displayValue ?? String(s.value ?? "");
+          if (!value) continue;
+          hits.push({ key: k, label, value });
+          if (hits.length >= 10) break;
+        }
+        if (hits.length >= 10) break;
+      }
+      return hits;
+    },
+  );
 }
 
 /* ── ESPN pickcenter (US-book odds consensus) ─────────────────────────── */
@@ -995,9 +1025,10 @@ export async function getEntainOdds(
   if (!sportKey) return [];
 
   // Regions param pulls books from those markets. We ask for au (Ladbrokes
-  // AU, Neds, TAB AU, Sportsbet, Pointsbet) and uk (Ladbrokes UK, Coral —
-  // also Entain-owned). us is kept as a sanity fallback.
-  const url = `https://api.the-odds-api.com/v4/sports/${sportKey}/odds?regions=au,uk,us&markets=h2h,spreads,totals&oddsFormat=decimal&apiKey=${encodeURIComponent(key)}`;
+  // AU, Neds, TAB AU, Sportsbet, Pointsbet), uk (Ladbrokes UK, Coral —
+  // also Entain-owned), us (sanity fallback) and eu (Pinnacle — sharpest
+  // consensus, used for the line-movement RLM check).
+  const url = `https://api.the-odds-api.com/v4/sports/${sportKey}/odds?regions=au,uk,us,eu&markets=h2h,spreads,totals&oddsFormat=decimal&apiKey=${encodeURIComponent(key)}`;
 
   try {
     const res = await fetch(url, {
@@ -1065,7 +1096,9 @@ export async function getEntainOdds(
             ? "nz"
             : b.key.startsWith("bet365")
               ? "uk"
-              : "unknown";
+              : b.key === "pinnacle" || b.key.endsWith("_eu")
+                ? "eu"
+                : "unknown";
 
       books.push({
         key: b.key,

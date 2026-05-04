@@ -2,6 +2,7 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase";
 import { getEventSummary } from "@/lib/sports-data";
+import { recordEloFromResult } from "@/lib/elo";
 import type {
   BettingAnalysisResult,
   CalibrationBucket,
@@ -44,7 +45,7 @@ type BetStatus = TrackedBetStatus;
 
 type AdminClient = { from: (table: string) => any };
 function admin(): AdminClient {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   return supabaseAdmin as unknown as AdminClient;
 }
 
@@ -195,6 +196,25 @@ async function applySettlement(
 
   const home = summary.homeScore ?? 0;
   const away = summary.awayScore ?? 0;
+
+  // Feed the result into the internal Elo engine so the next request
+  // for either team has fresh power-rating numbers. Best-effort, no-throw.
+  if (
+    bet.sport_path &&
+    bet.espn_home_team_id &&
+    bet.espn_away_team_id &&
+    Number.isFinite(summary.homeScore) &&
+    Number.isFinite(summary.awayScore)
+  ) {
+    void recordEloFromResult({
+      sport: bet.sport_path,
+      homeTeamId: bet.espn_home_team_id,
+      awayTeamId: bet.espn_away_team_id,
+      homeScore: home,
+      awayScore: away,
+      gameDate: bet.kickoff,
+    });
+  }
 
   // Moneyline?
   const side = detectMoneylineSide(
