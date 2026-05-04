@@ -700,15 +700,128 @@ function PowerAndContextPanel({ data }: { data: BettingRealData }) {
   const homeLineup = data.homeTeam?.lineup ?? [];
   const awayLineup = data.awayTeam?.lineup ?? [];
   const prediction = data.providerPrediction;
+  const consensus = data.marketConsensus;
+  const homeXg = data.homeTeam?.xg ?? null;
+  const awayXg = data.awayTeam?.xg ?? null;
 
   // Render nothing if every block is empty — keeps the page tidy when no
   // sport-specific augmentations apply.
-  if (!elo && !lm && !weather && homeLineup.length === 0 && awayLineup.length === 0 && !prediction) {
+  if (
+    !elo &&
+    !lm &&
+    !weather &&
+    homeLineup.length === 0 &&
+    awayLineup.length === 0 &&
+    !prediction &&
+    !consensus &&
+    !homeXg &&
+    !awayXg
+  ) {
     return null;
   }
 
   return (
     <div className="grid gap-3 md:grid-cols-2">
+      {consensus ? (
+        <div className="rounded-2xl border border-fuchsia-500/30 bg-fuchsia-500/5 p-4 md:col-span-2">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-fuchsia-700 dark:text-fuchsia-300">
+            Market consensus · vig-removed across {consensus.bookCount} book{consensus.bookCount === 1 ? "" : "s"}
+          </p>
+          <div className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+            <div>
+              <p className="text-[10px] text-muted-foreground">Fair home</p>
+              <p className="font-bold tabular-nums">
+                {consensus.homeWinProbPct ?? "—"}%
+              </p>
+            </div>
+            {consensus.drawProbPct != null ? (
+              <div>
+                <p className="text-[10px] text-muted-foreground">Fair draw</p>
+                <p className="font-bold tabular-nums">{consensus.drawProbPct}%</p>
+              </div>
+            ) : null}
+            <div>
+              <p className="text-[10px] text-muted-foreground">Fair away</p>
+              <p className="font-bold tabular-nums">
+                {consensus.awayWinProbPct ?? "—"}%
+              </p>
+            </div>
+            {consensus.totalLine != null ? (
+              <div>
+                <p className="text-[10px] text-muted-foreground">
+                  Fair O/U {consensus.totalLine}
+                </p>
+                <p className="font-bold tabular-nums">
+                  {consensus.overProbPct ?? "—"}% / {consensus.underProbPct ?? "—"}%
+                </p>
+              </div>
+            ) : null}
+          </div>
+          {consensus.pinnacle?.homeWinProbPct != null ? (
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Pinnacle (sharpest) · home {consensus.pinnacle.homeWinProbPct}%
+              {consensus.pinnacle.drawProbPct != null
+                ? ` / draw ${consensus.pinnacle.drawProbPct}%`
+                : ""}
+              {" "}/ away {consensus.pinnacle.awayWinProbPct ?? "?"}%
+            </p>
+          ) : null}
+          <p className="mt-1 text-[10px] italic text-muted-foreground">
+            Vig stripped — this is the fair price baseline, not the offered
+            price on any one book.
+          </p>
+        </div>
+      ) : null}
+
+      {homeXg || awayXg ? (
+        <div className="rounded-2xl border border-rose-500/30 bg-rose-500/5 p-4 md:col-span-2">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-rose-700 dark:text-rose-300">
+            Expected goals · understat
+          </p>
+          <div className="mt-2 grid gap-3 sm:grid-cols-2">
+            <div>
+              <p className="mb-0.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                {data.homeTeam?.displayName ?? "Home"}
+              </p>
+              {homeXg ? (
+                <p className="text-xs tabular-nums">
+                  xG <strong>{homeXg.xgPerMatch}</strong> /g for ·{" "}
+                  xGA <strong>{homeXg.xgaPerMatch}</strong> /g against ·{" "}
+                  goals {homeXg.goalsPerMatch}/g · {homeXg.matches} matches
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">No xG data.</p>
+              )}
+            </div>
+            <div>
+              <p className="mb-0.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                {data.awayTeam?.displayName ?? "Away"}
+              </p>
+              {awayXg ? (
+                <p className="text-xs tabular-nums">
+                  xG <strong>{awayXg.xgPerMatch}</strong> /g for ·{" "}
+                  xGA <strong>{awayXg.xgaPerMatch}</strong> /g against ·{" "}
+                  goals {awayXg.goalsPerMatch}/g · {awayXg.matches} matches
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">No xG data.</p>
+              )}
+            </div>
+          </div>
+          {homeXg && awayXg ? (
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Expected combined goals · {(homeXg.xgPerMatch + awayXg.xgaPerMatch +
+                awayXg.xgPerMatch + homeXg.xgaPerMatch) / 2 < 0
+                ? "?"
+                : (((homeXg.xgPerMatch + awayXg.xgaPerMatch) +
+                    (awayXg.xgPerMatch + homeXg.xgaPerMatch)) /
+                    2).toFixed(2)}
+              {" "}— compare to the posted total.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
       {elo ? (
         <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4">
           <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700 dark:text-amber-300">
@@ -1165,7 +1278,31 @@ function CalibrationCard({ summary }: { summary: CalibrationSummary }) {
         ) : null}
       </div>
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-4">
+      <div className="mt-4 grid gap-3 sm:grid-cols-5">
+        {summary.meanClvPct != null ? (
+          <div className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-3 sm:col-span-1">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700 dark:text-amber-300">
+              Mean CLV
+            </p>
+            <p
+              className={cn(
+                "mt-1 text-2xl font-black tabular-nums",
+                summary.meanClvPct > 0
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : summary.meanClvPct < 0
+                    ? "text-rose-600 dark:text-rose-400"
+                    : "text-muted-foreground",
+              )}
+            >
+              {summary.meanClvPct >= 0 ? "+" : ""}
+              {summary.meanClvPct.toFixed(2)}%
+            </p>
+            <p className="text-[11px] text-muted-foreground">
+              over {summary.clvSampleSize} bet
+              {summary.clvSampleSize === 1 ? "" : "s"} · vs closing line
+            </p>
+          </div>
+        ) : null}
         <div className="rounded-xl border border-border/40 bg-background/40 p-3">
           <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
             Settled
@@ -2470,8 +2607,10 @@ export default function AiBettingBotPage() {
           </div>
         </header>
 
-        {/* Tabs: analyse vs tracked bets. */}
-        <div className="mb-6 flex flex-wrap items-center gap-2 border-b border-border/60">
+        {/* Tabs: analyse vs tracked bets. Diagnostic link sits to the
+            right — opens the env / provider self-check JSON. */}
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-2 border-b border-border/60">
+          <div className="flex flex-wrap items-center gap-2">
           {(
             [
               { key: "analyse", label: "Analyse" },
@@ -2495,6 +2634,16 @@ export default function AiBettingBotPage() {
               {tab.label}
             </button>
           ))}
+          </div>
+          <a
+            href="/api/projects/ai-betting-bot/diagnostic"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mb-1 inline-flex items-center gap-1.5 rounded-md border border-border/50 bg-muted/30 px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+            title="Open the JSON self-check (env vars, provider connectivity, Supabase tables)"
+          >
+            <Bot className="h-3 w-3" aria-hidden /> Diagnostic
+          </a>
         </div>
 
         {activeView === "tracked" ? null : (

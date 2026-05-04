@@ -60,11 +60,16 @@ import { nhlHeadToHead } from "@/lib/data-providers/nhl";
 import { euroleagueH2H } from "@/lib/data-providers/euroleague";
 import { sportsdbHeadToHead } from "@/lib/data-providers/sportsdb";
 import { openWeatherForVenue } from "@/lib/data-providers/openweather";
+import { understatTeamXg } from "@/lib/data-providers/understat";
+import { buildMarketConsensus } from "@/lib/odds-math";
+import { priorForSport, shrunkAvg } from "@/lib/league-priors";
 import type {
   BettingHeadToHeadGame,
   BettingLineupPlayer,
+  BettingMarketConsensus,
   BettingProviderPrediction,
   BettingRealDataPlayer,
+  BettingTeamXg,
   BettingWeather,
 } from "@/lib/betting-bot";
 
@@ -557,6 +562,11 @@ async function collectRealData(
     return openWeatherForVenue(homeName, fixture.date || null);
   })();
 
+  const homeXgPromise: Promise<BettingTeamXg | null> =
+    family === "soccer" ? understatTeamXg(sportPath, homeName) : Promise.resolve(null);
+  const awayXgPromise: Promise<BettingTeamXg | null> =
+    family === "soccer" ? understatTeamXg(sportPath, awayName) : Promise.resolve(null);
+
   // Parallelise everything — providers above + ESPN + odds-API.
   const [
     homeInjuriesEspn,
@@ -575,6 +585,8 @@ async function collectRealData(
     lineups,
     prediction,
     weather,
+    homeXg,
+    awayXg,
   ] = await Promise.all([
     getTeamInjuries(sportPath, fixture.homeTeam.id),
     getTeamInjuries(sportPath, fixture.awayTeam.id),
@@ -597,6 +609,8 @@ async function collectRealData(
     lineupsPromise,
     predictionPromise,
     weatherPromise,
+    homeXgPromise,
+    awayXgPromise,
   ]);
 
   // ESPN's per-team schedule endpoint is patchy for European soccer (often
@@ -716,6 +730,10 @@ async function collectRealData(
   if (providerInjuries.source) providerCount += 1;
   if (prediction) providerCount += 1;
   if (lineMovement && lineMovement.snapshotCount >= 2) providerCount += 1;
+  if (homeXg || awayXg) providerCount += 1;
+
+  // Vig-removed multi-book consensus — the actual fair-price baseline.
+  const marketConsensus: BettingMarketConsensus | null = buildMarketConsensus(books);
 
   return {
     source: "espn",
@@ -729,6 +747,8 @@ async function collectRealData(
       homeElo?.rating ?? null,
       homeElo?.games_count ?? 0,
       lineups.home,
+      sportPath,
+      homeXg,
     ),
     awayTeam: toRealDataTeam(
       fixture.awayTeam,
@@ -739,6 +759,8 @@ async function collectRealData(
       awayElo?.rating ?? null,
       awayElo?.games_count ?? 0,
       lineups.away,
+      sportPath,
+      awayXg,
     ),
     marketOdds: fixture.odds,
     books,
@@ -748,6 +770,7 @@ async function collectRealData(
     weather,
     providerPrediction: prediction,
     providerCount,
+    marketConsensus,
   };
 }
 
@@ -798,8 +821,20 @@ function toRealDataTeam(
   elo: number | null,
   eloGames: number,
   lineup: BettingLineupPlayer[],
+  sportPath: string,
+  xg: BettingTeamXg | null,
 ): BettingRealDataTeam {
   const avg = averageScore(games);
+  const prior = priorForSport(sportPath);
+  const sampleSize = avg.wins + avg.losses;
+  const pointsForShrunk = shrunkAvg(avg.ppg, sampleSize, {
+    mean: prior.perMatchFor,
+    strength: prior.priorStrength,
+  });
+  const pointsAgainstShrunk = shrunkAvg(avg.opp, sampleSize, {
+    mean: prior.perMatchAgainst,
+    strength: prior.priorStrength,
+  });
   return {
     id: team.id,
     displayName: team.displayName,
@@ -838,6 +873,9 @@ function toRealDataTeam(
     elo: elo != null ? Number(elo.toFixed(1)) : null,
     eloGames,
     lineup,
+    pointsForShrunk,
+    pointsAgainstShrunk,
+    xg,
   };
 }
 
@@ -877,7 +915,18 @@ function summariseRealData(data: BettingRealData | null): string {
         ? `rest ${t.restDays}d${t.restDays === 0 ? " (BACK-TO-BACK)" : t.restDays >= 3 ? " (well-rested)" : ""}`
         : "rest unknown";
     const marginLine = t.marginAvg != null ? `margin ${t.marginAvg > 0 ? "+" : ""}${t.marginAvg}/g` : "margin n/a";
-    return `${label}: ${t.displayName} (${t.record ?? "record n/a"}) — last-10 ${t.last10Streak || "n/a"} (${splits}), ${marginLine}, avg ${t.pointsForAvg ?? "?"} for / ${t.pointsAgainstAvg ?? "?"} against, ${restLine}. Season stats: ${style}. Injuries: ${inj}. Recent games: ${recent}.`;
+    // Show shrunk averages alongside raw so the model sees both. Shrunk
+    // is what it should reason against; raw shows the noisy small-sample
+    // tendency.
+    const showShrunk =
+      t.pointsForShrunk != null && t.pointsForShrunk !== t.pointsForAvg;
+    const ppgLine = showShrunk
+      ? `avg ${t.pointsForShrunk} for / ${t.pointsAgainstShrunk} against (shrunk; raw ${t.pointsForAvg ?? "?"}/${t.pointsAgainstAvg ?? "?"} over ${t.wins10 + t.losses10} games)`
+      : `avg ${t.pointsForAvg ?? "?"} for / ${t.pointsAgainstAvg ?? "?"} against`;
+    const xgLine = t.xg
+      ? ` xG: ${t.xg.xgPerMatch}/g for, ${t.xg.xgaPerMatch}/g against (${t.xg.matches} matches; goals ${t.xg.goalsPerMatch}/g, conceded ${t.xg.concededPerMatch}/g — gap signals over/under-perform).`
+      : "";
+    return `${label}: ${t.displayName} (${t.record ?? "record n/a"}) — last-10 ${t.last10Streak || "n/a"} (${splits}), ${marginLine}, ${ppgLine}, ${restLine}. Season stats: ${style}. Injuries: ${inj}. Recent games: ${recent}.${xgLine}`;
   };
 
   const h2hLine = data.headToHead.length
@@ -947,6 +996,37 @@ function summariseRealData(data: BettingRealData | null): string {
     ? `WEATHER (kickoff venue): ${data.weather.summary}.${data.weather.windKph != null && data.weather.windKph >= 25 ? " High-wind alert: meaningful for goals/totals." : ""}`
     : "";
 
+  // Vig-removed multi-book consensus — the *fair price baseline*. This is
+  // what the model should compare its own probability to (NOT a single
+  // book's vig-fattened offered price, which would bias edge calc high).
+  const consensusLine = data.marketConsensus
+    ? (() => {
+        const c = data.marketConsensus;
+        const parts: string[] = [
+          `MARKET CONSENSUS (vig-removed across ${c.bookCount} book${c.bookCount === 1 ? "" : "s"}):`,
+        ];
+        if (c.homeWinProbPct != null) {
+          parts.push(
+            ` fair home-win ${c.homeWinProbPct}%${c.drawProbPct != null ? ` / draw ${c.drawProbPct}%` : ""} / away-win ${c.awayWinProbPct ?? "?"}%`,
+          );
+        }
+        if (c.totalLine != null && c.overProbPct != null) {
+          parts.push(
+            `; fair O/U ${c.totalLine} → over ${c.overProbPct}% / under ${c.underProbPct}%`,
+          );
+        }
+        if (c.pinnacle?.homeWinProbPct != null) {
+          parts.push(
+            `. Pinnacle (sharpest book) vig-free: home ${c.pinnacle.homeWinProbPct}%${c.pinnacle.drawProbPct != null ? ` / draw ${c.pinnacle.drawProbPct}%` : ""} / away ${c.pinnacle.awayWinProbPct ?? "?"}%.`,
+          );
+        }
+        parts.push(
+          " Use these as the *fair-price reference* for edge calculations — NOT the offered price on any one book.",
+        );
+        return parts.join("");
+      })()
+    : "";
+
   return [
     part("HOME", data.homeTeam),
     part("AWAY", data.awayTeam),
@@ -956,6 +1036,7 @@ function summariseRealData(data: BettingRealData | null): string {
     lineupLine,
     predictionLine,
     weatherLine,
+    consensusLine,
     bookLines,
     legacyLine,
   ]
@@ -1196,14 +1277,25 @@ RULES:
 3. confidencePct: 0–90 (server-side cap depends on data depth — be honest
    about uncertainty). If > 4 metrics have confidence ≤ 3, cap at 55.
 4. SPECIFIC RUBRIC NOTES (use the REAL DATA block, not external knowledge):
-   - "Power ratings & advanced metrics": cite the Elo block. If Elo is
-     missing, score confidence ≤ 3 — do NOT invent a power-rating number.
+   - "Power ratings & advanced metrics": cite the Elo block AND the
+     understat xG block when present. If both are missing, score
+     confidence ≤ 3 — do NOT invent a power-rating number.
    - "Line movement & sharp action": cite the LINE MOVEMENT block. If
      "no historical snapshots yet" appears, score confidence ≤ 3.
    - "Weather & venue": cite the WEATHER block when present, otherwise
      score confidence ≤ 3. Indoor sports default to neutral (5/3).
    - "Head-to-head history": prefer multi-season meetings when the H2H
      block lists them.
+   - "Market efficiency & price value": ALWAYS compare your fair-prob to
+     the MARKET CONSENSUS block (vig-removed multi-book median) — NOT
+     to any single book's offered price. The offered price has a 3-7%
+     vig baked in; comparing to it makes every "edge" look bigger than
+     it really is. The Pinnacle line in the consensus block is the
+     sharpest single book — if your model materially disagrees with
+     Pinnacle (>3% gap), that should LOWER confidence, not raise it.
+   - When you compute fairWinProbabilityPct, anchor it to the consensus
+     and only deviate when the real-data block gives you a concrete
+     reason (injury, lineup change, xG mismatch, RLM signal).
 5. Verdict rules (ONLY when odds were provided):
    - edge ≥ +4% AND confidence ≥ 65 AND ≤ 2 against-metrics  → "strong_bet"
    - edge ≥ +2% AND confidence ≥ 55                           → "bet"

@@ -3,6 +3,7 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase";
 import { getEventSummary } from "@/lib/sports-data";
 import { recordEloFromResult } from "@/lib/elo";
+import { computeAndPersistClv } from "@/lib/clv";
 import type {
   BettingAnalysisResult,
   CalibrationBucket,
@@ -216,6 +217,11 @@ async function applySettlement(
     });
   }
 
+  // Compute closing-line value: look up the latest odds_snapshot before
+  // kickoff, compare to the price the user took. Best-effort; null if
+  // we never captured a near-kickoff snapshot for this fixture.
+  void computeAndPersistClv(bet);
+
   // Moneyline?
   const side = detectMoneylineSide(
     bet.pick_summary,
@@ -378,6 +384,13 @@ export function buildCalibrationSummary(
     };
   });
 
+  // CLV — only count bets where we captured a closing-line snapshot.
+  const clvBets = settled.filter((b) => typeof b.clv_pct === "number");
+  const meanClvPct =
+    clvBets.length > 0
+      ? clvBets.reduce((acc, b) => acc + (b.clv_pct ?? 0), 0) / clvBets.length
+      : null;
+
   return {
     settled: settled.length,
     wins,
@@ -386,6 +399,8 @@ export function buildCalibrationSummary(
     winRatePct,
     roiPct,
     profitUnits,
+    meanClvPct: meanClvPct != null ? Number(meanClvPct.toFixed(2)) : null,
+    clvSampleSize: clvBets.length,
     brier,
     buckets,
     pending,
@@ -411,7 +426,11 @@ export function formatCalibrationForPrompt(
         `  - ${b.bin.padEnd(8)} (${b.settled} settled): win ${pct(b.winRatePct)}, ROI ${pct(b.roiPct)}, avg-stated-conf ${pct(b.avgConfidence)}`,
     )
     .join("\n");
-  const header = `HISTORICAL SELF-CALIBRATION (this user's ${summary.settled} settled bets, ROI ${pct(summary.roiPct)}, Brier ${summary.brier == null ? "n/a" : summary.brier.toFixed(3)}):`;
+  const clvLine =
+    summary.meanClvPct != null && summary.clvSampleSize > 0
+      ? `, mean CLV ${summary.meanClvPct > 0 ? "+" : ""}${summary.meanClvPct.toFixed(2)}% over ${summary.clvSampleSize} bets`
+      : "";
+  const header = `HISTORICAL SELF-CALIBRATION (this user's ${summary.settled} settled bets, ROI ${pct(summary.roiPct)}, Brier ${summary.brier == null ? "n/a" : summary.brier.toFixed(3)}${clvLine}):`;
   return lines ? `${header}\n${lines}\n(If a bucket's actual win rate is materially below its stated confidence, shrink your confidence accordingly on similar bets today.)` : "";
 }
 

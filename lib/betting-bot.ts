@@ -200,6 +200,12 @@ export interface BettingRealDataTeam {
   eloGames: number;
   /** Confirmed/predicted starting lineup, when a provider exposes it. */
   lineup: BettingLineupPlayer[];
+  /** Sample-size-shrunk PPG (or GPG) — the raw avg blended with the league
+   *  prior so 3-game small samples don't dominate. null = same as raw. */
+  pointsForShrunk: number | null;
+  pointsAgainstShrunk: number | null;
+  /** xG / xGA per match from understat (top-5 European leagues). */
+  xg: BettingTeamXg | null;
 }
 
 export interface BettingLineupPlayer {
@@ -273,6 +279,9 @@ export interface BettingRealData {
    *  (1 = ESPN only, 2 = ESPN + balldontlie, etc.). Drives the verdict
    *  confidence ceiling — richer data deserves a higher ceiling. */
   providerCount: number;
+  /** Vig-free multi-book consensus — the *fair price baseline* the model
+   *  reasons against (instead of one book's offered, vig-fattened price). */
+  marketConsensus: BettingMarketConsensus | null;
 }
 
 export interface BettingLineMovement {
@@ -314,6 +323,34 @@ export interface BettingProviderPrediction {
   drawPct: number | null;
   awayWinPct: number | null;
   advice: string | null;
+}
+
+/** Vig-removed multi-book consensus — used as the *fair-price baseline*
+ *  for edge calculations instead of any single book's offered price. */
+export interface BettingMarketConsensus {
+  homeWinProbPct: number | null;
+  drawProbPct: number | null;
+  awayWinProbPct: number | null;
+  /** Most-quoted O/U total line across the board, when present. */
+  totalLine: number | null;
+  overProbPct: number | null;
+  underProbPct: number | null;
+  bookCount: number;
+  /** Pinnacle treated as the sharpest single book. */
+  pinnacle: {
+    homeWinProbPct: number | null;
+    drawProbPct: number | null;
+    awayWinProbPct: number | null;
+  } | null;
+}
+
+/** Per-team xG / xGA + matches played from understat (top-5 leagues only). */
+export interface BettingTeamXg {
+  matches: number;
+  xgPerMatch: number;
+  xgaPerMatch: number;
+  goalsPerMatch: number;
+  concededPerMatch: number;
 }
 
 export interface BettingAnalysisResult {
@@ -505,6 +542,12 @@ export interface TrackedBetRow {
   profit_units: number | null;
   user_notes: string | null;
   snapshot: BettingAnalysisResult | null;
+  /** Closest-to-kickoff odds we captured for this bet — the basis for CLV. */
+  closing_odds_decimal: number | null;
+  closing_implied_pct: number | null;
+  /** CLV % = (bet_odds_decimal / closing_odds_decimal - 1) * 100. Positive
+   *  means you got a better price than where the line closed. */
+  clv_pct: number | null;
 }
 
 export interface CalibrationBucket {
@@ -530,6 +573,11 @@ export interface CalibrationSummary {
   buckets: CalibrationBucket[];
   pending: number;
   needsReview: number;
+  /** Mean closing-line value across bets where we captured a closing
+   *  snapshot. Long-run +2% CLV is a profitable bettor regardless of
+   *  W/L on small samples. null when no CLV-eligible bets yet. */
+  meanClvPct: number | null;
+  clvSampleSize: number;
 }
 
 export type BettingStreamEvent =
