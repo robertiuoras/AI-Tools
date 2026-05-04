@@ -70,13 +70,13 @@ export function LiveblocksRoomProvider({
   // connection, so just render the static fallback (saved HTML preview).
   if (!isReady || !accessToken) return <>{fallback ?? children}</>;
 
+  // initialPresence is consumed once on room mount, so a fresh object
+  // literal here is fine. Do NOT pass a frozen/Object.frozen literal —
+  // Liveblocks mutates the presence object internally and would throw
+  // "Attempting to define property on object that is not extensible."
   return (
-    <RoomProvider id={`note:${noteId}`} initialPresence={EMPTY_PRESENCE}>
+    <RoomProvider id={`note:${noteId}`} initialPresence={{}}>
       {children}
     </RoomProvider>
   );
 }
-
-// Stable reference so RoomProvider doesn't see a "new" presence object
-// on every parent re-render.
-const EMPTY_PRESENCE = Object.freeze({});
