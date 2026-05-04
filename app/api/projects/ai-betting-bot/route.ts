@@ -101,6 +101,44 @@ const MODEL_PRICING_PER_MTOK: Record<string, { input: number; output: number }> 
   "gpt-4o-mini": { input: 0.15, output: 0.6 },
 };
 
+/**
+ * Heuristic: pull the user's intended price out of the prompt or notes.
+ * Looks for explicit American odds (+150 / -110), or a decimal odds value
+ * preceded/followed by a marker word ("at"/"odds"/"price"/book name).
+ * Returns null when nothing reads as a price — better than guessing.
+ */
+function extractOddsFromText(text: string): { odds: ParsedOdds } | null {
+  if (!text) return null;
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+
+  // 1. Explicit American (+150 / -110) — anywhere in the text.
+  const american = trimmed.match(/(?:^|[^\w])([+\-]\d{3,4})(?:[^\d]|$)/);
+  if (american) {
+    const o = parseOdds(american[1]!);
+    if (o) return { odds: o };
+  }
+
+  // 2. Decimal next to a marker word, e.g. "at 1.85", "odds 1.85",
+  //    "@ 1.85", "1.85 betcha", "1.85 decimal", "price 1.85".
+  const markerNumber = trimmed.match(
+    /(?:\b(?:at|odds|price|decimal|@)\s*|\s)([0-9]\.[0-9]{1,3})\b(?:\s*(?:decimal|betcha|ladbrokes|neds|tab|coral|pinnacle|book|book\s*price)?)/i,
+  );
+  if (markerNumber) {
+    const o = parseOdds(markerNumber[1]!);
+    if (o) return { odds: o };
+  }
+  const numberThenBook = trimmed.match(
+    /\b([0-9]\.[0-9]{1,3})\s+(?:on\s+)?(betcha|ladbrokes|neds|tab|coral|pinnacle|sportsbet|bet365|draftkings|fanduel)\b/i,
+  );
+  if (numberThenBook) {
+    const o = parseOdds(numberThenBook[1]!);
+    if (o) return { odds: o };
+  }
+
+  return null;
+}
+
 function clamp(n: number, lo: number, hi: number): number {
   if (!Number.isFinite(n)) return lo;
   return Math.max(lo, Math.min(hi, n));
@@ -1277,13 +1315,22 @@ export async function POST(request: NextRequest) {
     );
   }
   const notes = String(body.notes ?? "").trim();
-  // User-supplied odds take precedence; if blank, we try to fill from
-  // Entain/market books after the fixture + real-data lookup below.
+  // User-supplied odds take precedence; if blank, we scan the free-text
+  // query + notes for an explicit price (e.g. "over 2.5 at 1.85", "1.85
+  // betcha", "+150"). Only as a last resort do we auto-fill from the
+  // book board after the fixture + real-data lookup below.
   let parsedOdds =
     body.odds != null && String(body.odds).trim() !== ""
       ? parseOdds(body.odds)
       : null;
   let oddsSourceLabel: string | null = parsedOdds ? "user" : null;
+  if (!parsedOdds) {
+    const fromText = extractOddsFromText(`${query}\n${notes}`);
+    if (fromText) {
+      parsedOdds = fromText.odds;
+      oddsSourceLabel = "user";
+    }
+  }
   const bankroll =
     body.bankroll === null ||
     body.bankroll === undefined ||
