@@ -63,6 +63,7 @@ import { openWeatherForVenue } from "@/lib/data-providers/openweather";
 import { understatTeamXg } from "@/lib/data-providers/understat";
 import { buildMarketConsensus } from "@/lib/odds-math";
 import { priorForSport, shrunkAvg } from "@/lib/league-priors";
+import { teamImpactSummary } from "@/lib/player-impact";
 import type {
   BettingHeadToHeadGame,
   BettingLineupPlayer,
@@ -835,6 +836,18 @@ function toRealDataTeam(
     mean: prior.perMatchAgainst,
     strength: prior.priorStrength,
   });
+  // Player-impact aggregate — weights each missing player by position
+  // so a starting GK out hits harder than a third-string winger.
+  const playerImpact = teamImpactSummary(
+    injuries.map((i) => ({
+      name: i.playerName,
+      position: i.position,
+      status: i.status,
+      detail: i.detail,
+      headshot: i.headshot,
+    })),
+    lineup,
+  );
   return {
     id: team.id,
     displayName: team.displayName,
@@ -876,6 +889,8 @@ function toRealDataTeam(
     pointsForShrunk,
     pointsAgainstShrunk,
     xg,
+    outImpactScore: playerImpact.totalImpact,
+    outImpactBreakdown: playerImpact.breakdown.slice(0, 5),
   };
 }
 
@@ -897,6 +912,20 @@ function summariseRealData(data: BettingRealData | null): string {
           )
           .join("; ")
       : "no listed injuries";
+    const impactLine =
+      t.outImpactScore > 0
+        ? ` Aggregate missing-player impact: −${(t.outImpactScore * 100).toFixed(1)}% of team strength${
+            t.outImpactBreakdown.length
+              ? ` (top: ${t.outImpactBreakdown
+                  .slice(0, 3)
+                  .map(
+                    (p) =>
+                      `${p.name} ${p.position ? `[${p.position}]` : ""} ${p.status} −${(p.impact * 100).toFixed(1)}%`,
+                  )
+                  .join(", ")})`
+              : ""
+          }.`
+        : "";
     const recent = t.recentGames.length
       ? t.recentGames
           .slice(0, 10)
@@ -926,7 +955,7 @@ function summariseRealData(data: BettingRealData | null): string {
     const xgLine = t.xg
       ? ` xG: ${t.xg.xgPerMatch}/g for, ${t.xg.xgaPerMatch}/g against (${t.xg.matches} matches; goals ${t.xg.goalsPerMatch}/g, conceded ${t.xg.concededPerMatch}/g — gap signals over/under-perform).`
       : "";
-    return `${label}: ${t.displayName} (${t.record ?? "record n/a"}) — last-10 ${t.last10Streak || "n/a"} (${splits}), ${marginLine}, ${ppgLine}, ${restLine}. Season stats: ${style}. Injuries: ${inj}. Recent games: ${recent}.${xgLine}`;
+    return `${label}: ${t.displayName} (${t.record ?? "record n/a"}) — last-10 ${t.last10Streak || "n/a"} (${splits}), ${marginLine}, ${ppgLine}, ${restLine}. Season stats: ${style}. Injuries: ${inj}.${impactLine} Recent games: ${recent}.${xgLine}`;
   };
 
   const h2hLine = data.headToHead.length
@@ -1277,6 +1306,13 @@ RULES:
 3. confidencePct: 0–90 (server-side cap depends on data depth — be honest
    about uncertainty). If > 4 metrics have confidence ≤ 3, cap at 55.
 4. SPECIFIC RUBRIC NOTES (use the REAL DATA block, not external knowledge):
+   - "Injuries & lineup health": use the "Aggregate missing-player
+     impact" line in the HOME/AWAY blocks — this is a position-weighted
+     fraction-of-strength removed (a starting GK at 0.12 hits much
+     harder than a third-string winger at 0.04). When one team's
+     missing-player impact is materially larger than the other's
+     (>=5 percentage points), this metric should swing FOR the side
+     with healthier starters.
    - "Power ratings & advanced metrics": cite the Elo block AND the
      understat xG block when present. If both are missing, score
      confidence ≤ 3 — do NOT invent a power-rating number.

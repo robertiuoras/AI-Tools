@@ -206,6 +206,17 @@ export interface BettingRealDataTeam {
   pointsAgainstShrunk: number | null;
   /** xG / xGA per match from understat (top-5 European leagues). */
   xg: BettingTeamXg | null;
+  /** Aggregate fraction-of-team-strength removed by OUT/Doubt players,
+   *  weighted by position. 0.10 means losing this team's available
+   *  starters costs ~10% of expected output. Capped at 0.35. */
+  outImpactScore: number;
+  /** Top missing players sorted by impact, for the prompt bullet list. */
+  outImpactBreakdown: Array<{
+    name: string;
+    position: string | null;
+    status: string;
+    impact: number;
+  }>;
 }
 
 export interface BettingLineupPlayer {
