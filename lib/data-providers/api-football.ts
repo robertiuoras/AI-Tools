@@ -8,12 +8,18 @@ import type {
 import { cached, SPORTS_CACHE_TTL } from "@/lib/sports-cache";
 
 /**
- * API-Football via RapidAPI — free tier is 100 requests/day, which is
- * plenty when paired with the sports-cache layer. Keyed via the
- * RAPIDAPI_KEY env var; if it's missing, every export here returns null/[]
- * and the caller falls through to the next provider in the chain.
+ * API-Football. Free tier is 100 requests/day, plenty with our cache layer.
  *
- * Endpoints we use:
+ * Two auth modes — set whichever env var you have:
+ *   - API_FOOTBALL_KEY   (direct sign-up at api-football.com)
+ *     → host v3.football.api-sports.io, header x-apisports-key
+ *   - RAPIDAPI_KEY       (RapidAPI marketplace)
+ *     → host api-football-v1.p.rapidapi.com, header x-rapidapi-key
+ *
+ * If neither is set, every export here returns null/[] and the caller
+ * falls through to the next provider in the chain.
+ *
+ * Endpoints we use (same paths under both hosts):
  *   - /teams                  → resolve team id from name
  *   - /fixtures/headtohead    → multi-season H2H
  *   - /fixtures/lineups       → confirmed/predicted lineups
@@ -21,24 +27,39 @@ import { cached, SPORTS_CACHE_TTL } from "@/lib/sports-cache";
  *   - /predictions            → home/draw/away win probabilities
  */
 
-const BASE = "https://api-football-v1.p.rapidapi.com/v3";
+interface AuthConfig {
+  base: string;
+  headers: Record<string, string>;
+}
 
-function headers(): Record<string, string> | null {
-  const key = process.env.RAPIDAPI_KEY;
-  if (!key) return null;
-  return {
-    "x-rapidapi-key": key,
-    "x-rapidapi-host": "api-football-v1.p.rapidapi.com",
-    Accept: "application/json",
-  };
+function authConfig(): AuthConfig | null {
+  const direct = process.env.API_FOOTBALL_KEY;
+  if (direct) {
+    return {
+      base: "https://v3.football.api-sports.io",
+      headers: { "x-apisports-key": direct, Accept: "application/json" },
+    };
+  }
+  const rapid = process.env.RAPIDAPI_KEY;
+  if (rapid) {
+    return {
+      base: "https://api-football-v1.p.rapidapi.com/v3",
+      headers: {
+        "x-rapidapi-key": rapid,
+        "x-rapidapi-host": "api-football-v1.p.rapidapi.com",
+        Accept: "application/json",
+      },
+    };
+  }
+  return null;
 }
 
 async function get<T>(path: string): Promise<T | null> {
-  const h = headers();
-  if (!h) return null;
+  const cfg = authConfig();
+  if (!cfg) return null;
   try {
-    const res = await fetch(`${BASE}${path}`, {
-      headers: h,
+    const res = await fetch(`${cfg.base}${path}`, {
+      headers: cfg.headers,
       signal: AbortSignal.timeout(8_000),
     });
     if (!res.ok) return null;
@@ -96,7 +117,7 @@ export async function apiFootballHeadToHead(
   homeTeamName: string,
   awayTeamName: string,
 ): Promise<BettingHeadToHeadGame[]> {
-  if (!headers()) return [];
+  if (!authConfig()) return [];
   const [hId, aId] = await Promise.all([
     resolveTeamId(homeTeamName),
     resolveTeamId(awayTeamName),
@@ -141,7 +162,7 @@ export async function apiFootballHeadToHead(
 export async function apiFootballInjuries(
   teamName: string,
 ): Promise<BettingRealDataPlayer[]> {
-  if (!headers()) return [];
+  if (!authConfig()) return [];
   const id = await resolveTeamId(teamName);
   if (!id) return [];
   return cached(
@@ -176,7 +197,7 @@ export async function apiFootballLineupForFixture(
   awayTeamName: string,
   kickoffIso: string | null,
 ): Promise<{ home: BettingLineupPlayer[]; away: BettingLineupPlayer[] } | null> {
-  if (!headers()) return null;
+  if (!authConfig()) return null;
   const [hId, aId] = await Promise.all([
     resolveTeamId(homeTeamName),
     resolveTeamId(awayTeamName),
@@ -226,7 +247,7 @@ export async function apiFootballPrediction(
   homeTeamName: string,
   awayTeamName: string,
 ): Promise<BettingProviderPrediction | null> {
-  if (!headers()) return null;
+  if (!authConfig()) return null;
   const [hId, aId] = await Promise.all([
     resolveTeamId(homeTeamName),
     resolveTeamId(awayTeamName),
