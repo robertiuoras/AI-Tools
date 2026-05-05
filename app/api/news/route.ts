@@ -71,10 +71,7 @@ export async function GET() {
           };
         }),
       )
-    ).filter(
-      (item) =>
-        item.content.trim().length > 0 && !isDateOnlyOrEmptyContent(item.content),
-    );
+    ).filter((item) => item.content.trim().length > 0);
 
     return NextResponse.json(items);
   } catch (error) {
@@ -166,25 +163,8 @@ function stripMarkdownHeadingHashes(text: string): string {
 
 function preprocessNewsRawContent(raw: string): string {
   let t = stripDiscordMentions(raw);
-  t = stripMarkdownHeadingHashes(t);
   t = t.replace(/\n{3,}/g, "\n\n").trim();
   return t;
-}
-
-/** True when every non-empty paragraph is only a date line (no body). */
-function isDateOnlyOrEmptyContent(text: string): boolean {
-  const t = text.trim();
-  if (!t) return true;
-  const paras = t
-    .split(/\n\s*\n+/)
-    .map((p) => p.trim())
-    .filter(Boolean);
-  if (paras.length === 0) return true;
-  return paras.every((p) => {
-    const first = p.split(/\r?\n/)[0]?.trim() ?? "";
-    const rest = p.split(/\r?\n/).slice(1).join("\n").trim();
-    return parseDateLikeLine(first) !== null && !rest;
-  });
 }
 
 function normalizeNewsItem(
@@ -196,24 +176,14 @@ function normalizeNewsItem(
   const firstContentLine = lines.find((line) => line.trim().length > 0) ?? "";
   const inferredFromLine = parseDateLikeLine(firstContentLine);
 
-  const shouldDropFirstLine = inferredFromLine !== null;
-  const content = shouldDropFirstLine
-    ? dropFirstNonEmptyLine(lines).join("\n").trim()
-    : preprocessed.trim();
-
   return {
-    content,
+    // Keep sheet content as-is (except Discord mentions) to avoid dropping
+    // paragraphs when entries span irregular row formats.
+    content: preprocessed.trim(),
     // Prefer explicit date headers from the news content (e.g. "May 3rd")
     // over sheet timestamp columns, which may drift by timezone.
     timestamp: inferredFromLine?.toISOString() ?? rawTimestamp,
   };
-}
-
-function dropFirstNonEmptyLine(lines: string[]): string[] {
-  const next = [...lines];
-  const idx = next.findIndex((line) => line.trim().length > 0);
-  if (idx >= 0) next.splice(idx, 1);
-  return next;
 }
 
 function parseDateLikeLine(value: string): Date | null {
