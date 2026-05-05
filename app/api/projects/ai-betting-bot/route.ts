@@ -1157,6 +1157,14 @@ function nameish(a: string, b: string): boolean {
   return an.includes(bn) || bn.includes(an);
 }
 
+function marketFocusFromText(text: string): "corners" | "cards" | "goals" | "other" {
+  const t = text.toLowerCase();
+  if (/\bcorners?\b|\bcorner line\b/.test(t)) return "corners";
+  if (/\bcards?\b|\byellow\b|\bred card\b/.test(t)) return "cards";
+  if (/\bgoals?\b|\bover\/under\b|\btotal goals?\b|\bbtts\b/.test(t)) return "goals";
+  return "other";
+}
+
 function buildResearchPrompt(
   query: string,
   userOdds: ParsedOdds | null,
@@ -1183,6 +1191,14 @@ function buildResearchPrompt(
       )}%. Use this as the working price.`
     : "No odds supplied by the user AND none resolved from the market board. Do NOT invent a price. State that edge/Kelly cannot be computed without odds and recommend the user check Betcha.co.nz for the real price.";
 
+  const marketFocus = marketFocusFromText(`${query}\n${notes}`);
+  const marketGuardrail =
+    marketFocus === "corners"
+      ? "MARKET FOCUS: CORNERS. Do NOT analyze total goals lines. All totals/risk commentary must be about corner counts/tempo/territory, not goals scored."
+      : marketFocus === "cards"
+        ? "MARKET FOCUS: CARDS. Do NOT analyze goals or corner totals unless directly tied to disciplinary pace."
+        : "";
+
   return `You are an elite AI sports-betting analyst. You are grounded in VERIFIED
 real-world data below — never contradict it, never invent stats, teams,
 players or dates that contradict the verified block.
@@ -1206,6 +1222,7 @@ USER QUERY:
 "${query.replace(/"/g, '\\"')}"
 
 ${oddsLine}
+${marketGuardrail}
 
 HOW TO WRITE EACH STAGE (this is critical — do not say "no verified data" if
 data IS in the REAL DATA block above):
@@ -1229,7 +1246,9 @@ data IS in the REAL DATA block above):
                  compare to the user/auto-resolved price. Name the edge in %.
                  If no odds exist say so explicitly.
   • weather:    when the WEATHER block is present (outdoor sports), tie wind
-                 / rain to expected total impact (≥25 km/h wind drags goals).
+                 / rain to market-specific impact. For corners: wind/crossing/
+                 clearances can lift corners. For goals totals: strong wind can
+                 reduce shot quality/finishing.
 
 Emit your research as a STREAM using EXACTLY this protocol, one item per line:
   STAGE:: <stage-id>        (starts a stage)

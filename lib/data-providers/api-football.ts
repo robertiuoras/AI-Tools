@@ -99,6 +99,48 @@ interface AfPredictionItem {
   };
 }
 
+function normalizeTeamName(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\b(fc|cf|ac|sc|afc|cfc|club|de|atletico|athletic)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function pickBestTeamId(rows: AfTeam[], queryName: string): number | null {
+  if (!rows.length) return null;
+  const q = normalizeTeamName(queryName);
+  let bestId: number | null = null;
+  let bestScore = -1;
+
+  for (const row of rows) {
+    const id = row.team?.id;
+    const name = row.team?.name ?? "";
+    if (typeof id !== "number" || !name) continue;
+    const n = normalizeTeamName(name);
+    if (!n) continue;
+
+    let score = 0;
+    if (n === q) score += 100;
+    if (n.includes(q) || q.includes(n)) score += 30;
+
+    const qTokens = q.split(" ").filter(Boolean);
+    const nTokens = n.split(" ").filter(Boolean);
+    const overlap = qTokens.filter((t) => nTokens.includes(t)).length;
+    score += overlap * 5;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestId = id;
+    }
+  }
+
+  return bestId ?? rows[0]?.team?.id ?? null;
+}
+
 /**
  * api-football labels each season by its start year. La Liga 2024-25 is
  * `season=2024`, EPL 2025-26 is `season=2025`. So in May we still want
@@ -120,8 +162,24 @@ async function resolveTeamId(name: string): Promise<number | null> {
       const data = await get<{ response?: AfTeam[] }>(
         `/teams?search=${encodeURIComponent(name)}`,
       );
-      const id = data?.response?.[0]?.team?.id;
-      return typeof id === "number" ? id : null;
+      const directRows = data?.response ?? [];
+      const directBest = pickBestTeamId(directRows, name);
+      if (directBest) return directBest;
+
+      const asciiName = name
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .trim();
+      if (asciiName && asciiName.toLowerCase() !== name.toLowerCase()) {
+        const retry = await get<{ response?: AfTeam[] }>(
+          `/teams?search=${encodeURIComponent(asciiName)}`,
+        );
+        const retryRows = retry?.response ?? [];
+        const retryBest = pickBestTeamId(retryRows, name);
+        if (retryBest) return retryBest;
+      }
+
+      return null;
     },
   );
 }
