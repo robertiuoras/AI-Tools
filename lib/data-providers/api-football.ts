@@ -115,9 +115,20 @@ function normalizeTeamName(value: string): string {
     .trim();
 }
 
+function normalizeTeamQuery(value: string): string {
+  const n = normalizeTeamName(value);
+  if (!n) return n;
+  return n
+    .replace(/\batl\b/g, "atletico")
+    .replace(/\bpsg\b/g, "paris saint germain")
+    .replace(/\bman utd\b/g, "manchester united")
+    .replace(/\bman city\b/g, "manchester city")
+    .trim();
+}
+
 function pickBestTeamId(rows: AfTeam[], queryName: string): number | null {
   if (!rows.length) return null;
-  const q = normalizeTeamName(queryName);
+  const q = normalizeTeamQuery(queryName);
   let bestId: number | null = null;
   let bestScore = -1;
 
@@ -136,6 +147,12 @@ function pickBestTeamId(rows: AfTeam[], queryName: string): number | null {
     const nTokens = n.split(" ").filter(Boolean);
     const overlap = qTokens.filter((t) => nTokens.includes(t)).length;
     score += overlap * 5;
+    // De-prioritise youth/reserve/women squads when searching first teams.
+    if (/\b(u17|u18|u19|u20|u21|u23|ii|b|women|feminino|femenino)\b/.test(n)) {
+      score -= 30;
+    }
+    if (/\bmadrid\b/.test(q) && /\bmadrid\b/.test(n)) score += 8;
+    if (/\batletico\b/.test(q) && /\batletico\b/.test(n)) score += 8;
 
     if (score > bestScore) {
       bestScore = score;
@@ -170,6 +187,16 @@ async function resolveTeamId(name: string): Promise<number | null> {
       const directRows = data?.response ?? [];
       const directBest = pickBestTeamId(directRows, name);
       if (directBest) return directBest;
+
+      const normName = normalizeTeamQuery(name);
+      if (normName && normName !== normalizeTeamName(name)) {
+        const retryNorm = await get<{ response?: AfTeam[] }>(
+          `/teams?search=${encodeURIComponent(normName)}`,
+        );
+        const retryNormRows = retryNorm?.response ?? [];
+        const retryNormBest = pickBestTeamId(retryNormRows, name);
+        if (retryNormBest) return retryNormBest;
+      }
 
       const asciiName = name
         .normalize("NFKD")
@@ -461,6 +488,55 @@ export async function apiFootballRecentGames(
           return out.slice(0, limit);
         }
       }
+      // Free-tier fallback: when season-based queries are sparse or mis-mapped,
+      // use latest completed fixtures without season filter.
+      const latest = await get<{ response?: AfFixture[] }>(`/fixtures?team=${id}&last=25`);
+      const latestRows = latest?.response ?? [];
+      const latestOut: EspnPastGame[] = [];
+      for (const fx of latestRows) {
+        const home = fx.teams?.home;
+        const away = fx.teams?.away;
+        const date = fx.fixture?.date ?? "";
+        if (!home || !away || !date) continue;
+        const short = fx.fixture?.status?.short ?? "";
+        if (!["FT", "AET", "PEN"].includes(short)) continue;
+        const isHome = home.id === id;
+        const me = isHome ? home : away;
+        const opp = isHome ? away : home;
+        const myScore = (isHome ? fx.goals?.home : fx.goals?.away) ?? null;
+        const oppScore = (isHome ? fx.goals?.away : fx.goals?.home) ?? null;
+        const wonFlag = me.winner;
+        const result: "W" | "L" | "T" | null =
+          wonFlag === true
+            ? "W"
+            : wonFlag === false
+              ? "L"
+              : myScore != null && oppScore != null
+                ? myScore > oppScore
+                  ? "W"
+                  : myScore < oppScore
+                    ? "L"
+                    : "T"
+                : null;
+        latestOut.push({
+          id: String(fx.fixture?.id ?? ""),
+          date,
+          opponent: {
+            id: String(opp.id ?? ""),
+            displayName: opp.name ?? "",
+            abbreviation: (opp.name ?? "").slice(0, 3).toUpperCase(),
+            logo: opp.logo ?? null,
+          },
+          homeAway: isHome ? "home" : "away",
+          teamScore: myScore,
+          oppScore,
+          result,
+        });
+      }
+      if (latestOut.length > 0) {
+        latestOut.sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+        return latestOut.slice(0, limit);
+      }
       return [];
     },
   );
@@ -545,6 +621,60 @@ export async function apiFootballRecentCornerAverages(
             sample,
           };
         }
+      }
+
+      const latest = await get<{ response?: AfFixture[] }>(`/fixtures?team=${id}&last=25`);
+      const played = (latest?.response ?? [])
+        .filter((fx) => {
+          const short = fx.fixture?.status?.short ?? "";
+          return ["FT", "AET", "PEN"].includes(short);
+        })
+        .sort(
+          (a, b) => Date.parse(b.fixture?.date ?? "") - Date.parse(a.fixture?.date ?? ""),
+        )
+        .slice(0, limit);
+
+      let forSum = 0;
+      let againstSum = 0;
+      let sample = 0;
+      for (const fx of played) {
+        const fxId = fx.fixture?.id;
+        if (!fxId) continue;
+        const stats = await get<{ response?: AfFixtureStatisticsItem[] }>(
+          `/fixtures/statistics?fixture=${fxId}`,
+        );
+        const sRows = stats?.response ?? [];
+        if (sRows.length < 2) continue;
+        const parseCorners = (row: AfFixtureStatisticsItem): number | null => {
+          const hit = (row.statistics ?? []).find((s) =>
+            /corner kicks/i.test(String(s.type ?? "")),
+          );
+          if (!hit) return null;
+          const raw = hit.value;
+          if (raw == null) return null;
+          if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
+          const n = Number(String(raw).replace(/[^\d.-]/g, ""));
+          return Number.isFinite(n) ? n : null;
+        };
+        const home = sRows[0];
+        const away = sRows[1];
+        if (!home || !away) continue;
+        const homeCorners = parseCorners(home);
+        const awayCorners = parseCorners(away);
+        if (homeCorners == null || awayCorners == null) continue;
+        const isHome = fx.teams?.home?.id === id;
+        const teamCorners = isHome ? homeCorners : awayCorners;
+        const oppCorners = isHome ? awayCorners : homeCorners;
+        forSum += teamCorners;
+        againstSum += oppCorners;
+        sample += 1;
+      }
+      if (sample > 0) {
+        return {
+          cornersForAvg: Number((forSum / sample).toFixed(2)),
+          cornersAgainstAvg: Number((againstSum / sample).toFixed(2)),
+          sample,
+        };
       }
 
       return null;
