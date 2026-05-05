@@ -63,6 +63,7 @@ import { euroleagueH2H } from "@/lib/data-providers/euroleague";
 import { sportsdbHeadToHead } from "@/lib/data-providers/sportsdb";
 import { openWeatherForVenue } from "@/lib/data-providers/openweather";
 import { understatTeamXg } from "@/lib/data-providers/understat";
+import { footballDataRecentGames, footballDataTeamStanding } from "@/lib/data-providers/football-data";
 import { buildMarketConsensus } from "@/lib/odds-math";
 import { priorForSport, shrunkAvg } from "@/lib/league-priors";
 import { teamImpactSummary } from "@/lib/player-impact";
@@ -691,6 +692,13 @@ async function collectRealData(
     if (home.length || away.length) {
       return { home, away, source: "api-football" };
     }
+    const [fdHome, fdAway] = await Promise.all([
+      footballDataRecentGames(homeName, 10),
+      footballDataRecentGames(awayName, 10),
+    ]);
+    if (fdHome.length || fdAway.length) {
+      return { home: fdHome, away: fdAway, source: "football-data" };
+    }
     return { home: [], away: [], source: null };
   })();
 
@@ -734,9 +742,13 @@ async function collectRealData(
   const apiAwayCornersPromise =
     family === "soccer" ? apiFootballRecentCornerAverages(awayName, 10) : Promise.resolve(null);
   const homeStandingPromise =
-    family === "soccer" ? apiFootballTeamStanding(homeName) : Promise.resolve(null);
+    family === "soccer"
+      ? (async () => (await apiFootballTeamStanding(homeName)) ?? (await footballDataTeamStanding(homeName)))()
+      : Promise.resolve(null);
   const awayStandingPromise =
-    family === "soccer" ? apiFootballTeamStanding(awayName) : Promise.resolve(null);
+    family === "soccer"
+      ? (async () => (await apiFootballTeamStanding(awayName)) ?? (await footballDataTeamStanding(awayName)))()
+      : Promise.resolve(null);
 
   // Parallelise everything — providers above + ESPN + odds-API.
   const [

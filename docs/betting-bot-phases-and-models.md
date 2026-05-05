@@ -73,6 +73,13 @@ This document is the running reference for how the betting bot currently works a
    - reweight model priors by observed CLV and Brier/log-loss
 5. Add market-specific confidence model so confidence is not mostly LLM-driven.
 
+## External keys (optional)
+
+- `API_FOOTBALL_KEY` — primary free soccer provider (already in use)
+- `FOOTBALL_DATA_API_KEY` — fallback provider for standings + recent matches
+
+If `FOOTBALL_DATA_API_KEY` is missing, the bot still runs and simply skips that fallback.
+
 ## How to review in debug payload
 
 Look at:
