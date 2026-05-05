@@ -1,10 +1,4 @@
 {
   "version": 2,
-  "buildCommand": "npm run build",
-  "crons": [
-    {
-      "path": "/api/projects/ai-betting-bot/cron/snapshot-closing",
-      "schedule": "0 0 * * *"
-    }
-  ]
+  "buildCommand": "npm run build"
 }
