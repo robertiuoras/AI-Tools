@@ -260,7 +260,7 @@ export interface BettingBookOdds {
 }
 
 export interface BettingRealData {
-  source: "espn" | "none";
+  source: "espn" | "api-football" | "none";
   sportLabel: string | null;
   homeTeam: BettingRealDataTeam | null;
   awayTeam: BettingRealDataTeam | null;

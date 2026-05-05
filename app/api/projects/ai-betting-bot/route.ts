@@ -540,6 +540,22 @@ async function collectRealData(
     return { home: [], away: [], source: null };
   })();
 
+  const providerRecentGamesPromise = (async (): Promise<{
+    home: EspnPastGame[];
+    away: EspnPastGame[];
+    source: string | null;
+  }> => {
+    if (family !== "soccer") return { home: [], away: [], source: null };
+    const [home, away] = await Promise.all([
+      apiFootballRecentGames(homeName, 10),
+      apiFootballRecentGames(awayName, 10),
+    ]);
+    if (home.length || away.length) {
+      return { home, away, source: "api-football" };
+    }
+    return { home: [], away: [], source: null };
+  })();
+
   const lineupsPromise = (async (): Promise<{
     home: BettingLineupPlayer[];
     away: BettingLineupPlayer[];
@@ -583,6 +599,7 @@ async function collectRealData(
     storedH2H,
     providerH2H,
     providerInjuries,
+    providerRecentGames,
     lineups,
     prediction,
     weather,
@@ -607,6 +624,7 @@ async function collectRealData(
     readH2HHistory(sportPath, fixture.homeTeam.id, fixture.awayTeam.id, 10),
     providerH2HPromise,
     providerInjuriesPromise,
+    providerRecentGamesPromise,
     lineupsPromise,
     predictionPromise,
     weatherPromise,
@@ -614,17 +632,16 @@ async function collectRealData(
     awayXgPromise,
   ]);
 
-  // ESPN's per-team schedule endpoint is patchy for European soccer (often
-  // returns no past matches at all). Fall back to api-football for recent
-  // games + form so the form / margin / last-10 panels actually populate.
-  const [homeGames, awayGames] = await Promise.all([
-    homeGamesEspn.length > 0 || family !== "soccer"
-      ? Promise.resolve(homeGamesEspn)
-      : apiFootballRecentGames(homeName, 10),
-    awayGamesEspn.length > 0 || family !== "soccer"
-      ? Promise.resolve(awayGamesEspn)
-      : apiFootballRecentGames(awayName, 10),
-  ]);
+  // ESPN soccer schedule data is frequently incomplete. Prefer API-Football
+  // recent games when present; otherwise use ESPN as fallback.
+  const homeGames =
+    family === "soccer" && providerRecentGames.home.length > 0
+      ? providerRecentGames.home
+      : homeGamesEspn;
+  const awayGames =
+    family === "soccer" && providerRecentGames.away.length > 0
+      ? providerRecentGames.away
+      : awayGamesEspn;
   const homeInjuries = homeInjuriesEspn;
   const awayInjuries = awayInjuriesEspn;
 
@@ -729,6 +746,7 @@ async function collectRealData(
   let providerCount = 1;
   if (providerH2H.source) providerCount += 1;
   if (providerInjuries.source) providerCount += 1;
+  if (providerRecentGames.source) providerCount += 1;
   if (prediction) providerCount += 1;
   if (lineMovement && lineMovement.snapshotCount >= 2) providerCount += 1;
   if (homeXg || awayXg) providerCount += 1;
@@ -737,7 +755,10 @@ async function collectRealData(
   const marketConsensus: BettingMarketConsensus | null = buildMarketConsensus(books);
 
   return {
-    source: "espn",
+    source:
+      family === "soccer" && (providerInjuries.source || providerRecentGames.source)
+        ? "api-football"
+        : "espn",
     sportLabel,
     homeTeam: toRealDataTeam(
       fixture.homeTeam,
