@@ -357,6 +357,34 @@ function sanitizeCornersNarrative(text: string, fairPct: number, lineLabel: stri
   return `Corners-market summary sanitized: use only corner evidence. Model fair probability for ${line} is ${p}% based on available corners profiles and quality gates.`;
 }
 
+function normalizeInformationGapsForAutomation(
+  gaps: string[],
+  marketFocus: "corners" | "cards" | "goals" | "other",
+): string[] {
+  const out: string[] = [];
+  for (const raw of gaps) {
+    const g = raw.trim();
+    if (!g) continue;
+    const lower = g.toLowerCase();
+    if (/^(check|monitor|review|look for|assess)\b/.test(lower)) {
+      out.push(`AI follow-up queued: ${g.replace(/^(check|monitor|review|look for|assess)\s*/i, "")}`);
+      continue;
+    }
+    out.push(g);
+  }
+  if (marketFocus === "corners") {
+    const hasLineup = out.some((g) => /lineup/i.test(g));
+    const hasCorners = out.some((g) => /corner/i.test(g));
+    if (!hasLineup) {
+      out.push("AI follow-up queued: refresh predicted/confirmed lineups up to kickoff and re-run corners confidence.");
+    }
+    if (!hasCorners) {
+      out.push("AI follow-up queued: pull latest team corner profiles and recompute corners fair probability.");
+    }
+  }
+  return out.slice(0, 8);
+}
+
 function costFor(
   model: string,
   usage: { prompt_tokens?: number; completion_tokens?: number } | undefined,
@@ -2663,6 +2691,15 @@ export async function POST(request: NextRequest) {
         marketFocus === "corners"
           ? sanitizeCornersNarrative(rawSummary, modelFairPct, marketLineLabel)
           : rawSummary;
+      const rawInformationGaps = Array.isArray(finalContent.informationGaps)
+        ? finalContent.informationGaps
+            .map((r: unknown) => (typeof r === "string" ? r.trim() : ""))
+            .filter(Boolean)
+        : [];
+      const safeInformationGaps = normalizeInformationGapsForAutomation(
+        rawInformationGaps,
+        marketFocus,
+      );
 
       const result: BettingAnalysisResult = {
         fixture: authoritativeFixture,
@@ -2701,12 +2738,7 @@ export async function POST(request: NextRequest) {
               .filter(Boolean)
               .slice(0, 8)
           : [],
-        informationGaps: Array.isArray(finalContent.informationGaps)
-          ? finalContent.informationGaps
-              .map((r: unknown) => (typeof r === "string" ? r.trim() : ""))
-              .filter(Boolean)
-              .slice(0, 8)
-          : [],
+        informationGaps: safeInformationGaps,
         realData,
         generatedAt: new Date().toISOString(),
         cost: costFor(
