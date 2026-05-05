@@ -381,6 +381,7 @@ export interface BettingProviderDiagnostics {
     modelFairPct?: number;
     modelLine?: string | null;
     modelTotalCornersMean?: number;
+    modelApplied?: boolean;
   };
   warnings: string[];
 }

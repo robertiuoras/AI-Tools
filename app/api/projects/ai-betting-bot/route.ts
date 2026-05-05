@@ -2270,15 +2270,12 @@ export async function POST(request: NextRequest) {
         : "unknown";
 
       const bookImpliedProbabilityPct = oddsUsed ? oddsUsed.impliedPct : null;
-      const edgePct =
-        oddsUsed && bookImpliedProbabilityPct !== null
-          ? modelFairPct - bookImpliedProbabilityPct
-          : null;
-
-      const kelly =
+      const computeK = (
+        fairPct: number,
+      ): NonNullable<BettingAnalysisResult["kelly"]> | null =>
         oddsUsed !== null
           ? (() => {
-              const full = kellyFraction(modelFairPct / 100, oddsUsed.decimal);
+              const full = kellyFraction(fairPct / 100, oddsUsed.decimal);
               const half = full * 0.5;
               const quarter = full * 0.25;
               const recommended =
@@ -2294,6 +2291,11 @@ export async function POST(request: NextRequest) {
               };
             })()
           : null;
+      let edgePct =
+        oddsUsed && bookImpliedProbabilityPct !== null
+          ? modelFairPct - bookImpliedProbabilityPct
+          : null;
+      let kelly = computeK(modelFairPct);
 
       const rawConfidence = clamp(
         Number(
@@ -2332,14 +2334,16 @@ export async function POST(request: NextRequest) {
       if (oddsMissing && (verdict === "bet" || verdict === "strong_bet")) {
         verdict = modelFairPct >= 60 && confidencePct >= 55 ? "lean" : "pass";
       }
-      if (!oddsMissing && edgePct !== null) {
+      const applyNumericGuardrail = () => {
+        if (oddsMissing || edgePct === null) return;
         // Guardrail: final verdict must respect numeric edge/confidence rules.
         if (edgePct >= 4 && confidencePct >= 65) verdict = "strong_bet";
         else if (edgePct >= 2 && confidencePct >= 55) verdict = "bet";
         else if (edgePct >= 1 && confidencePct >= 45) verdict = "lean";
         else if (edgePct <= -2 && confidencePct >= 55) verdict = "fade";
         else verdict = "pass";
-      }
+      };
+      applyNumericGuardrail();
 
       const marketFocus = marketFocusFromText(`${query}\n${notes}`);
       if (marketFocus === "corners") {
@@ -2378,27 +2382,32 @@ export async function POST(request: NextRequest) {
         const awayCornersFor = realData?.awayTeam?.cornersForAvg;
         const awayCornersAgainst = realData?.awayTeam?.cornersAgainstAvg;
         const cornersBaseline = 9.6;
-        const sideMeans = [
-          homeCornersFor,
-          awayCornersAgainst,
-          awayCornersFor,
-          homeCornersAgainst,
-        ].filter((n): n is number => Number.isFinite(n));
-        const totalCornersMean =
-          sideMeans.length > 0
-            ? Number((sideMeans.reduce((a, b) => a + b, 0) / 2).toFixed(2))
-            : cornersBaseline;
+        const halfBaseline = cornersBaseline / 2;
+        const avg2 = (a: number | null | undefined, b: number | null | undefined) =>
+          ((a ?? halfBaseline) + (b ?? halfBaseline)) / 2;
+        const totalCornersMean = Number(
+          (avg2(homeCornersFor, awayCornersAgainst) + avg2(awayCornersFor, homeCornersAgainst))
+            .toFixed(2),
+        );
 
         // Phase 2: deterministic corners fair-probability model.
         // Only apply when market text has explicit over/under corners line
-        // and we have at least one side of corner priors.
-        if (cornersMarket && sideMeans.length > 0) {
+        // and both teams have at least baseline sample quality.
+        const canApplyCornersModel =
+          !!cornersMarket && cornerSamplesHome >= 5 && cornerSamplesAway >= 5;
+        if (canApplyCornersModel && cornersMarket) {
           const p = cornersUnderOverProbability(
             totalCornersMean,
             cornersMarket.line,
             cornersMarket.side,
           );
           modelFairPct = clamp(Number((p * 100).toFixed(2)), 1, 99);
+          edgePct =
+            oddsUsed && bookImpliedProbabilityPct !== null
+              ? modelFairPct - bookImpliedProbabilityPct
+              : null;
+          kelly = computeK(modelFairPct);
+          applyNumericGuardrail();
         }
 
         const lineupAvailable =
@@ -2443,10 +2452,16 @@ export async function POST(request: NextRequest) {
                 ? `${cornersMarket.side} ${cornersMarket.line}`
                 : null,
             modelTotalCornersMean: totalCornersMean,
+            modelApplied: canApplyCornersModel,
           };
           if (!cornersLineAvailable) {
             realData.providerDiagnostics.warnings.push(
               "Corners market line unavailable from trusted books (Pinnacle preferred) — forcing PASS.",
+            );
+          }
+          if (!canApplyCornersModel) {
+            realData.providerDiagnostics.warnings.push(
+              "Corners probability model not applied: requires explicit corners line and >=5 corner-sample matches for both teams.",
             );
           }
         }
