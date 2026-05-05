@@ -3148,6 +3148,71 @@ export default function AiBettingBotPage() {
                     {realDataSourceBadge(result.realData.source)}
                   </span>
                 </div>
+                {result.realData.providerDiagnostics ? (
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+                    <span className="font-semibold uppercase tracking-widest">
+                      Data pipelines
+                    </span>
+                    {(() => {
+                      const diag = result.realData.providerDiagnostics!;
+                      const env = diag.connectivity?.env ?? {};
+                      const prov = diag.connectivity?.providers ?? {};
+                      const items: Array<{
+                        key: string;
+                        label: string;
+                        configured: boolean;
+                        used?: boolean;
+                      }> = [
+                        { key: "openai", label: "OpenAI", configured: !!env.openai, used: true },
+                        {
+                          key: "apiFootball",
+                          label: "API-Football",
+                          configured: !!env.apiFootball,
+                          used: prov.apiFootball?.used,
+                        },
+                        {
+                          key: "footballData",
+                          label: "Football-Data",
+                          configured: !!env.footballData,
+                          used: prov.footballData?.used,
+                        },
+                        {
+                          key: "openWeather",
+                          label: "OpenWeather",
+                          configured: !!env.openWeather,
+                          used: prov.openWeather?.used,
+                        },
+                        {
+                          key: "supabase",
+                          label: "Supabase",
+                          configured: !!env.supabaseServiceRole,
+                          used: true,
+                        },
+                      ];
+                      return items.map((item) => {
+                        const tone =
+                          !item.configured
+                            ? "border-slate-400/40 text-slate-500"
+                            : item.used
+                              ? "border-emerald-500/50 text-emerald-700 dark:text-emerald-300"
+                              : "border-amber-500/50 text-amber-700 dark:text-amber-300";
+                        const marker = !item.configured ? "·" : item.used ? "✓" : "!";
+                        return (
+                          <span
+                            key={item.key}
+                            className={cn(
+                              "inline-flex items-center gap-1 rounded-full border bg-background/60 px-1.5 py-0.5",
+                              tone,
+                            )}
+                          >
+                            <span className="text-[9px] font-bold">{marker}</span>
+                            <span>{item.label}</span>
+                          </span>
+                        );
+                      });
+                    })()}
+                  </div>
+                ) : null}
                 <div className="grid gap-4 md:grid-cols-2">
                   {result.realData.awayTeam ? (
                     <TeamDataPanel

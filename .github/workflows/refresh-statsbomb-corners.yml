@@ -1,0 +1,36 @@
+name: Refresh StatsBomb Corners Priors
+
+on:
+  schedule:
+    - cron: "15 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh-priors:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build latest corners priors
+        run: npm run statsbomb:build-corners
+
+      - name: Commit updated priors (if changed)
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore(betting-bot): refresh StatsBomb corners priors"
+          file_pattern: data/statsbomb/corners-team-priors.json

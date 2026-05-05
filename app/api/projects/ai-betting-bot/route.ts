@@ -1578,7 +1578,13 @@ function buildResearchPrompt(
   const marketFocus = marketFocusFromText(`${query}\n${notes}`);
   const marketGuardrail =
     marketFocus === "corners"
-      ? "MARKET FOCUS: CORNERS. Do NOT analyze total goals lines. All totals/risk commentary must be about corner counts/tempo/territory, not goals scored."
+      ? [
+          "MARKET FOCUS: CORNERS.",
+          "This bet is on corners, not goals. Do NOT use goals O/U lines (e.g. 2.5 goals) as corner evidence.",
+          "If you mention any total like 2.5 from the MARKET BOARD, you MUST label it explicitly as a GOALS total, never as a corners line.",
+          "Do not write phrases like 'total 2.5 corners' unless the REAL DATA block explicitly shows a corners market line (it usually does not).",
+          "All totals/risk commentary must be about corner counts/tempo/territory, not goals scored.",
+        ].join(" ")
       : marketFocus === "cards"
         ? "MARKET FOCUS: CARDS. Do NOT analyze goals or corner totals unless directly tied to disciplinary pace."
         : "";
@@ -1678,6 +1684,7 @@ function buildStructuredPrompt(
     marketFocus === "corners"
       ? `CORNERS-SPECIFIC RULES:
 - This bet is on corners, not goals. Do NOT use goals O/U lines (e.g. 2.5 goals) as corner evidence.
+- If you reference any total like 2.5 from the MARKET CONSENSUS or MARKET BOARD blocks, you MUST describe it as a GOALS total, never as a corners total.
 - If no corners-specific market line is present in REAL DATA, cap confidence <= 55 and do not output "strong_bet".
 - Corner reasoning must reference only corner-relevant proxies (tempo, wing play, territorial pressure, crossing/clearance patterns, game state).`
       : "";
