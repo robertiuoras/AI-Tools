@@ -168,6 +168,46 @@ function realDataSourceBadge(source: BettingRealData["source"]): string {
   return "Unknown";
 }
 
+function normH2HTeamName(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+    .trim();
+}
+
+function h2hTeamsMatch(a: string, b: string): boolean {
+  return normH2HTeamName(a) === normH2HTeamName(b);
+}
+
+/** Result of an H2H row from the current fixture's home team's perspective. */
+function h2hRowOutcomeForFixtureHome(
+  g: BettingRealData["headToHead"][number],
+  fixtureHomeName: string,
+  fixtureAwayName: string,
+): "home-win" | "away-win" | "draw" | "upcoming" {
+  if (g.homeScore == null || g.awayScore == null) return "upcoming";
+  if (g.winner === "tie" || g.homeScore === g.awayScore) return "draw";
+  const winnerName =
+    g.winner === "home"
+      ? g.homeTeam
+      : g.winner === "away"
+        ? g.awayTeam
+        : null;
+  if (!winnerName) return "upcoming";
+  if (h2hTeamsMatch(winnerName, fixtureHomeName)) return "home-win";
+  if (h2hTeamsMatch(winnerName, fixtureAwayName)) return "away-win";
+  return "draw";
+}
+
+function h2hDataSourceLabel(data: BettingRealData): string {
+  const src = data.providerDiagnostics?.selectedSources?.headToHead;
+  if (src === "api-football") return "API-Football";
+  if (src === "espn") return "ESPN";
+  return realDataSourceBadge(data.source);
+}
+
 function metricToneFor(direction: BettingMetricScore["direction"]): {
   ring: string;
   bar: string;
@@ -989,21 +1029,31 @@ function HeadToHeadPanel({
 }) {
   const h2h = data.headToHead;
   const homeName = data.homeTeam?.displayName ?? "";
+  const awayName = data.awayTeam?.displayName ?? "";
   if (!h2h.length) {
     return (
       <div className="rounded-2xl border border-dashed border-border/60 bg-card/30 p-5 text-sm text-muted-foreground">
-        No recent head-to-head meetings found in the available ESPN schedule
-        data. The model will treat the matchup with a neutral prior.
+        No recent head-to-head meetings found from configured providers. The
+        model will treat the matchup with a neutral prior.
       </div>
     );
   }
-  const homeWins = h2h.filter(
-    (g) =>
-      (g.winner === "home" && g.homeTeam === homeName) ||
-      (g.winner === "away" && g.awayTeam === homeName),
-  ).length;
   const homeAbbr = data.homeTeam?.abbreviation ?? "H";
   const awayAbbr = data.awayTeam?.abbreviation ?? "A";
+
+  let homeWins = 0;
+  let draws = 0;
+  let homeLosses = 0;
+  const finished = h2h.filter(
+    (g) => g.homeScore != null && g.awayScore != null,
+  );
+  for (const g of finished) {
+    const o = h2hRowOutcomeForFixtureHome(g, homeName, awayName);
+    if (o === "home-win") homeWins += 1;
+    else if (o === "away-win") homeLosses += 1;
+    else if (o === "draw") draws += 1;
+  }
+
   return (
     <div className="rounded-2xl border border-border/60 bg-card/40 p-4">
       <div className="mb-3 flex items-center justify-between gap-2">
@@ -1013,51 +1063,87 @@ function HeadToHeadPanel({
           </p>
           <p className="text-lg font-black tabular-nums">
             {homeAbbr}{" "}
-            <span className="text-emerald-500">{homeWins}</span>
+            <span className="text-emerald-600 dark:text-emerald-400">{homeWins}W</span>
             <span className="mx-1 text-muted-foreground">·</span>
-            <span className="text-rose-500">{h2h.length - homeWins}</span>{" "}
-            {awayAbbr}
+            <span className="text-amber-600 dark:text-amber-400">{draws}D</span>
+            <span className="mx-1 text-muted-foreground">·</span>
+            <span className="text-sky-600 dark:text-sky-400">{homeLosses}L</span>{" "}
+            <span className="text-xs font-semibold text-muted-foreground">
+              vs {awayAbbr}
+            </span>
           </p>
+          {finished.length > 0 ? (
+            <p className="mt-0.5 text-[10px] text-muted-foreground">
+              {homeAbbr} record in {finished.length} finished meeting
+              {finished.length === 1 ? "" : "s"} (excludes scheduled).
+            </p>
+          ) : null}
         </div>
-        <div className="text-right text-[10px] font-bold uppercase tracking-widest text-emerald-500/80">
-          Verified · ESPN
+        <div className="text-right text-[10px] font-bold uppercase tracking-widest text-emerald-600/90 dark:text-emerald-400/90">
+          Verified · {h2hDataSourceLabel(data)}
         </div>
       </div>
       <ul className="divide-y divide-border/40 overflow-hidden rounded-xl border border-border/40 bg-background/40 text-sm">
         {h2h.map((g, i) => {
-          const winSide = g.winner;
+          const outcome = h2hRowOutcomeForFixtureHome(g, homeName, awayName);
+          const rowTone =
+            outcome === "draw"
+              ? "border-l-4 border-amber-500/70 bg-amber-500/[0.07]"
+              : outcome === "upcoming"
+                ? "border-l-4 border-dashed border-muted-foreground/35 bg-muted/20"
+                : outcome === "home-win"
+                  ? "border-l-4 border-emerald-500/50 bg-emerald-500/[0.04]"
+                  : "border-l-4 border-sky-500/50 bg-sky-500/[0.04]";
           return (
             <li
               key={`${g.date}-${i}`}
-              className="grid grid-cols-[auto_1fr_auto] items-center gap-3 px-3 py-2"
+              className={cn(
+                "grid grid-cols-[auto_auto_1fr_auto] items-center gap-x-2 gap-y-1 px-3 py-2 sm:grid-cols-[auto_auto_1fr_auto]",
+                rowTone,
+              )}
             >
               <span className="text-[11px] font-semibold text-muted-foreground tabular-nums">
                 {g.date.slice(0, 10)}
               </span>
-              <span className="truncate">
+              {outcome === "draw" ? (
+                <span className="shrink-0 rounded-full bg-amber-500/25 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-900 dark:text-amber-100">
+                  Draw
+                </span>
+              ) : outcome === "upcoming" ? (
+                <span className="shrink-0 rounded-full border border-dashed border-muted-foreground/40 bg-background/60 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-muted-foreground">
+                  Scheduled
+                </span>
+              ) : (
                 <span
                   className={cn(
-                    "font-semibold",
-                    winSide === "away" ? "text-emerald-500" : "",
+                    "shrink-0 rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide",
+                    outcome === "home-win"
+                      ? "bg-emerald-500/20 text-emerald-800 dark:text-emerald-200"
+                      : "bg-sky-500/20 text-sky-900 dark:text-sky-100",
                   )}
                 >
-                  {g.awayTeam}
+                  {outcome === "home-win" ? `${homeAbbr} win` : `${awayAbbr} win`}
+                </span>
+              )}
+              <span className="min-w-0 truncate">
+                <span className="font-semibold">{g.awayTeam}</span>{" "}
+                <span className="tabular-nums font-bold">
+                  {g.awayScore ?? "—"}
+                </span>
+                <span className="text-muted-foreground"> – </span>
+                <span className="tabular-nums font-bold">
+                  {g.homeScore ?? "—"}
                 </span>{" "}
-                <span className="tabular-nums">{g.awayScore ?? "?"}</span>{" "}
-                <span className="text-muted-foreground">@</span>{" "}
-                <span
-                  className={cn(
-                    "font-semibold",
-                    winSide === "home" ? "text-emerald-500" : "",
-                  )}
-                >
-                  {g.homeTeam}
-                </span>{" "}
-                <span className="tabular-nums">{g.homeScore ?? "?"}</span>
+                <span className="font-semibold">{g.homeTeam}</span>
+                <span className="text-[10px] text-muted-foreground"> @ </span>
               </span>
-              {g.venue && (
+              {g.venue ? (
                 <span className="truncate text-right text-[11px] text-muted-foreground">
                   {g.venue}
+                </span>
+              ) : (
+                <span className="text-right text-[11px] text-muted-foreground">
+                  —
                 </span>
               )}
             </li>

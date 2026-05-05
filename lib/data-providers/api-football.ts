@@ -89,6 +89,7 @@ interface AfInjuryItem {
   reason?: string;
 }
 interface AfLineupItem {
+  team?: { id?: number; name?: string };
   startXI?: Array<{ player?: { name?: string; pos?: string; number?: number } }>;
   substitutes?: Array<{ player?: { name?: string; pos?: string; number?: number } }>;
 }
@@ -108,6 +109,48 @@ interface AfStandingTeam {
 interface AfFixtureStatisticsItem {
   team?: { id?: number };
   statistics?: Array<{ type?: string; value?: string | number | null }>;
+}
+
+function parseCornerCountFromRow(row: AfFixtureStatisticsItem): number | null {
+  const hit = (row.statistics ?? []).find((s) => {
+    const t = String(s.type ?? "").toLowerCase();
+    return t.includes("corner");
+  });
+  if (!hit) return null;
+  const raw = hit.value;
+  if (raw == null) return null;
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
+  const n = Number(String(raw).replace(/[^\d.-]/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+function homeAwayCornerCounts(
+  fx: AfFixture,
+  sRows: AfFixtureStatisticsItem[],
+): { homeCorners: number; awayCorners: number } | null {
+  const homeId = fx.teams?.home?.id;
+  const awayId = fx.teams?.away?.id;
+  if (typeof homeId !== "number" || typeof awayId !== "number") return null;
+  const byId = new Map<number, AfFixtureStatisticsItem>();
+  for (const r of sRows) {
+    const tid = r.team?.id;
+    if (typeof tid === "number") byId.set(tid, r);
+  }
+  let homeRow = byId.get(homeId);
+  let awayRow = byId.get(awayId);
+  if (!homeRow || !awayRow) {
+    const hasIds = sRows.every((r) => typeof r.team?.id === "number");
+    if (!hasIds && sRows.length >= 2) {
+      homeRow = sRows[0];
+      awayRow = sRows[1];
+    } else {
+      return null;
+    }
+  }
+  const hc = parseCornerCountFromRow(homeRow);
+  const ac = parseCornerCountFromRow(awayRow);
+  if (hc == null || ac == null) return null;
+  return { homeCorners: hc, awayCorners: ac };
 }
 
 function normalizeTeamName(value: string): string {
@@ -269,6 +312,42 @@ export async function apiFootballHeadToHead(
   });
 }
 
+function injuriesFromApiRows(rows: AfInjuryItem[]): BettingRealDataPlayer[] {
+  const seen = new Set<string>();
+  const out: BettingRealDataPlayer[] = [];
+  const unknownNames: string[] = [];
+  for (const r of rows) {
+    const name = r.player?.name ?? "";
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    const status = (r.type ?? "Unknown").trim();
+    const detail = (r.reason ?? "").trim();
+    if (/^unknown$/i.test(status) && !detail) {
+      unknownNames.push(name);
+      continue;
+    }
+    out.push({
+      name,
+      position: r.player?.position ?? null,
+      status,
+      detail,
+      headshot: null,
+    });
+  }
+  if (out.length === 0 && unknownNames.length > 0) {
+    for (const name of unknownNames.slice(0, 8)) {
+      out.push({
+        name,
+        position: null,
+        status: "Unspecified",
+        detail: "Provider listed player without injury type — verify before betting.",
+        headshot: null,
+      });
+    }
+  }
+  return out.slice(0, 30);
+}
+
 export async function apiFootballInjuries(
   teamName: string,
 ): Promise<BettingRealDataPlayer[]> {
@@ -276,7 +355,7 @@ export async function apiFootballInjuries(
   const id = await resolveTeamId(teamName);
   if (!id) return [];
   return cached(
-    `apifootball:injuries:${id}`,
+    `apifootball:injuries:v2:${id}`,
     SPORTS_CACHE_TTL.injuries,
     async () => {
       const seasonCandidates = [
@@ -293,27 +372,17 @@ export async function apiFootballInjuries(
         );
         const rows = data?.response ?? [];
         if (rows.length === 0) continue;
+        const built = injuriesFromApiRows(rows);
+        if (built.length > 0) return built;
+      }
 
-        const seen = new Set<string>();
-        const out: BettingRealDataPlayer[] = [];
-        for (const r of rows) {
-          const name = r.player?.name ?? "";
-          if (!name || seen.has(name)) continue;
-          seen.add(name);
-          const status = (r.type ?? "Unknown").trim();
-          const detail = (r.reason ?? "").trim();
-          // API-Football free tier often returns broad squad lists with
-          // "Unknown" and no reason; skip those to avoid noisy fake injury load.
-          if (/^unknown$/i.test(status) && !detail) continue;
-          out.push({
-            name,
-            position: r.player?.position ?? null,
-            status,
-            detail,
-            headshot: null,
-          });
-        }
-        if (out.length > 0) return out.slice(0, 30);
+      const loose = await get<{ response?: AfInjuryItem[]; errors?: unknown }>(
+        `/injuries?team=${id}`,
+      );
+      const looseRows = loose?.response ?? [];
+      if (looseRows.length > 0) {
+        const built = injuriesFromApiRows(looseRows);
+        if (built.length > 0) return built;
       }
       return [];
     },
@@ -360,15 +429,22 @@ export async function apiFootballLineupForFixture(
           status,
           number: i.player?.number ?? null,
         }));
+      let homeItem = rows.find((r) => r.team?.id === hId);
+      let awayItem = rows.find((r) => r.team?.id === aId);
+      if (!homeItem && rows[0]) homeItem = rows[0];
+      if (!awayItem && rows[1]) awayItem = rows[1];
+      if (homeItem && awayItem === homeItem && rows.length > 1) {
+        awayItem = rows.find((r) => r !== homeItem) ?? awayItem;
+      }
       const home: BettingLineupPlayer[] = [];
       const away: BettingLineupPlayer[] = [];
-      if (rows[0]) {
-        home.push(...toPlayers(rows[0].startXI ?? [], "starter"));
-        home.push(...toPlayers(rows[0].substitutes ?? [], "bench"));
+      if (homeItem) {
+        home.push(...toPlayers(homeItem.startXI ?? [], "starter"));
+        home.push(...toPlayers(homeItem.substitutes ?? [], "bench"));
       }
-      if (rows[1]) {
-        away.push(...toPlayers(rows[1].startXI ?? [], "starter"));
-        away.push(...toPlayers(rows[1].substitutes ?? [], "bench"));
+      if (awayItem && awayItem !== homeItem) {
+        away.push(...toPlayers(awayItem.startXI ?? [], "starter"));
+        away.push(...toPlayers(awayItem.substitutes ?? [], "bench"));
       }
       if (home.length === 0 && away.length === 0) return null;
       return { home, away };
@@ -379,6 +455,7 @@ export async function apiFootballLineupForFixture(
 export async function apiFootballPrediction(
   homeTeamName: string,
   awayTeamName: string,
+  kickoffIso?: string | null,
 ): Promise<BettingProviderPrediction | null> {
   if (!authConfig()) return null;
   const [hId, aId] = await Promise.all([
@@ -386,14 +463,58 @@ export async function apiFootballPrediction(
     resolveTeamId(awayTeamName),
   ]);
   if (!hId || !aId) return null;
+  const dateKey = (kickoffIso ?? "").length >= 10 ? kickoffIso!.slice(0, 10) : "na";
   return cached(
-    `apifootball:prediction:${hId}-${aId}`,
+    `apifootball:prediction:v2:${hId}-${aId}:${dateKey}`,
     SPORTS_CACHE_TTL.predictions,
     async () => {
-      const fixtures = await get<{ response?: AfFixture[] }>(
-        `/fixtures/headtohead?h2h=${hId}-${aId}&next=1`,
-      );
-      const fxId = fixtures?.response?.[0]?.fixture?.id;
+      const ko = kickoffIso ? Date.parse(kickoffIso) : NaN;
+      const wantDay = kickoffIso && kickoffIso.length >= 10 ? kickoffIso.slice(0, 10) : null;
+
+      const resolveFixtureId = async (): Promise<number | null> => {
+        const tryNext = await get<{ response?: AfFixture[] }>(
+          `/fixtures/headtohead?h2h=${hId}-${aId}&next=15`,
+        );
+        const nextRows = tryNext?.response ?? [];
+        if (wantDay) {
+          const dayHit = nextRows.find(
+            (fx) => (fx.fixture?.date ?? "").slice(0, 10) === wantDay,
+          );
+          if (dayHit?.fixture?.id) return dayHit.fixture.id;
+        }
+        if (Number.isFinite(ko)) {
+          let best: AfFixture | null = null;
+          let bestD = Infinity;
+          for (const fx of nextRows) {
+            const t = Date.parse(fx.fixture?.date ?? "");
+            if (!Number.isFinite(t)) continue;
+            const d = Math.abs(t - ko);
+            if (d < bestD) {
+              bestD = d;
+              best = fx;
+            }
+          }
+          if (best?.fixture?.id && bestD <= 72 * 3600 * 1000) return best.fixture.id;
+        }
+        const notStarted = nextRows.find((fx) =>
+          ["NS", "TBD"].includes(fx.fixture?.status?.short ?? ""),
+        );
+        if (notStarted?.fixture?.id) return notStarted.fixture.id;
+
+        const tryLast = await get<{ response?: AfFixture[] }>(
+          `/fixtures/headtohead?h2h=${hId}-${aId}&last=15`,
+        );
+        const lastRows = tryLast?.response ?? [];
+        if (wantDay) {
+          const dayHit = lastRows.find(
+            (fx) => (fx.fixture?.date ?? "").slice(0, 10) === wantDay,
+          );
+          if (dayHit?.fixture?.id) return dayHit.fixture.id;
+        }
+        return nextRows[0]?.fixture?.id ?? lastRows[0]?.fixture?.id ?? null;
+      };
+
+      const fxId = await resolveFixtureId();
       if (!fxId) return null;
       const data = await get<{ response?: AfPredictionItem[] }>(
         `/predictions?fixture=${fxId}`,
@@ -556,9 +677,40 @@ export async function apiFootballRecentCornerAverages(
   const id = await resolveTeamId(teamName);
   if (!id) return null;
   return cached(
-    `apifootball:corners:${id}:${limit}`,
+    `apifootball:corners:v2:${id}:${limit}`,
     SPORTS_CACHE_TTL.teamStats,
     async () => {
+      const accumulateCorners = async (
+        played: AfFixture[],
+      ): Promise<{ cornersForAvg: number; cornersAgainstAvg: number; sample: number } | null> => {
+        let forSum = 0;
+        let againstSum = 0;
+        let sample = 0;
+        for (const fx of played) {
+          const fxId = fx.fixture?.id;
+          if (!fxId) continue;
+          const stats = await get<{ response?: AfFixtureStatisticsItem[] }>(
+            `/fixtures/statistics?fixture=${fxId}`,
+          );
+          const sRows = stats?.response ?? [];
+          if (sRows.length < 2) continue;
+          const counts = homeAwayCornerCounts(fx, sRows);
+          if (!counts) continue;
+          const isHome = fx.teams?.home?.id === id;
+          const teamCorners = isHome ? counts.homeCorners : counts.awayCorners;
+          const oppCorners = isHome ? counts.awayCorners : counts.homeCorners;
+          forSum += teamCorners;
+          againstSum += oppCorners;
+          sample += 1;
+        }
+        if (sample === 0) return null;
+        return {
+          cornersForAvg: Number((forSum / sample).toFixed(2)),
+          cornersAgainstAvg: Number((againstSum / sample).toFixed(2)),
+          sample,
+        };
+      };
+
       const seasonCandidates = [
         currentSoccerSeason(),
         currentSoccerSeason() - 1,
@@ -582,51 +734,8 @@ export async function apiFootballRecentCornerAverages(
           )
           .slice(0, limit);
         if (played.length === 0) continue;
-
-        let forSum = 0;
-        let againstSum = 0;
-        let sample = 0;
-
-        for (const fx of played) {
-          const fxId = fx.fixture?.id;
-          if (!fxId) continue;
-          const stats = await get<{ response?: AfFixtureStatisticsItem[] }>(
-            `/fixtures/statistics?fixture=${fxId}`,
-          );
-          const sRows = stats?.response ?? [];
-          if (sRows.length < 2) continue;
-          const parseCorners = (row: AfFixtureStatisticsItem): number | null => {
-            const hit = (row.statistics ?? []).find((s) =>
-              /corner kicks/i.test(String(s.type ?? "")),
-            );
-            if (!hit) return null;
-            const raw = hit.value;
-            if (raw == null) return null;
-            if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
-            const n = Number(String(raw).replace(/[^\d.-]/g, ""));
-            return Number.isFinite(n) ? n : null;
-          };
-          const home = sRows[0];
-          const away = sRows[1];
-          if (!home || !away) continue;
-          const homeCorners = parseCorners(home);
-          const awayCorners = parseCorners(away);
-          if (homeCorners == null || awayCorners == null) continue;
-          const isHome = fx.teams?.home?.id === id;
-          const teamCorners = isHome ? homeCorners : awayCorners;
-          const oppCorners = isHome ? awayCorners : homeCorners;
-          forSum += teamCorners;
-          againstSum += oppCorners;
-          sample += 1;
-        }
-
-        if (sample > 0) {
-          return {
-            cornersForAvg: Number((forSum / sample).toFixed(2)),
-            cornersAgainstAvg: Number((againstSum / sample).toFixed(2)),
-            sample,
-          };
-        }
+        const agg = await accumulateCorners(played);
+        if (agg) return agg;
       }
 
       const latest = await get<{ response?: AfFixture[] }>(`/fixtures?team=${id}&last=25`);
@@ -640,50 +749,7 @@ export async function apiFootballRecentCornerAverages(
         )
         .slice(0, limit);
 
-      let forSum = 0;
-      let againstSum = 0;
-      let sample = 0;
-      for (const fx of played) {
-        const fxId = fx.fixture?.id;
-        if (!fxId) continue;
-        const stats = await get<{ response?: AfFixtureStatisticsItem[] }>(
-          `/fixtures/statistics?fixture=${fxId}`,
-        );
-        const sRows = stats?.response ?? [];
-        if (sRows.length < 2) continue;
-        const parseCorners = (row: AfFixtureStatisticsItem): number | null => {
-          const hit = (row.statistics ?? []).find((s) =>
-            /corner kicks/i.test(String(s.type ?? "")),
-          );
-          if (!hit) return null;
-          const raw = hit.value;
-          if (raw == null) return null;
-          if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
-          const n = Number(String(raw).replace(/[^\d.-]/g, ""));
-          return Number.isFinite(n) ? n : null;
-        };
-        const home = sRows[0];
-        const away = sRows[1];
-        if (!home || !away) continue;
-        const homeCorners = parseCorners(home);
-        const awayCorners = parseCorners(away);
-        if (homeCorners == null || awayCorners == null) continue;
-        const isHome = fx.teams?.home?.id === id;
-        const teamCorners = isHome ? homeCorners : awayCorners;
-        const oppCorners = isHome ? awayCorners : homeCorners;
-        forSum += teamCorners;
-        againstSum += oppCorners;
-        sample += 1;
-      }
-      if (sample > 0) {
-        return {
-          cornersForAvg: Number((forSum / sample).toFixed(2)),
-          cornersAgainstAvg: Number((againstSum / sample).toFixed(2)),
-          sample,
-        };
-      }
-
-      return null;
+      return accumulateCorners(played);
     },
   );
 }

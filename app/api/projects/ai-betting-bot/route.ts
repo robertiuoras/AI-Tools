@@ -745,7 +745,7 @@ async function collectRealData(
 
   const predictionPromise: Promise<BettingProviderPrediction | null> = (() => {
     if (family !== "soccer") return Promise.resolve(null);
-    return apiFootballPrediction(homeName, awayName);
+    return apiFootballPrediction(homeName, awayName, fixture.date || null);
   })();
 
   const weatherPromise: Promise<BettingWeather | null> = (() => {
