@@ -228,9 +228,13 @@ function parseDateLikeLine(value: string): Date | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
 
-  const cleaned = trimmed
+  const markdownUnwrapped = trimmed
+    .replace(/^[*_`~#>\s]+/, "")
+    .replace(/[*_`~\s]+$/, "");
+
+  const cleaned = markdownUnwrapped
     .replace(/(\d+)(st|nd|rd|th)\b/gi, "$1")
-    .replace(/,+$/, "");
+    .replace(/[,:;.!?]+$/, "");
 
   if (/^yesterday$/i.test(cleaned)) {
     const now = new Date();
