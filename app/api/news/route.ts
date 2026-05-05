@@ -73,7 +73,7 @@ export async function GET() {
       )
     ).filter((item) => item.content.trim().length > 0);
 
-    return NextResponse.json(items);
+    return NextResponse.json(dedupeStoryVariants(items));
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json(
@@ -81,6 +81,40 @@ export async function GET() {
       { status: 500 },
     );
   }
+}
+
+function dedupeStoryVariants(items: NewsRow[]): NewsRow[] {
+  const seen = new Set<string>();
+  const deduped: NewsRow[] = [];
+
+  // `items` are newest-first; keep the first (latest) variant we see.
+  for (const item of items) {
+    const key = canonicalStoryKey(item.content);
+    if (!key) {
+      deduped.push(item);
+      continue;
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(item);
+  }
+
+  return deduped;
+}
+
+function canonicalStoryKey(content: string): string {
+  const normalized = content
+    // Keep link text, drop URL target for markdown links.
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, "$1")
+    // Drop bare URLs so reposts with different sources still dedupe.
+    .replace(/https?:\/\/[^\s<>"'`]+/g, "")
+    .replace(/[*_`>#]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+  if (!normalized) return "";
+  return normalized;
 }
 
 function mergeContinuationRows(
