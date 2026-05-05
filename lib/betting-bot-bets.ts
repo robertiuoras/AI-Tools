@@ -8,11 +8,45 @@ import type {
   BettingAnalysisResult,
   CalibrationBucket,
   CalibrationSummary,
+  ModelReportCard,
+  ReportCardEdgeBucket,
+  ReportCardMarketRow,
+  ReportCardWeeklyRow,
   TrackedBetRow,
   TrackedBetStatus,
 } from "@/lib/betting-bot";
 
 export type { CalibrationSummary, CalibrationBucket, TrackedBetRow, TrackedBetStatus };
+
+function isSettledStatus(s: TrackedBetStatus): boolean {
+  return s === "won" || s === "lost" || s === "push" || s === "void";
+}
+
+function marketFamily(market: string): "corners" | "goals" | "btts" | "other" {
+  const m = String(market ?? "").toLowerCase();
+  if (/btts|both teams to score/.test(m)) return "btts";
+  if (/corner/.test(m)) return "corners";
+  if (/goal|over\/under|total/.test(m)) return "goals";
+  return "other";
+}
+
+function edgeBucket(edge: number | null): ReportCardEdgeBucket["bucket"] {
+  if (edge == null) return "<0%";
+  if (edge < 0) return "<0%";
+  if (edge < 1) return "0-1%";
+  if (edge < 2) return "1-2%";
+  if (edge < 4) return "2-4%";
+  return "4%+";
+}
+
+function mean(vals: number[]): number | null {
+  if (!vals.length) return null;
+  return vals.reduce((a, b) => a + b, 0) / vals.length;
+}
+
+function clipProb(pct: number): number {
+  return Math.max(0.01, Math.min(0.99, pct / 100));
+}
 
 /**
  * AI Betting Bot — tracked bets data layer
@@ -432,6 +466,123 @@ export function formatCalibrationForPrompt(
       : "";
   const header = `HISTORICAL SELF-CALIBRATION (this user's ${summary.settled} settled bets, ROI ${pct(summary.roiPct)}, Brier ${summary.brier == null ? "n/a" : summary.brier.toFixed(3)}${clvLine}):`;
   return lines ? `${header}\n${lines}\n(If a bucket's actual win rate is materially below its stated confidence, shrink your confidence accordingly on similar bets today.)` : "";
+}
+
+export function buildModelReportCard(
+  bets: TrackedBetRow[],
+  lookbackDays = 90,
+): ModelReportCard {
+  const now = Date.now();
+  const cutoff = now - lookbackDays * 24 * 60 * 60 * 1000;
+  const filtered = bets.filter((b) => Date.parse(b.created_at) >= cutoff);
+  const settled = filtered.filter((b) => isSettledStatus(b.status));
+  const actionable = filtered.filter((b) => b.verdict !== "pass");
+  const settledWl = settled.filter((b) => b.status === "won" || b.status === "lost");
+  const passRatePct = filtered.length ? (filtered.filter((b) => b.verdict === "pass").length / filtered.length) * 100 : null;
+  const actionRatePct = filtered.length ? (actionable.length / filtered.length) * 100 : null;
+  const roiPct = settled.length ? (settled.reduce((a, b) => a + (b.profit_units ?? 0), 0) / settled.length) * 100 : null;
+  const clvVals = settled.map((b) => b.clv_pct).filter((n): n is number => typeof n === "number");
+  const meanClvPct = mean(clvVals);
+  const brierVals = settledWl.map((b) => {
+    const p = clipProb(b.fair_win_probability_pct ?? 50);
+    const o = b.status === "won" ? 1 : 0;
+    return (p - o) ** 2;
+  });
+  const logVals = settledWl.map((b) => {
+    const p = clipProb(b.fair_win_probability_pct ?? 50);
+    const o = b.status === "won" ? 1 : 0;
+    return -(o * Math.log(p) + (1 - o) * Math.log(1 - p));
+  });
+
+  const markets: Array<ReportCardMarketRow["market"]> = ["corners", "goals", "btts", "other"];
+  const byMarket: ReportCardMarketRow[] = markets.map((mk) => {
+    const group = filtered.filter((b) => marketFamily(b.market_normalized) === mk);
+    const gSettled = group.filter((b) => isSettledStatus(b.status));
+    const gWl = gSettled.filter((b) => b.status === "won" || b.status === "lost");
+    const gRoi = gSettled.length
+      ? (gSettled.reduce((a, b) => a + (b.profit_units ?? 0), 0) / gSettled.length) * 100
+      : null;
+    const gWin = gWl.length
+      ? (gWl.filter((b) => b.status === "won").length / gWl.length) * 100
+      : null;
+    const gClv = mean(gSettled.map((b) => b.clv_pct).filter((n): n is number => typeof n === "number"));
+    const gBrier = mean(
+      gWl.map((b) => {
+        const p = clipProb(b.fair_win_probability_pct ?? 50);
+        const o = b.status === "won" ? 1 : 0;
+        return (p - o) ** 2;
+      }),
+    );
+    const gLog = mean(
+      gWl.map((b) => {
+        const p = clipProb(b.fair_win_probability_pct ?? 50);
+        const o = b.status === "won" ? 1 : 0;
+        return -(o * Math.log(p) + (1 - o) * Math.log(1 - p));
+      }),
+    );
+    return {
+      market: mk,
+      bets: group.length,
+      settled: gSettled.length,
+      passRatePct: group.length ? (group.filter((b) => b.verdict === "pass").length / group.length) * 100 : null,
+      actionRatePct: group.length ? (group.filter((b) => b.verdict !== "pass").length / group.length) * 100 : null,
+      roiPct: gRoi,
+      winRatePct: gWin,
+      meanClvPct: gClv,
+      brier: gBrier,
+      logLoss: gLog,
+    };
+  });
+
+  const edgeBucketsOrder: ReportCardEdgeBucket["bucket"][] = ["<0%", "0-1%", "1-2%", "2-4%", "4%+"];
+  const edgeBuckets: ReportCardEdgeBucket[] = edgeBucketsOrder.map((bucket) => {
+    const group = filtered.filter((b) => edgeBucket(b.edge_pct) === bucket);
+    const gSettled = group.filter((b) => isSettledStatus(b.status));
+    const gWl = gSettled.filter((b) => b.status === "won" || b.status === "lost");
+    const roi = gSettled.length
+      ? (gSettled.reduce((a, b) => a + (b.profit_units ?? 0), 0) / gSettled.length) * 100
+      : null;
+    const win = gWl.length
+      ? (gWl.filter((b) => b.status === "won").length / gWl.length) * 100
+      : null;
+    return { bucket, bets: group.length, settled: gSettled.length, roiPct: roi, winRatePct: win };
+  });
+
+  const weeklyMap = new Map<string, TrackedBetRow[]>();
+  for (const b of settled) {
+    const d = new Date(b.created_at);
+    const day = d.getUTCDay();
+    const diff = (day + 6) % 7; // monday start
+    d.setUTCDate(d.getUTCDate() - diff);
+    const key = d.toISOString().slice(0, 10);
+    if (!weeklyMap.has(key)) weeklyMap.set(key, []);
+    weeklyMap.get(key)!.push(b);
+  }
+  const weekly: ReportCardWeeklyRow[] = Array.from(weeklyMap.entries())
+    .map(([weekStartIso, group]) => ({
+      weekStartIso,
+      settled: group.length,
+      roiPct: group.length ? (group.reduce((a, b) => a + (b.profit_units ?? 0), 0) / group.length) * 100 : null,
+      meanClvPct: mean(group.map((b) => b.clv_pct).filter((n): n is number => typeof n === "number")),
+    }))
+    .sort((a, b) => (a.weekStartIso < b.weekStartIso ? 1 : -1))
+    .slice(0, 8);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    lookbackDays,
+    totalBets: filtered.length,
+    settledBets: settled.length,
+    passRatePct,
+    actionRatePct,
+    roiPct,
+    meanClvPct,
+    brier: mean(brierVals),
+    logLoss: mean(logVals),
+    byMarket,
+    edgeBuckets,
+    weekly,
+  };
 }
 
 export async function manualGradeBet(

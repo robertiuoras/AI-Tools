@@ -55,6 +55,7 @@ import {
   type BettingMetricScore,
   type BettingRealData,
   type BettingRealDataTeam,
+  type ModelReportCard,
   type BettingStreamEvent,
   type BettingTrackContext,
   type CalibrationSummary,
@@ -1451,6 +1452,48 @@ function CalibrationCard({ summary }: { summary: CalibrationSummary }) {
   );
 }
 
+function ReportCardSection({ card }: { card: ModelReportCard }) {
+  const pct = (n: number | null, d = 1) => (n == null ? "—" : `${n.toFixed(d)}%`);
+  return (
+    <section className="rounded-2xl border border-border/60 bg-card/40 p-4 md:p-5">
+      <div className="mb-3 flex items-center gap-2">
+        <BarChart3 className="h-5 w-5 text-cyan-500" />
+        <h3 className="text-base font-bold">Model Report Card ({card.lookbackDays}d)</h3>
+      </div>
+      <div className="grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
+        <div className="rounded-lg border border-border/40 bg-background/40 p-2">Settled: <b>{card.settledBets}</b></div>
+        <div className="rounded-lg border border-border/40 bg-background/40 p-2">ROI: <b>{pct(card.roiPct)}</b></div>
+        <div className="rounded-lg border border-border/40 bg-background/40 p-2">CLV: <b>{pct(card.meanClvPct, 2)}</b></div>
+        <div className="rounded-lg border border-border/40 bg-background/40 p-2">Brier: <b>{card.brier == null ? "—" : card.brier.toFixed(3)}</b></div>
+      </div>
+      <div className="mt-3 overflow-x-auto rounded-lg border border-border/40">
+        <table className="w-full text-xs">
+          <thead className="bg-muted/30 text-muted-foreground">
+            <tr>
+              <th className="px-2 py-1 text-left">Market</th>
+              <th className="px-2 py-1 text-right">Settled</th>
+              <th className="px-2 py-1 text-right">ROI</th>
+              <th className="px-2 py-1 text-right">Win%</th>
+              <th className="px-2 py-1 text-right">CLV</th>
+            </tr>
+          </thead>
+          <tbody>
+            {card.byMarket.map((m) => (
+              <tr key={m.market} className="border-t border-border/30">
+                <td className="px-2 py-1 font-medium uppercase">{m.market}</td>
+                <td className="px-2 py-1 text-right">{m.settled}</td>
+                <td className="px-2 py-1 text-right">{pct(m.roiPct)}</td>
+                <td className="px-2 py-1 text-right">{pct(m.winRatePct)}</td>
+                <td className="px-2 py-1 text-right">{pct(m.meanClvPct, 2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 function BetHistoryRow({
   bet,
   busy,
@@ -2215,6 +2258,7 @@ export default function AiBettingBotPage() {
   const [calibration, setCalibration] = useState<CalibrationSummary | null>(
     null,
   );
+  const [reportCard, setReportCard] = useState<ModelReportCard | null>(null);
   const [betsLoading, setBetsLoading] = useState<boolean>(false);
   const [refreshingBetId, setRefreshingBetId] = useState<string | null>(null);
 
@@ -2488,6 +2532,13 @@ export default function AiBettingBotPage() {
         };
         setBets(data.bets ?? []);
         setCalibration(data.calibration ?? null);
+        const rcRes = await fetch("/api/projects/ai-betting-bot/report-card?days=90", {
+          headers: auth,
+        });
+        if (rcRes.ok) {
+          const rc = (await rcRes.json()) as { reportCard: ModelReportCard };
+          setReportCard(rc.reportCard ?? null);
+        }
       } finally {
         if (!silent) setBetsLoading(false);
       }
@@ -3413,6 +3464,7 @@ export default function AiBettingBotPage() {
         {(activeView === "tracked" || bets.length > 0 || betsLoading) ? (
           <div className={cn(activeView === "tracked" ? "space-y-6" : "mt-10 space-y-6") }>
             {calibration ? <CalibrationCard summary={calibration} /> : null}
+            {reportCard ? <ReportCardSection card={reportCard} /> : null}
             <section aria-labelledby="my-bets-heading" className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2">

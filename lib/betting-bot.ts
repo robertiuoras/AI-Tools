@@ -660,6 +660,50 @@ export interface CalibrationSummary {
   clvSampleSize: number;
 }
 
+export interface ReportCardEdgeBucket {
+  bucket: "<0%" | "0-1%" | "1-2%" | "2-4%" | "4%+";
+  bets: number;
+  settled: number;
+  roiPct: number | null;
+  winRatePct: number | null;
+}
+
+export interface ReportCardMarketRow {
+  market: "corners" | "goals" | "btts" | "other";
+  bets: number;
+  settled: number;
+  passRatePct: number | null;
+  actionRatePct: number | null;
+  roiPct: number | null;
+  winRatePct: number | null;
+  meanClvPct: number | null;
+  brier: number | null;
+  logLoss: number | null;
+}
+
+export interface ReportCardWeeklyRow {
+  weekStartIso: string;
+  settled: number;
+  roiPct: number | null;
+  meanClvPct: number | null;
+}
+
+export interface ModelReportCard {
+  generatedAt: string;
+  lookbackDays: number;
+  totalBets: number;
+  settledBets: number;
+  passRatePct: number | null;
+  actionRatePct: number | null;
+  roiPct: number | null;
+  meanClvPct: number | null;
+  brier: number | null;
+  logLoss: number | null;
+  byMarket: ReportCardMarketRow[];
+  edgeBuckets: ReportCardEdgeBucket[];
+  weekly: ReportCardWeeklyRow[];
+}
+
 export type BettingStreamEvent =
   | { type: "stage"; stage: string; label: string; status: "running" | "done" }
   | { type: "thought"; stage: string; text: string }
