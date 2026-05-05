@@ -351,12 +351,40 @@ function hasGoalsLeakage(text: string): boolean {
   );
 }
 
-function sanitizeCornersNarrative(text: string, fairPct: number, lineLabel: string | null): string {
-  const clean = String(text ?? "").trim();
-  if (!clean || !hasGoalsLeakage(clean)) return clean;
+function sanitizeCornersNarrative(
+  _text: string,
+  fairPct: number,
+  lineLabel: string | null,
+  data: BettingRealData | null,
+): string {
   const p = Number.isFinite(fairPct) ? fairPct.toFixed(2) : "n/a";
   const line = lineLabel ?? "corners line";
-  return `Corners-market summary sanitized: use only corner evidence. Model fair probability for ${line} is ${p}% based on available corners profiles and quality gates.`;
+  const h = data?.homeTeam;
+  const a = data?.awayTeam;
+  const latestCompleted = (data?.headToHead ?? []).find(
+    (g) => g.homeScore != null && g.awayScore != null,
+  );
+  const h2hLine = latestCompleted
+    ? `Latest completed H2H: ${latestCompleted.awayTeam} ${latestCompleted.awayScore}-${latestCompleted.homeScore} ${latestCompleted.homeTeam} on ${latestCompleted.date.slice(0, 10)}.`
+    : "No completed recent H2H score is available.";
+  const homeCorners =
+    h && h.cornersSample > 0
+      ? `${h.displayName} corners profile ${h.cornersForAvg ?? "?"} for / ${h.cornersAgainstAvg ?? "?"} against (${h.cornersSample} matches).`
+      : `${h?.displayName ?? "Home team"} corners profile unavailable.`;
+  const awayCorners =
+    a && a.cornersSample > 0
+      ? `${a.displayName} corners profile ${a.cornersForAvg ?? "?"} for / ${a.cornersAgainstAvg ?? "?"} against (${a.cornersSample} matches).`
+      : `${a?.displayName ?? "Away team"} corners profile unavailable.`;
+  const gate = data?.providerDiagnostics?.cornersGate;
+  const gateLine = gate
+    ? `Quality gate: lineAvailable=${gate.cornersLineAvailable}, samples=${gate.cornerSamplesHome}/${gate.cornerSamplesAway}, lineupAvailable=${gate.lineupAvailable}.`
+    : "";
+  const consensusUnder = data?.marketConsensus?.underProbPct;
+  const consensusLine =
+    consensusUnder != null
+      ? `Market consensus under probability is ${consensusUnder.toFixed(2)}%.`
+      : "Market consensus under probability unavailable.";
+  return `${homeCorners} ${awayCorners} ${h2hLine} Model fair probability for ${line}: ${p}%. ${consensusLine} ${gateLine}`.trim();
 }
 
 function normalizeInformationGapsForAutomation(
@@ -2727,7 +2755,7 @@ export async function POST(request: NextRequest) {
           : "No narrative summary returned.";
       const safeSummary =
         marketFocus === "corners"
-          ? sanitizeCornersNarrative(rawSummary, modelFairPct, marketLineLabel)
+          ? sanitizeCornersNarrative(rawSummary, modelFairPct, marketLineLabel, realData)
           : rawSummary;
       const rawInformationGaps = Array.isArray(finalContent.informationGaps)
         ? finalContent.informationGaps
