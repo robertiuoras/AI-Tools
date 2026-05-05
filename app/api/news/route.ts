@@ -56,9 +56,11 @@ export async function GET() {
         timestamp: String(row[2] ?? row[1] ?? "").trim(),
       }));
 
+    const mergedItems = mergeContinuationRows(baseItems);
+
     const items: NewsRow[] = (
       await Promise.all(
-        baseItems.reverse().map(async (item) => {
+        mergedItems.reverse().map(async (item) => {
           const cleaned = normalizeNewsItem(item.content, item.timestamp);
           const urls = extractUrls(cleaned.content).slice(0, 3);
           const links = await Promise.all(urls.map((url) => getLinkPreview(url)));
@@ -82,6 +84,65 @@ export async function GET() {
       { status: 500 },
     );
   }
+}
+
+function mergeContinuationRows(
+  rows: Array<{ content: string; timestamp: string }>,
+): Array<{ content: string; timestamp: string }> {
+  const merged: Array<{ content: string; timestamp: string }> = [];
+
+  for (const row of rows) {
+    const content = row.content.trim();
+    if (!content) continue;
+
+    const previous = merged[merged.length - 1];
+    if (previous && isLikelyContinuation(content, previous.content, row.timestamp, previous.timestamp)) {
+      previous.content = `${previous.content}\n\n${content}`.trim();
+      if (!previous.timestamp && row.timestamp) previous.timestamp = row.timestamp;
+      continue;
+    }
+
+    merged.push({ ...row, content });
+  }
+
+  return merged;
+}
+
+function isLikelyContinuation(
+  currentContent: string,
+  previousContent: string,
+  currentTimestamp: string,
+  previousTimestamp: string,
+): boolean {
+  if (!currentContent || !previousContent) return false;
+
+  const firstLine = currentContent.split(/\r?\n/)[0]?.trim() ?? "";
+  const startsLikeStandalone =
+    parseDateLikeLine(firstLine) !== null ||
+    /^[A-Z][\w'"(]/.test(firstLine) ||
+    /^#{1,6}\s+/.test(firstLine);
+
+  const isUrlOnly = /^https?:\/\/\S+$/i.test(firstLine) && currentContent.trim() === firstLine;
+  const startsLikeContinuation =
+    isUrlOnly ||
+    /^[a-z0-9(]/.test(firstLine) ||
+    /^[0-9][0-9,.\-+]/.test(firstLine) ||
+    /^[:;,\-]/.test(firstLine);
+
+  if (!startsLikeContinuation || startsLikeStandalone) return false;
+
+  if (!currentTimestamp) return true;
+  if (!previousTimestamp) return true;
+
+  const currentDate = new Date(currentTimestamp);
+  const previousDate = new Date(previousTimestamp);
+  if (Number.isNaN(currentDate.getTime()) || Number.isNaN(previousDate.getTime())) return false;
+
+  return (
+    currentDate.getUTCFullYear() === previousDate.getUTCFullYear() &&
+    currentDate.getUTCMonth() === previousDate.getUTCMonth() &&
+    currentDate.getUTCDate() === previousDate.getUTCDate()
+  );
 }
 
 /** Discord role/user mentions — strip from published news. */
