@@ -1357,6 +1357,15 @@ function buildStructuredPrompt(
       }${parsedOdds.american} American). Use this as the book price. Do NOT invent a different one.`
     : `User did NOT provide odds. Set oddsDecimal = null and oddsSource = "unknown". Do NOT invent a market price. Verdict must reflect that edge cannot be priced — set verdict to "pass" UNLESS your fairWinProbability >= 60 AND confidence >= 55 (in which case it can be "lean"). Never "bet"/"strong_bet" without odds.`;
 
+  const marketFocus = marketFocusFromText(`${query}\n${notes}`);
+  const marketRules =
+    marketFocus === "corners"
+      ? `CORNERS-SPECIFIC RULES:
+- This bet is on corners, not goals. Do NOT use goals O/U lines (e.g. 2.5 goals) as corner evidence.
+- If no corners-specific market line is present in REAL DATA, cap confidence <= 55 and do not output "strong_bet".
+- Corner reasoning must reference only corner-relevant proxies (tempo, wing play, territorial pressure, crossing/clearance patterns, game state).`
+      : "";
+
   return `Today is ${todayIso}. Produce the final verdict JSON for this bet.
 
 USER QUERY:
@@ -1373,6 +1382,7 @@ ${summariseRealData(realData)}
 
 PRICING CONTEXT:
 ${oddsContext}
+${marketRules}
 
 RESEARCH TRANSCRIPT (your own notes):
 ${transcript.slice(0, 6000)}

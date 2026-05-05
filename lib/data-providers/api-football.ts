@@ -262,11 +262,16 @@ export async function apiFootballInjuries(
           const name = r.player?.name ?? "";
           if (!name || seen.has(name)) continue;
           seen.add(name);
+          const status = (r.type ?? "Unknown").trim();
+          const detail = (r.reason ?? "").trim();
+          // API-Football free tier often returns broad squad lists with
+          // "Unknown" and no reason; skip those to avoid noisy fake injury load.
+          if (/^unknown$/i.test(status) && !detail) continue;
           out.push({
             name,
             position: r.player?.position ?? null,
-            status: r.type ?? "Unknown",
-            detail: r.reason ?? "",
+            status,
+            detail,
             headshot: null,
           });
         }

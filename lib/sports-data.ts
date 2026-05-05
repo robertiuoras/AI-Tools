@@ -665,7 +665,11 @@ export function restDaysBefore(
   const lastGame = new Date(last.date).getTime();
   if (!Number.isFinite(kickoff) || !Number.isFinite(lastGame)) return null;
   const days = (kickoff - lastGame) / (1000 * 60 * 60 * 24);
-  return Math.max(0, Math.round(days));
+  const rounded = Math.max(0, Math.round(days));
+  // Guard against stale historical windows (e.g. previous season data), which
+  // can produce unrealistic "rest" values that distort matchup reasoning.
+  if (rounded > 21) return null;
+  return rounded;
 }
 
 /* ── Head-to-head ─────────────────────────────────────────────────────── */
