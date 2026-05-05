@@ -771,12 +771,24 @@ async function collectRealData(
     family === "soccer" ? apiFootballRecentCornerAverages(awayName, 10) : Promise.resolve(null);
   const homeStandingPromise =
     family === "soccer"
-      ? (async () => (await apiFootballTeamStanding(homeName)) ?? (await footballDataTeamStanding(homeName)))()
-      : Promise.resolve(null);
+      ? (async () => {
+          const api = await apiFootballTeamStanding(homeName);
+          if (api) return { data: api, source: "api-football" as const };
+          const fd = await footballDataTeamStanding(homeName);
+          if (fd) return { data: fd, source: "football-data" as const };
+          return { data: null, source: "none" as const };
+        })()
+      : Promise.resolve({ data: null, source: "none" as const });
   const awayStandingPromise =
     family === "soccer"
-      ? (async () => (await apiFootballTeamStanding(awayName)) ?? (await footballDataTeamStanding(awayName)))()
-      : Promise.resolve(null);
+      ? (async () => {
+          const api = await apiFootballTeamStanding(awayName);
+          if (api) return { data: api, source: "api-football" as const };
+          const fd = await footballDataTeamStanding(awayName);
+          if (fd) return { data: fd, source: "football-data" as const };
+          return { data: null, source: "none" as const };
+        })()
+      : Promise.resolve({ data: null, source: "none" as const });
 
   // Parallelise everything — providers above + ESPN + odds-API.
   const [
@@ -803,8 +815,8 @@ async function collectRealData(
     statsbombAwayCorners,
     apiHomeCorners,
     apiAwayCorners,
-    homeStanding,
-    awayStanding,
+    homeStandingResult,
+    awayStandingResult,
   ] = await Promise.all([
     getTeamInjuries(sportPath, fixture.homeTeam.id),
     getTeamInjuries(sportPath, fixture.awayTeam.id),
@@ -837,6 +849,14 @@ async function collectRealData(
     homeStandingPromise,
     awayStandingPromise,
   ]);
+  const homeStanding = homeStandingResult.data;
+  const awayStanding = awayStandingResult.data;
+  const standingSource =
+    homeStandingResult.source !== "none"
+      ? homeStandingResult.source
+      : awayStandingResult.source !== "none"
+        ? awayStandingResult.source
+        : "none";
 
   // ESPN soccer schedule data is frequently incomplete. Prefer API-Football
   // recent games when present; otherwise use ESPN as fallback.
@@ -978,6 +998,33 @@ async function collectRealData(
 
   const providerDiagnostics = {
     family,
+    connectivity: {
+      env: {
+        openai: !!process.env.OPENAI_API_KEY,
+        apiFootball: !!process.env.API_FOOTBALL_KEY || !!process.env.RAPIDAPI_KEY,
+        footballData: !!process.env.FOOTBALL_DATA_API_KEY,
+        openWeather: !!process.env.OPENWEATHER_API_KEY,
+        supabaseServiceRole: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+      },
+      providers: {
+        apiFootball: {
+          configured: !!process.env.API_FOOTBALL_KEY || !!process.env.RAPIDAPI_KEY,
+          used:
+            providerRecentGames.source === "api-football" ||
+            providerInjuries.source === "api-football" ||
+            providerH2H.source === "api-football" ||
+            standingSource === "api-football",
+        },
+        footballData: {
+          configured: !!process.env.FOOTBALL_DATA_API_KEY,
+          used: providerRecentGames.source === "football-data" || standingSource === "football-data",
+        },
+        openWeather: {
+          configured: !!process.env.OPENWEATHER_API_KEY,
+          used: !!weather,
+        },
+      },
+    },
     selectedSources: {
       recentGames: providerRecentGames.source ?? "espn",
       injuries: providerInjuries.source ?? "espn",
@@ -987,6 +1034,7 @@ async function collectRealData(
           ? "api-football"
           : "none",
       prediction: prediction?.source ?? "none",
+      standings: standingSource,
     },
     counts: {
       espnRecentHome: homeGamesEspn.length,

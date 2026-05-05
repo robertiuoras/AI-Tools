@@ -351,12 +351,36 @@ export interface BettingProviderPrediction {
 
 export interface BettingProviderDiagnostics {
   family: string;
+  connectivity: {
+    env: {
+      openai: boolean;
+      apiFootball: boolean;
+      footballData: boolean;
+      openWeather: boolean;
+      supabaseServiceRole: boolean;
+    };
+    providers: {
+      apiFootball: {
+        configured: boolean;
+        used: boolean;
+      };
+      footballData: {
+        configured: boolean;
+        used: boolean;
+      };
+      openWeather: {
+        configured: boolean;
+        used: boolean;
+      };
+    };
+  };
   selectedSources: {
     recentGames: string;
     injuries: string;
     headToHead: string;
     lineups: string;
     prediction: string;
+    standings: string;
   };
   counts: {
     espnRecentHome: number;
