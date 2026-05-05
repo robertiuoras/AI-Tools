@@ -103,52 +103,9 @@ function stripMarkdownHeadingHashes(text: string): string {
     .join("\n");
 }
 
-/**
- * When the same calendar date appears multiple times (e.g. duplicate "April 30th"
- * blocks), keep only the last block — usually the updated copy.
- */
-function dedupeRepeatedDateBlocks(content: string): string {
-  const paragraphs = content
-    .split(/\n\s*\n+/)
-    .map((p) => p.trim())
-    .filter(Boolean);
-  type Seg = { key: string | null; body: string };
-  const segments: Seg[] = [];
-
-  for (const para of paragraphs) {
-    const lines = para.split(/\r?\n/);
-    const first = (lines[0] ?? "").trim();
-    const rest = lines.slice(1).join("\n").trim();
-    const d = parseDateLikeLine(first);
-    if (d && !rest) continue;
-    if (d && rest) {
-      segments.push({
-        key: d.toISOString().slice(0, 10),
-        body: stripMarkdownHeadingHashes(rest).trim(),
-      });
-    } else {
-      segments.push({
-        key: null,
-        body: stripMarkdownHeadingHashes(para).trim(),
-      });
-    }
-  }
-
-  const lastIdxByKey = new Map<string, number>();
-  segments.forEach((s, i) => {
-    if (s.key) lastIdxByKey.set(s.key, i);
-  });
-
-  return segments
-    .filter((s, i) => !s.key || lastIdxByKey.get(s.key) === i)
-    .map((s) => s.body)
-    .filter(Boolean)
-    .join("\n\n");
-}
-
 function preprocessNewsRawContent(raw: string): string {
   let t = stripDiscordMentions(raw);
-  t = dedupeRepeatedDateBlocks(t);
+  t = stripMarkdownHeadingHashes(t);
   t = t.replace(/\n{3,}/g, "\n\n").trim();
   return t;
 }
@@ -205,7 +162,24 @@ function parseDateLikeLine(value: string): Date | null {
 
   const cleaned = trimmed
     .replace(/(\d+)(st|nd|rd|th)\b/gi, "$1")
-    .replace(/,$/, "");
+    .replace(/,+$/, "");
+
+  if (/^yesterday$/i.test(cleaned)) {
+    const now = new Date();
+    const d = new Date(now);
+    d.setDate(d.getDate() - 1);
+    return d;
+  }
+
+  if (/^today$/i.test(cleaned)) {
+    const now = new Date();
+    return now;
+  }
+
+  const dateLikePattern =
+    /^(?:(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday),?\s+)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:,\s*\d{4})?|\d{1,2}\s+(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)(?:\s+\d{4})?)(?:,?\s+(?:at\s+)?\d{1,2}:\d{2}(?:\s?[ap]m)?)?$/i;
+
+  if (!dateLikePattern.test(cleaned)) return null;
 
   const direct = new Date(cleaned);
   if (!Number.isNaN(direct.getTime())) return direct;
@@ -213,16 +187,6 @@ function parseDateLikeLine(value: string): Date | null {
   const now = new Date();
   const withYear = new Date(`${cleaned} ${now.getFullYear()}`);
   if (!Number.isNaN(withYear.getTime())) return withYear;
-
-  if (/^yesterday$/i.test(cleaned)) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - 1);
-    return d;
-  }
-
-  if (/^today$/i.test(cleaned)) {
-    return now;
-  }
 
   return null;
 }
