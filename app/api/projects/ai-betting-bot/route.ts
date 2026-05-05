@@ -283,6 +283,62 @@ function cornersUnderOverProbability(
   return side === "under" ? under : 1 - under;
 }
 
+function extractGoalsLine(text: string): { side: "over" | "under"; line: number } | null {
+  const s = String(text ?? "").toLowerCase();
+  const m = s.match(/\b(over|under)\s*(\d{1,2}(?:\.\d)?)\s*(?:total\s*)?goals?\b/);
+  if (!m) return null;
+  const side = m[1] === "over" ? "over" : "under";
+  const line = Number(m[2]);
+  if (!Number.isFinite(line) || line < 0.5 || line > 8) return null;
+  return { side, line };
+}
+
+function extractBttsSelection(text: string): "yes" | "no" | null {
+  const s = String(text ?? "").toLowerCase();
+  if (!/\bbtts\b|both teams to score/.test(s)) return null;
+  if (/\b(no|not)\b.*\b(btts|both teams to score)\b/.test(s)) return "no";
+  if (/\b(btts|both teams to score)\b.*\b(no)\b/.test(s)) return "no";
+  if (/\b(btts|both teams to score)\b.*\b(yes)\b/.test(s)) return "yes";
+  if (/\byes\b.*\b(btts|both teams to score)\b/.test(s)) return "yes";
+  return "yes";
+}
+
+function goalsUnderOverProbability(
+  totalGoalsMean: number,
+  line: number,
+  side: "over" | "under",
+): number {
+  const threshold = Math.floor(line);
+  const under = poissonCdf(threshold, totalGoalsMean);
+  return side === "under" ? under : 1 - under;
+}
+
+function bttsProbability(muHome: number, muAway: number, side: "yes" | "no"): number {
+  const pHomeScore = 1 - Math.exp(-Math.max(0.01, muHome));
+  const pAwayScore = 1 - Math.exp(-Math.max(0.01, muAway));
+  const pYes = pHomeScore * pAwayScore;
+  return side === "yes" ? pYes : 1 - pYes;
+}
+
+function expectedGoalMeans(data: BettingRealData | null): { muHome: number; muAway: number } | null {
+  if (!data) return null;
+  const h = data.homeTeam;
+  const a = data.awayTeam;
+  if (!h || !a) return null;
+  const hAtt = h.xg?.xgPerMatch ?? h.pointsForShrunk ?? h.pointsForAvg ?? null;
+  const hDef = h.xg?.xgaPerMatch ?? h.pointsAgainstShrunk ?? h.pointsAgainstAvg ?? null;
+  const aAtt = a.xg?.xgPerMatch ?? a.pointsForShrunk ?? a.pointsForAvg ?? null;
+  const aDef = a.xg?.xgaPerMatch ?? a.pointsAgainstShrunk ?? a.pointsAgainstAvg ?? null;
+  if (![hAtt, hDef, aAtt, aDef].every((n) => Number.isFinite(n))) return null;
+  const base = 1.35;
+  const muHome = clamp(Number((((hAtt! + aDef!) / 2) + 0.12).toFixed(2)), 0.2, 3.8);
+  const muAway = clamp(Number((((aAtt! + hDef!) / 2) - 0.08).toFixed(2)), 0.2, 3.8);
+  return {
+    muHome: Number.isFinite(muHome) ? muHome : base,
+    muAway: Number.isFinite(muAway) ? muAway : base,
+  };
+}
+
 function costFor(
   model: string,
   usage: { prompt_tokens?: number; completion_tokens?: number } | undefined,
@@ -2296,6 +2352,15 @@ export async function POST(request: NextRequest) {
           ? modelFairPct - bookImpliedProbabilityPct
           : null;
       let kelly = computeK(modelFairPct);
+      const applyFairOverride = (fairPct: number) => {
+        modelFairPct = clamp(Number(fairPct.toFixed(2)), 1, 99);
+        edgePct =
+          oddsUsed && bookImpliedProbabilityPct !== null
+            ? modelFairPct - bookImpliedProbabilityPct
+            : null;
+        kelly = computeK(modelFairPct);
+        applyNumericGuardrail();
+      };
 
       const rawConfidence = clamp(
         Number(
@@ -2345,11 +2410,57 @@ export async function POST(request: NextRequest) {
       };
       applyNumericGuardrail();
 
+      const marketText = `${query}\n${notes}\n${String(finalContent.marketNormalized ?? "")}`;
       const marketFocus = marketFocusFromText(`${query}\n${notes}`);
+      const goalMeans = expectedGoalMeans(realData);
+      if (marketFocus === "goals" && goalMeans && realData?.providerDiagnostics) {
+        const goalsLine = extractGoalsLine(marketText);
+        const bttsSide = extractBttsSelection(marketText);
+        if (goalsLine) {
+          const totalMean = Number((goalMeans.muHome + goalMeans.muAway).toFixed(2));
+          const p = goalsUnderOverProbability(totalMean, goalsLine.line, goalsLine.side);
+          applyFairOverride(p * 100);
+          realData.providerDiagnostics.pricingModel = {
+            market: "goals_total",
+            applied: true,
+            fairPct: Number(modelFairPct.toFixed(2)),
+            impliedPct:
+              bookImpliedProbabilityPct !== null
+                ? Number(bookImpliedProbabilityPct.toFixed(2))
+                : null,
+            edgePct: edgePct !== null ? Number(edgePct.toFixed(2)) : null,
+            muHome: goalMeans.muHome,
+            muAway: goalMeans.muAway,
+            totalMean,
+            line: String(goalsLine.line),
+            side: goalsLine.side,
+          };
+        } else if (bttsSide) {
+          const p = bttsProbability(goalMeans.muHome, goalMeans.muAway, bttsSide);
+          applyFairOverride(p * 100);
+          realData.providerDiagnostics.pricingModel = {
+            market: "btts",
+            applied: true,
+            fairPct: Number(modelFairPct.toFixed(2)),
+            impliedPct:
+              bookImpliedProbabilityPct !== null
+                ? Number(bookImpliedProbabilityPct.toFixed(2))
+                : null,
+            edgePct: edgePct !== null ? Number(edgePct.toFixed(2)) : null,
+            muHome: goalMeans.muHome,
+            muAway: goalMeans.muAway,
+            totalMean: Number((goalMeans.muHome + goalMeans.muAway).toFixed(2)),
+            side: bttsSide,
+          };
+        } else {
+          realData.providerDiagnostics.warnings.push(
+            "Goals model not applied: no explicit goals total line or BTTS side found.",
+          );
+        }
+      }
+
       if (marketFocus === "corners") {
-        const cornersMarket = extractCornersLine(
-          `${query}\n${notes}\n${String(finalContent.marketNormalized ?? "")}`,
-        );
+        const cornersMarket = extractCornersLine(marketText);
         const books = realData?.books ?? [];
         const pinnacleBook =
           books.find((b) => b.key.toLowerCase() === "pinnacle") ??
@@ -2401,13 +2512,7 @@ export async function POST(request: NextRequest) {
             cornersMarket.line,
             cornersMarket.side,
           );
-          modelFairPct = clamp(Number((p * 100).toFixed(2)), 1, 99);
-          edgePct =
-            oddsUsed && bookImpliedProbabilityPct !== null
-              ? modelFairPct - bookImpliedProbabilityPct
-              : null;
-          kelly = computeK(modelFairPct);
-          applyNumericGuardrail();
+          applyFairOverride(p * 100);
         }
 
         const lineupAvailable =
@@ -2453,6 +2558,19 @@ export async function POST(request: NextRequest) {
                 : null,
             modelTotalCornersMean: totalCornersMean,
             modelApplied: canApplyCornersModel,
+          };
+          realData.providerDiagnostics.pricingModel = {
+            market: "corners",
+            applied: canApplyCornersModel,
+            fairPct: Number(modelFairPct.toFixed(2)),
+            impliedPct:
+              bookImpliedProbabilityPct !== null
+                ? Number(bookImpliedProbabilityPct.toFixed(2))
+                : null,
+            edgePct: edgePct !== null ? Number(edgePct.toFixed(2)) : null,
+            totalMean: totalCornersMean,
+            line: cornersMarket ? String(cornersMarket.line) : null,
+            side: cornersMarket?.side ?? null,
           };
           if (!cornersLineAvailable) {
             realData.providerDiagnostics.warnings.push(

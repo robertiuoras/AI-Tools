@@ -383,6 +383,18 @@ export interface BettingProviderDiagnostics {
     modelTotalCornersMean?: number;
     modelApplied?: boolean;
   };
+  pricingModel?: {
+    market: "corners" | "goals_total" | "btts";
+    applied: boolean;
+    fairPct: number;
+    impliedPct: number | null;
+    edgePct: number | null;
+    muHome?: number;
+    muAway?: number;
+    totalMean?: number;
+    line?: string | null;
+    side?: string | null;
+  };
   warnings: string[];
 }
 
