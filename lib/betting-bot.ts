@@ -221,6 +221,13 @@ export interface BettingRealDataTeam {
   cornersForAvg: number | null;
   cornersAgainstAvg: number | null;
   cornersSample: number;
+  /** League table context when available (rank/points/form). */
+  standing: {
+    league: string | null;
+    rank: number | null;
+    points: number | null;
+    form: string | null;
+  } | null;
 }
 
 export interface BettingLineupPlayer {

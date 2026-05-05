@@ -75,7 +75,7 @@ interface AfTeam {
 }
 interface AfFixture {
   fixture?: { id?: number; date?: string; venue?: { name?: string }; status?: { short?: string } };
-  league?: { season?: number };
+  league?: { id?: number; name?: string; season?: number };
   teams?: {
     home?: { id?: number; name?: string; logo?: string; winner?: boolean | null };
     away?: { id?: number; name?: string; logo?: string; winner?: boolean | null };
@@ -97,6 +97,12 @@ interface AfPredictionItem {
     percent?: { home?: string; draw?: string; away?: string };
     advice?: string;
   };
+}
+interface AfStandingTeam {
+  rank?: number;
+  points?: number;
+  form?: string;
+  team?: { id?: number; name?: string };
 }
 
 interface AfFixtureStatisticsItem {
@@ -678,6 +684,39 @@ export async function apiFootballRecentCornerAverages(
       }
 
       return null;
+    },
+  );
+}
+
+export async function apiFootballTeamStanding(
+  teamName: string,
+): Promise<{ league: string | null; rank: number | null; points: number | null; form: string | null } | null> {
+  if (!authConfig()) return null;
+  const id = await resolveTeamId(teamName);
+  if (!id) return null;
+  return cached(
+    `apifootball:standing:${id}`,
+    SPORTS_CACHE_TTL.teamStats,
+    async () => {
+      const latest = await get<{ response?: AfFixture[] }>(`/fixtures?team=${id}&last=1`);
+      const fx = latest?.response?.[0];
+      const leagueId = fx?.league?.id;
+      const season = fx?.league?.season;
+      if (!leagueId || !season) return null;
+      const standings = await get<{
+        response?: Array<{
+          league?: { name?: string; standings?: AfStandingTeam[][] };
+        }>;
+      }>(`/standings?league=${leagueId}&season=${season}`);
+      const table = standings?.response?.[0]?.league?.standings?.[0] ?? [];
+      const row = table.find((r) => r.team?.id === id);
+      if (!row) return null;
+      return {
+        league: standings?.response?.[0]?.league?.name ?? null,
+        rank: row.rank ?? null,
+        points: row.points ?? null,
+        form: row.form ?? null,
+      };
     },
   );
 }

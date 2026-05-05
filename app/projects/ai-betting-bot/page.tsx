@@ -374,6 +374,11 @@ function TeamHeader({
             {team.last10Streak || "—"}
           </span>
         </p>
+        <p className="text-[11px] text-muted-foreground">
+          {team.standing
+            ? `${team.standing.league ?? "league"} #${team.standing.rank ?? "?"} · ${team.standing.points ?? "?"} pts${team.standing.form ? ` · ${team.standing.form}` : ""}`
+            : "standing unavailable"}
+        </p>
       </div>
     </div>
   );
@@ -407,13 +412,15 @@ function FormStrip({ streak }: { streak: string }) {
 
 function InjuryList({
   team,
+  injuryFeedAvailable,
 }: {
   team: BettingRealDataTeam;
+  injuryFeedAvailable: boolean;
 }) {
   if (!team.injuries.length) {
     return (
       <p className="rounded-lg border border-border/40 bg-background/40 px-3 py-2 text-[11px] text-muted-foreground">
-        No injuries listed.
+        {injuryFeedAvailable ? "No injuries listed." : "Injury data unavailable from free providers."}
       </p>
     );
   }
@@ -550,9 +557,11 @@ function RecentGamesList({ team }: { team: BettingRealDataTeam }) {
 function TeamDataPanel({
   team,
   side,
+  injuryFeedAvailable,
 }: {
   team: BettingRealDataTeam;
   side: "Home" | "Away";
+  injuryFeedAvailable: boolean;
 }) {
   return (
     <div className="flex flex-col gap-4 rounded-2xl border border-border/60 bg-card/40 p-4">
@@ -673,7 +682,7 @@ function TeamDataPanel({
         <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
           Injuries
         </p>
-        <InjuryList team={team} />
+        <InjuryList team={team} injuryFeedAvailable={injuryFeedAvailable} />
       </div>
 
       <div>
@@ -3007,12 +3016,20 @@ export default function AiBettingBotPage() {
                     <TeamDataPanel
                       team={result.realData.awayTeam}
                       side="Away"
+                      injuryFeedAvailable={
+                        (result.realData.providerDiagnostics?.counts?.espnInjuriesAway ?? 0) > 0 ||
+                        (result.realData.providerDiagnostics?.counts?.apiInjuriesAway ?? 0) > 0
+                      }
                     />
                   ) : null}
                   {result.realData.homeTeam ? (
                     <TeamDataPanel
                       team={result.realData.homeTeam}
                       side="Home"
+                      injuryFeedAvailable={
+                        (result.realData.providerDiagnostics?.counts?.espnInjuriesHome ?? 0) > 0 ||
+                        (result.realData.providerDiagnostics?.counts?.apiInjuriesHome ?? 0) > 0
+                      }
                     />
                   ) : null}
                 </div>

@@ -55,6 +55,7 @@ import {
   apiFootballPrediction,
   apiFootballRecentCornerAverages,
   apiFootballRecentGames,
+  apiFootballTeamStanding,
 } from "@/lib/data-providers/api-football";
 import { balldontlieH2H } from "@/lib/data-providers/balldontlie";
 import { nhlHeadToHead } from "@/lib/data-providers/nhl";
@@ -732,6 +733,10 @@ async function collectRealData(
     family === "soccer" ? apiFootballRecentCornerAverages(homeName, 10) : Promise.resolve(null);
   const apiAwayCornersPromise =
     family === "soccer" ? apiFootballRecentCornerAverages(awayName, 10) : Promise.resolve(null);
+  const homeStandingPromise =
+    family === "soccer" ? apiFootballTeamStanding(homeName) : Promise.resolve(null);
+  const awayStandingPromise =
+    family === "soccer" ? apiFootballTeamStanding(awayName) : Promise.resolve(null);
 
   // Parallelise everything — providers above + ESPN + odds-API.
   const [
@@ -758,6 +763,8 @@ async function collectRealData(
     statsbombAwayCorners,
     apiHomeCorners,
     apiAwayCorners,
+    homeStanding,
+    awayStanding,
   ] = await Promise.all([
     getTeamInjuries(sportPath, fixture.homeTeam.id),
     getTeamInjuries(sportPath, fixture.awayTeam.id),
@@ -787,6 +794,8 @@ async function collectRealData(
     statsbombAwayCornersPromise,
     apiHomeCornersPromise,
     apiAwayCornersPromise,
+    homeStandingPromise,
+    awayStandingPromise,
   ]);
 
   // ESPN soccer schedule data is frequently incomplete. Prefer API-Football
@@ -1010,6 +1019,7 @@ async function collectRealData(
       sportPath,
       homeXg,
       homeCornersProfile,
+      homeStanding,
     ),
     awayTeam: toRealDataTeam(
       fixture.awayTeam,
@@ -1023,6 +1033,7 @@ async function collectRealData(
       sportPath,
       awayXg,
       awayCornersProfile,
+      awayStanding,
     ),
     marketOdds: fixture.odds,
     books,
@@ -1087,6 +1098,7 @@ function toRealDataTeam(
   sportPath: string,
   xg: BettingTeamXg | null,
   cornersProfile: { matches: number; cornersForAvg: number; cornersAgainstAvg: number } | null,
+  standing: { league: string | null; rank: number | null; points: number | null; form: string | null } | null,
 ): BettingRealDataTeam {
   const avg = averageScore(games);
   const prior = priorForSport(sportPath);
@@ -1157,6 +1169,7 @@ function toRealDataTeam(
     cornersForAvg: cornersProfile?.cornersForAvg ?? null,
     cornersAgainstAvg: cornersProfile?.cornersAgainstAvg ?? null,
     cornersSample: cornersProfile?.matches ?? 0,
+    standing,
   };
 }
 
@@ -1168,6 +1181,14 @@ function summariseRealData(data: BettingRealData | null): string {
   }
   const part = (label: string, t: BettingRealDataTeam | null) => {
     if (!t) return `${label}: (no data)`;
+    const isHome = label.toLowerCase().includes("home");
+    const hasInjuryFeed = data.providerDiagnostics
+      ? isHome
+        ? data.providerDiagnostics.counts.espnInjuriesHome > 0 ||
+          data.providerDiagnostics.counts.apiInjuriesHome > 0
+        : data.providerDiagnostics.counts.espnInjuriesAway > 0 ||
+          data.providerDiagnostics.counts.apiInjuriesAway > 0
+      : false;
     const inj = t.injuries.length
       ? t.injuries
           .map(
@@ -1177,7 +1198,9 @@ function summariseRealData(data: BettingRealData | null): string {
               }`,
           )
           .join("; ")
-      : "no listed injuries";
+      : hasInjuryFeed
+        ? "no listed injuries"
+        : "injury feed unavailable (unknown)";
     const impactLine =
       t.outImpactScore > 0
         ? ` Aggregate missing-player impact: −${(t.outImpactScore * 100).toFixed(1)}% of team strength${
@@ -1223,9 +1246,12 @@ function summariseRealData(data: BettingRealData | null): string {
       : "";
     const cornersLine =
       t.cornersSample > 0
-        ? ` Corners prior: ${t.cornersForAvg ?? "?"} for / ${t.cornersAgainstAvg ?? "?"} against over ${t.cornersSample} StatsBomb matches.`
+        ? ` Corners profile: ${t.cornersForAvg ?? "?"} for / ${t.cornersAgainstAvg ?? "?"} against over ${t.cornersSample} matches.`
         : "";
-    return `${label}: ${t.displayName} (${t.record ?? "record n/a"}) — last-10 ${t.last10Streak || "n/a"} (${splits}), ${marginLine}, ${ppgLine}, ${restLine}. Season stats: ${style}. Injuries: ${inj}.${impactLine} Recent games: ${recent}.${xgLine}${cornersLine}`;
+    const standingLine = t.standing
+      ? ` Standing: ${t.standing.league ?? "league"} #${t.standing.rank ?? "?"} (${t.standing.points ?? "?"} pts${t.standing.form ? `, form ${t.standing.form}` : ""}).`
+      : " Standing: unavailable.";
+    return `${label}: ${t.displayName} (${t.record ?? "record n/a"}) — last-10 ${t.last10Streak || "n/a"} (${splits}), ${marginLine}, ${ppgLine}, ${restLine}. Season stats: ${style}.${standingLine} Injuries: ${inj}.${impactLine} Recent games: ${recent}.${xgLine}${cornersLine}`;
   };
 
   const h2hLine = data.headToHead.length
