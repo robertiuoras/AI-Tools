@@ -197,7 +197,7 @@ export async function apiFootballHeadToHead(
   const key = `apifootball:h2h:${hId}-${aId}`;
   return cached(key, SPORTS_CACHE_TTL.h2h, async () => {
     const data = await get<{ response?: AfFixture[] }>(
-      `/fixtures/headtohead?h2h=${hId}-${aId}&last=10`,
+      `/fixtures/headtohead?h2h=${hId}-${aId}`,
     );
     const rows = data?.response ?? [];
     return rows
@@ -226,7 +226,8 @@ export async function apiFootballHeadToHead(
           venue: fx.fixture?.venue?.name ?? null,
         };
       })
-      .filter((g): g is BettingHeadToHeadGame => g !== null);
+      .filter((g): g is BettingHeadToHeadGame => g !== null)
+      .slice(0, 10);
   });
 }
 
@@ -240,25 +241,38 @@ export async function apiFootballInjuries(
     `apifootball:injuries:${id}`,
     SPORTS_CACHE_TTL.injuries,
     async () => {
-      const data = await get<{ response?: AfInjuryItem[] }>(
-        `/injuries?team=${id}&season=${currentSoccerSeason()}`,
-      );
-      const rows = data?.response ?? [];
-      const seen = new Set<string>();
-      const out: BettingRealDataPlayer[] = [];
-      for (const r of rows) {
-        const name = r.player?.name ?? "";
-        if (!name || seen.has(name)) continue;
-        seen.add(name);
-        out.push({
-          name,
-          position: r.player?.position ?? null,
-          status: r.type ?? "Unknown",
-          detail: r.reason ?? "",
-          headshot: null,
-        });
+      const seasonCandidates = [
+        currentSoccerSeason(),
+        currentSoccerSeason() - 1,
+        2024,
+        2023,
+        2022,
+      ];
+
+      for (const season of seasonCandidates) {
+        const data = await get<{ response?: AfInjuryItem[]; errors?: unknown }>(
+          `/injuries?team=${id}&season=${season}`,
+        );
+        const rows = data?.response ?? [];
+        if (rows.length === 0) continue;
+
+        const seen = new Set<string>();
+        const out: BettingRealDataPlayer[] = [];
+        for (const r of rows) {
+          const name = r.player?.name ?? "";
+          if (!name || seen.has(name)) continue;
+          seen.add(name);
+          out.push({
+            name,
+            position: r.player?.position ?? null,
+            status: r.type ?? "Unknown",
+            detail: r.reason ?? "",
+            headshot: null,
+          });
+        }
+        if (out.length > 0) return out.slice(0, 30);
       }
-      return out.slice(0, 30);
+      return [];
     },
   );
 }
@@ -371,54 +385,68 @@ export async function apiFootballRecentGames(
     `apifootball:recent:${id}:${limit}`,
     SPORTS_CACHE_TTL.schedule,
     async () => {
-      const data = await get<{ response?: AfFixture[] }>(
-        `/fixtures?team=${id}&last=${limit}`,
-      );
-      const rows = data?.response ?? [];
-      const out: EspnPastGame[] = [];
-      for (const fx of rows) {
-        const home = fx.teams?.home;
-        const away = fx.teams?.away;
-        const date = fx.fixture?.date ?? "";
-        if (!home || !away || !date) continue;
-        // Only count completed games — short codes: FT (full time),
-        // AET (after extra time), PEN (after penalties).
-        const short = fx.fixture?.status?.short ?? "";
-        if (!["FT", "AET", "PEN"].includes(short)) continue;
-        const isHome = home.id === id;
-        const me = isHome ? home : away;
-        const opp = isHome ? away : home;
-        const myScore = (isHome ? fx.goals?.home : fx.goals?.away) ?? null;
-        const oppScore = (isHome ? fx.goals?.away : fx.goals?.home) ?? null;
-        const wonFlag = me.winner;
-        const result: "W" | "L" | "T" | null =
-          wonFlag === true
-            ? "W"
-            : wonFlag === false
-              ? "L"
-              : myScore != null && oppScore != null
-                ? myScore > oppScore
-                  ? "W"
-                  : myScore < oppScore
-                    ? "L"
-                    : "T"
-                : null;
-        out.push({
-          id: String(fx.fixture?.id ?? ""),
-          date,
-          opponent: {
-            id: String(opp.id ?? ""),
-            displayName: opp.name ?? "",
-            abbreviation: (opp.name ?? "").slice(0, 3).toUpperCase(),
-            logo: opp.logo ?? null,
-          },
-          homeAway: isHome ? "home" : "away",
-          teamScore: myScore,
-          oppScore,
-          result,
-        });
+      const seasonCandidates = [
+        currentSoccerSeason(),
+        currentSoccerSeason() - 1,
+        2024,
+        2023,
+      ];
+
+      for (const season of seasonCandidates) {
+        const data = await get<{ response?: AfFixture[]; errors?: unknown }>(
+          `/fixtures?team=${id}&season=${season}`,
+        );
+        const rows = data?.response ?? [];
+        const out: EspnPastGame[] = [];
+        for (const fx of rows) {
+          const home = fx.teams?.home;
+          const away = fx.teams?.away;
+          const date = fx.fixture?.date ?? "";
+          if (!home || !away || !date) continue;
+          // Only count completed games — short codes: FT (full time),
+          // AET (after extra time), PEN (after penalties).
+          const short = fx.fixture?.status?.short ?? "";
+          if (!["FT", "AET", "PEN"].includes(short)) continue;
+          const isHome = home.id === id;
+          const me = isHome ? home : away;
+          const opp = isHome ? away : home;
+          const myScore = (isHome ? fx.goals?.home : fx.goals?.away) ?? null;
+          const oppScore = (isHome ? fx.goals?.away : fx.goals?.home) ?? null;
+          const wonFlag = me.winner;
+          const result: "W" | "L" | "T" | null =
+            wonFlag === true
+              ? "W"
+              : wonFlag === false
+                ? "L"
+                : myScore != null && oppScore != null
+                  ? myScore > oppScore
+                    ? "W"
+                    : myScore < oppScore
+                      ? "L"
+                      : "T"
+                  : null;
+          out.push({
+            id: String(fx.fixture?.id ?? ""),
+            date,
+            opponent: {
+              id: String(opp.id ?? ""),
+              displayName: opp.name ?? "",
+              abbreviation: (opp.name ?? "").slice(0, 3).toUpperCase(),
+              logo: opp.logo ?? null,
+            },
+            homeAway: isHome ? "home" : "away",
+            teamScore: myScore,
+            oppScore,
+            result,
+          });
+        }
+
+        if (out.length > 0) {
+          out.sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+          return out.slice(0, limit);
+        }
       }
-      return out;
+      return [];
     },
   );
 }
