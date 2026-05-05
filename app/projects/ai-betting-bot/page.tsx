@@ -161,6 +161,12 @@ const CONFIDENCE_BIN_STYLES: Record<
   elite: { label: "Elite", tone: "text-emerald-400" },
 };
 
+function realDataSourceBadge(source: BettingRealData["source"]): string {
+  if (source === "api-football") return "API-Football";
+  if (source === "espn") return "ESPN";
+  return "Unknown";
+}
+
 function metricToneFor(direction: BettingMetricScore["direction"]): {
   ring: string;
   bar: string;
@@ -2178,6 +2184,25 @@ export default function AiBettingBotPage() {
   // game finishes — the existing settlement loop auto-grades the result.
   const [activeView, setActiveView] = useState<"analyse" | "tracked">("analyse");
 
+  useEffect(() => {
+    if (!result) return;
+    try {
+      const payload = {
+        savedAt: new Date().toISOString(),
+        query,
+        notes,
+        odds: odds || null,
+        bankroll: bankroll || null,
+        fixture,
+        trackCtx,
+        result,
+      };
+      localStorage.setItem("betting-bot:last-analysis-debug", JSON.stringify(payload));
+    } catch {
+      // Non-fatal: localStorage can fail in private mode.
+    }
+  }, [result, query, notes, odds, bankroll, fixture, trackCtx]);
+
   const oddsParsed: ParsedOdds | null = useMemo(
     () => (odds.trim() ? parseOdds(odds) : null),
     [odds],
@@ -2837,9 +2862,12 @@ export default function AiBettingBotPage() {
                   <div className="min-w-0">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
                       Fixture
-                      {result.realData?.source === "espn" ? (
+                      {result.realData &&
+                      (result.realData.source === "espn" ||
+                        result.realData.source === "api-football") ? (
                         <span className="ml-2 inline-flex items-center gap-1 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">
-                          <CheckCircle2 className="h-2.5 w-2.5" /> Verified · ESPN
+                          <CheckCircle2 className="h-2.5 w-2.5" /> Verified ·{" "}
+                          {realDataSourceBadge(result.realData.source)}
                         </span>
                       ) : null}
                     </p>
@@ -2911,7 +2939,7 @@ export default function AiBettingBotPage() {
             ) : null}
 
             {/* Real data panels (ESPN-sourced) */}
-            {result.realData?.source === "espn" &&
+            {result.realData &&
             (result.realData.homeTeam || result.realData.awayTeam) ? (
               <section aria-labelledby="real-data-heading" className="space-y-4">
                 <div className="flex items-center gap-2">
@@ -2923,7 +2951,7 @@ export default function AiBettingBotPage() {
                     Verified data · injuries, form & recent games
                   </h2>
                   <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-300">
-                    ESPN
+                    {realDataSourceBadge(result.realData.source)}
                   </span>
                 </div>
                 <div className="grid gap-4 md:grid-cols-2">
@@ -3029,6 +3057,14 @@ export default function AiBettingBotPage() {
                         {trackedId ? "Tracked" : "Track this bet"}
                       </span>
                     </Button>
+                    <Link
+                      href="/projects/ai-betting-bot/debug"
+                      className="inline-flex items-center gap-1.5 rounded-md border border-border/60 bg-background/70 px-2.5 py-1.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      title="Open raw data used for this analysis"
+                    >
+                      <Telescope className="h-3.5 w-3.5" />
+                      Open debug data
+                    </Link>
                   </div>
                 </div>
 

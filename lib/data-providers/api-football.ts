@@ -105,7 +105,7 @@ function normalizeTeamName(value: string): string {
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\b(fc|cf|ac|sc|afc|cfc|club|de|atletico|athletic)\b/g, " ")
+    .replace(/\b(fc|cf|ac|sc|afc|cfc|club|de)\b/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
