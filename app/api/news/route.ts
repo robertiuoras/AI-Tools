@@ -135,7 +135,6 @@ function normalizeNewsItem(
   const firstContentLine = lines.find((line) => line.trim().length > 0) ?? "";
   const inferredFromLine = parseDateLikeLine(firstContentLine);
 
-  const hasTimestamp = !Number.isNaN(new Date(rawTimestamp).getTime());
   const shouldDropFirstLine = inferredFromLine !== null;
   const content = shouldDropFirstLine
     ? dropFirstNonEmptyLine(lines).join("\n").trim()
@@ -143,9 +142,9 @@ function normalizeNewsItem(
 
   return {
     content,
-    timestamp: hasTimestamp
-      ? rawTimestamp
-      : inferredFromLine?.toISOString() ?? rawTimestamp,
+    // Prefer explicit date headers from the news content (e.g. "May 3rd")
+    // over sheet timestamp columns, which may drift by timezone.
+    timestamp: inferredFromLine?.toISOString() ?? rawTimestamp,
   };
 }
 
