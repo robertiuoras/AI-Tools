@@ -87,10 +87,16 @@ function mergeContinuationRows(
   rows: Array<{ content: string; timestamp: string }>,
 ): Array<{ content: string; timestamp: string }> {
   const merged: Array<{ content: string; timestamp: string }> = [];
+  let pendingDateHeader: string | null = null;
 
   for (const row of rows) {
     const content = row.content.trim();
     if (!content) continue;
+
+    if (isDateOnlyLine(content)) {
+      pendingDateHeader = content;
+      continue;
+    }
 
     const previous = merged[merged.length - 1];
     if (previous && isLikelyContinuation(content, previous.content, row.timestamp, previous.timestamp)) {
@@ -99,10 +105,23 @@ function mergeContinuationRows(
       continue;
     }
 
-    merged.push({ ...row, content });
+    const withPendingDate = pendingDateHeader
+      ? `${pendingDateHeader}\n\n${content}`.trim()
+      : content;
+    pendingDateHeader = null;
+    merged.push({ ...row, content: withPendingDate });
   }
 
   return merged;
+}
+
+function isDateOnlyLine(content: string): boolean {
+  const lines = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length !== 1) return false;
+  return parseDateLikeLine(lines[0]) !== null;
 }
 
 function isLikelyContinuation(
@@ -172,18 +191,37 @@ function normalizeNewsItem(
   rawTimestamp: string,
 ): { content: string; timestamp: string } {
   const preprocessed = preprocessNewsRawContent(rawContent);
-  const lines = preprocessed.split(/\r?\n/);
-  const firstContentLine = lines.find((line) => line.trim().length > 0) ?? "";
-  const inferredFromLine = parseDateLikeLine(firstContentLine);
+  const originalLines = preprocessed.split(/\r?\n/);
+  const firstOriginalContentLine =
+    originalLines.find((line) => line.trim().length > 0) ?? "";
+  const inferredFromOriginalFirstLine = parseDateLikeLine(firstOriginalContentLine);
+  const withoutLeadingDate = stripLeadingDateHeader(preprocessed);
+  const lines = withoutLeadingDate.split(/\r?\n/);
+  const firstContentLineAfterStrip = lines.find((line) => line.trim().length > 0) ?? "";
+  const inferredFromLineAfterStrip = parseDateLikeLine(firstContentLineAfterStrip);
 
   return {
     // Keep sheet content as-is (except Discord mentions) to avoid dropping
     // paragraphs when entries span irregular row formats.
-    content: preprocessed.trim(),
+    content: withoutLeadingDate.trim(),
     // Prefer explicit date headers from the news content (e.g. "May 3rd")
     // over sheet timestamp columns, which may drift by timezone.
-    timestamp: inferredFromLine?.toISOString() ?? rawTimestamp,
+    timestamp:
+      inferredFromOriginalFirstLine?.toISOString() ??
+      inferredFromLineAfterStrip?.toISOString() ??
+      rawTimestamp,
   };
+}
+
+function stripLeadingDateHeader(content: string): string {
+  const lines = content.split(/\r?\n/);
+  const firstNonEmptyIdx = lines.findIndex((line) => line.trim().length > 0);
+  if (firstNonEmptyIdx < 0) return content;
+  if (parseDateLikeLine(lines[firstNonEmptyIdx]) === null) return content;
+
+  const remaining = lines.slice(firstNonEmptyIdx + 1).join("\n").trim();
+  if (!remaining) return content;
+  return remaining;
 }
 
 function parseDateLikeLine(value: string): Date | null {

@@ -377,7 +377,7 @@ function ErrorState({
 }) {
   return (
     <div className="rounded-2xl border border-destructive/35 bg-destructive/5 p-5 text-sm">
-      <p className="font-semibold text-destructive">Couldn't load news right now.</p>
+      <p className="font-semibold text-destructive">Couldn&apos;t load news right now.</p>
       <p className="mt-1 text-destructive/80">{message}</p>
       <button
         type="button"
@@ -437,7 +437,7 @@ function renderNewsMarkdown(input: string): string {
 
   // Bare links
   out = out.replace(
-    /(https?:\/\/[^\s<>"']+)/g,
+    /(?<!["'=])(https?:\/\/[^\s<>"']+)/g,
     (url: string) =>
       `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`,
   );
