@@ -751,6 +751,52 @@ async function collectRealData(
   if (lineMovement && lineMovement.snapshotCount >= 2) providerCount += 1;
   if (homeXg || awayXg) providerCount += 1;
 
+  const providerDiagnostics = {
+    family,
+    selectedSources: {
+      recentGames: providerRecentGames.source ?? "espn",
+      injuries: providerInjuries.source ?? "espn",
+      headToHead: providerH2H.source ?? (espnHeadToHead.length ? "espn" : "none"),
+      lineups:
+        (lineups.home.length || lineups.away.length) && family === "soccer"
+          ? "api-football"
+          : "none",
+      prediction: prediction?.source ?? "none",
+    },
+    counts: {
+      espnRecentHome: homeGamesEspn.length,
+      espnRecentAway: awayGamesEspn.length,
+      apiRecentHome: providerRecentGames.home.length,
+      apiRecentAway: providerRecentGames.away.length,
+      espnInjuriesHome: homeInjuriesEspn.length,
+      espnInjuriesAway: awayInjuriesEspn.length,
+      apiInjuriesHome: providerInjuries.home.length,
+      apiInjuriesAway: providerInjuries.away.length,
+      h2hEspn: espnHeadToHead.length,
+      h2hProvider: providerH2H.games.length,
+      h2hStored: storedH2H.length,
+      lineupsHome: lineups.home.length,
+      lineupsAway: lineups.away.length,
+    },
+    warnings: [
+      ...(family === "soccer" &&
+      homeGames.length === 0 &&
+      awayGames.length === 0
+        ? ["No recent games from ESPN or API-Football for this fixture."]
+        : []),
+      ...(family === "soccer" &&
+      providerInjuries.home.length === 0 &&
+      providerInjuries.away.length === 0 &&
+      homeInjuriesEspn.length === 0 &&
+      awayInjuriesEspn.length === 0
+        ? ["No injury rows available from providers for either team."]
+        : []),
+      ...(lineups.home.length === 0 && lineups.away.length === 0 && family === "soccer"
+        ? ["No lineup data available yet (provider may publish closer to kickoff)."]
+        : []),
+    ],
+  };
+
   // Vig-removed multi-book consensus — the actual fair-price baseline.
   const marketConsensus: BettingMarketConsensus | null = buildMarketConsensus(books);
 
@@ -792,6 +838,7 @@ async function collectRealData(
     weather,
     providerPrediction: prediction,
     providerCount,
+    providerDiagnostics,
     marketConsensus,
   };
 }
@@ -2207,6 +2254,14 @@ export async function POST(request: NextRequest) {
       let verdict = normaliseVerdict(finalContent.verdict);
       if (oddsMissing && (verdict === "bet" || verdict === "strong_bet")) {
         verdict = modelFairPct >= 60 && confidencePct >= 55 ? "lean" : "pass";
+      }
+      if (!oddsMissing && edgePct !== null) {
+        // Guardrail: final verdict must respect numeric edge/confidence rules.
+        if (edgePct >= 4 && confidencePct >= 65) verdict = "strong_bet";
+        else if (edgePct >= 2 && confidencePct >= 55) verdict = "bet";
+        else if (edgePct >= 1 && confidencePct >= 45) verdict = "lean";
+        else if (edgePct <= -2 && confidencePct >= 55) verdict = "fade";
+        else verdict = "pass";
       }
 
       const result: BettingAnalysisResult = {

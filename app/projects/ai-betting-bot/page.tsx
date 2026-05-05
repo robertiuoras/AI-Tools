@@ -2149,25 +2149,55 @@ const EXAMPLE_PROMPTS = [
   "Djokovic to win in straight sets at the Australian Open final",
 ];
 
+const BETTING_SESSION_KEY = "betting-bot:session-state";
+
+type BettingSessionSnapshot = {
+  query: string;
+  odds: string;
+  bankroll: string;
+  notes: string;
+  fixture: BettingFixture | null;
+  result: BettingAnalysisResult | null;
+  trackCtx: BettingTrackContext | null;
+};
+
+function readBettingSession(): BettingSessionSnapshot | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(BETTING_SESSION_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as BettingSessionSnapshot;
+  } catch {
+    return null;
+  }
+}
+
 export default function AiBettingBotPage() {
   const { addToast } = useToast();
+  const restored = readBettingSession();
 
-  const [query, setQuery] = useState<string>("");
-  const [odds, setOdds] = useState<string>("");
-  const [bankroll, setBankroll] = useState<string>("");
-  const [notes, setNotes] = useState<string>("");
+  const [query, setQuery] = useState<string>(restored?.query ?? "");
+  const [odds, setOdds] = useState<string>(restored?.odds ?? "");
+  const [bankroll, setBankroll] = useState<string>(restored?.bankroll ?? "");
+  const [notes, setNotes] = useState<string>(restored?.notes ?? "");
   const [optionsOpen, setOptionsOpen] = useState<boolean>(false);
 
   const [stages, setStages] = useState<StageState[]>(buildInitialStages);
-  const [fixture, setFixture] = useState<BettingFixture | null>(null);
+  const [fixture, setFixture] = useState<BettingFixture | null>(
+    restored?.fixture ?? null,
+  );
   const [streaming, setStreaming] = useState<boolean>(false);
-  const [result, setResult] = useState<BettingAnalysisResult | null>(null);
+  const [result, setResult] = useState<BettingAnalysisResult | null>(
+    restored?.result ?? null,
+  );
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   // Track-context sent alongside the "final" event so we can persist the
   // ESPN identifiers when the user clicks "Track this bet".
-  const [trackCtx, setTrackCtx] = useState<BettingTrackContext | null>(null);
+  const [trackCtx, setTrackCtx] = useState<BettingTrackContext | null>(
+    restored?.trackCtx ?? null,
+  );
   const [trackedId, setTrackedId] = useState<string | null>(null);
   const [tracking, setTracking] = useState<boolean>(false);
 
@@ -2198,10 +2228,28 @@ export default function AiBettingBotPage() {
         result,
       };
       localStorage.setItem("betting-bot:last-analysis-debug", JSON.stringify(payload));
+      sessionStorage.setItem("betting-bot:last-analysis-debug", JSON.stringify(payload));
     } catch {
       // Non-fatal: localStorage can fail in private mode.
     }
   }, [result, query, notes, odds, bankroll, fixture, trackCtx]);
+
+  useEffect(() => {
+    try {
+      const snapshot: BettingSessionSnapshot = {
+        query,
+        odds,
+        bankroll,
+        notes,
+        fixture,
+        result,
+        trackCtx,
+      };
+      sessionStorage.setItem(BETTING_SESSION_KEY, JSON.stringify(snapshot));
+    } catch {
+      // best-effort only
+    }
+  }, [query, odds, bankroll, notes, fixture, result, trackCtx]);
 
   const oddsParsed: ParsedOdds | null = useMemo(
     () => (odds.trim() ? parseOdds(odds) : null),

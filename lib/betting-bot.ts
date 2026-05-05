@@ -290,6 +290,8 @@ export interface BettingRealData {
    *  (1 = ESPN only, 2 = ESPN + balldontlie, etc.). Drives the verdict
    *  confidence ceiling — richer data deserves a higher ceiling. */
   providerCount: number;
+  /** Per-run source/count diagnostics to debug sparse provider data. */
+  providerDiagnostics: BettingProviderDiagnostics;
   /** Vig-free multi-book consensus — the *fair price baseline* the model
    *  reasons against (instead of one book's offered, vig-fattened price). */
   marketConsensus: BettingMarketConsensus | null;
@@ -334,6 +336,33 @@ export interface BettingProviderPrediction {
   drawPct: number | null;
   awayWinPct: number | null;
   advice: string | null;
+}
+
+export interface BettingProviderDiagnostics {
+  family: string;
+  selectedSources: {
+    recentGames: string;
+    injuries: string;
+    headToHead: string;
+    lineups: string;
+    prediction: string;
+  };
+  counts: {
+    espnRecentHome: number;
+    espnRecentAway: number;
+    apiRecentHome: number;
+    apiRecentAway: number;
+    espnInjuriesHome: number;
+    espnInjuriesAway: number;
+    apiInjuriesHome: number;
+    apiInjuriesAway: number;
+    h2hEspn: number;
+    h2hProvider: number;
+    h2hStored: number;
+    lineupsHome: number;
+    lineupsAway: number;
+  };
+  warnings: string[];
 }
 
 /** Vig-removed multi-book consensus — used as the *fair-price baseline*

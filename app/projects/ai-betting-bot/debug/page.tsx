@@ -21,7 +21,9 @@ export default function BettingBotDebugPage() {
   const payload = useMemo<DebugPayload | null>(() => {
     if (typeof window === "undefined") return null;
     try {
-      const raw = localStorage.getItem("betting-bot:last-analysis-debug");
+      const raw =
+        sessionStorage.getItem("betting-bot:last-analysis-debug") ??
+        localStorage.getItem("betting-bot:last-analysis-debug");
       if (!raw) return null;
       return JSON.parse(raw) as DebugPayload;
     } catch {
