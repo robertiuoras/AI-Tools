@@ -1,0 +1,18 @@
+{
+  "generatedAt": "2026-05-05T14:07:22.188Z",
+  "source": "statsbomb/open-data",
+  "teams": [
+    {
+      "team": "Arsenal",
+      "matches": 38,
+      "cornersForAvg": 5.32,
+      "cornersAgainstAvg": 5.37
+    },
+    {
+      "team": "Paris Saint-Germain",
+      "matches": 32,
+      "cornersForAvg": 5.31,
+      "cornersAgainstAvg": 3.69
+    }
+  ]
+}

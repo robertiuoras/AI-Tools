@@ -217,6 +217,10 @@ export interface BettingRealDataTeam {
     status: string;
     impact: number;
   }>;
+  /** Historical corner profile (e.g. StatsBomb open-data prior), if available. */
+  cornersForAvg: number | null;
+  cornersAgainstAvg: number | null;
+  cornersSample: number;
 }
 
 export interface BettingLineupPlayer {
@@ -374,6 +378,9 @@ export interface BettingProviderDiagnostics {
     lineMovementExtreme: boolean;
     hardFail: boolean;
     allSatisfied: boolean;
+    modelFairPct?: number;
+    modelLine?: string | null;
+    modelTotalCornersMean?: number;
   };
   warnings: string[];
 }

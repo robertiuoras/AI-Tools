@@ -64,6 +64,7 @@ import { understatTeamXg } from "@/lib/data-providers/understat";
 import { buildMarketConsensus } from "@/lib/odds-math";
 import { priorForSport, shrunkAvg } from "@/lib/league-priors";
 import { teamImpactSummary } from "@/lib/player-impact";
+import { getStatsbombCornersForTeam } from "@/lib/statsbomb-corners";
 import type {
   BettingHeadToHeadGame,
   BettingLineupPlayer,
@@ -246,6 +247,40 @@ function computeComposite(metrics: BettingMetricScore[]): number {
   }
   if (weightSum === 0) return 50;
   return clamp((total / weightSum) * 10, 0, 100);
+}
+
+function extractCornersLine(text: string): { side: "over" | "under"; line: number } | null {
+  const s = String(text ?? "").toLowerCase();
+  const m = s.match(/\b(over|under)\s*(\d{1,2}(?:\.\d)?)\s*corners?\b/);
+  if (!m) return null;
+  const side = m[1] === "over" ? "over" : "under";
+  const line = Number(m[2]);
+  if (!Number.isFinite(line) || line < 1 || line > 25) return null;
+  return { side, line };
+}
+
+function poissonCdf(k: number, lambda: number): number {
+  if (!Number.isFinite(lambda) || lambda <= 0) return 0;
+  if (!Number.isFinite(k)) return 0;
+  const kk = Math.max(0, Math.floor(k));
+  let term = Math.exp(-lambda);
+  let sum = term;
+  for (let i = 1; i <= kk; i += 1) {
+    term = (term * lambda) / i;
+    sum += term;
+  }
+  return clamp(sum, 0, 1);
+}
+
+function cornersUnderOverProbability(
+  totalCornersMean: number,
+  line: number,
+  side: "over" | "under",
+): number {
+  // Example: under 10.5 means P(X <= 10), over 10.5 means P(X >= 11).
+  const threshold = Math.floor(line);
+  const under = poissonCdf(threshold, totalCornersMean);
+  return side === "under" ? under : 1 - under;
 }
 
 function costFor(
@@ -583,6 +618,14 @@ async function collectRealData(
     family === "soccer" ? understatTeamXg(sportPath, homeName) : Promise.resolve(null);
   const awayXgPromise: Promise<BettingTeamXg | null> =
     family === "soccer" ? understatTeamXg(sportPath, awayName) : Promise.resolve(null);
+  const statsbombHomeCornersPromise =
+    family === "soccer"
+      ? getStatsbombCornersForTeam(homeName)
+      : Promise.resolve(null);
+  const statsbombAwayCornersPromise =
+    family === "soccer"
+      ? getStatsbombCornersForTeam(awayName)
+      : Promise.resolve(null);
 
   // Parallelise everything — providers above + ESPN + odds-API.
   const [
@@ -605,6 +648,8 @@ async function collectRealData(
     weather,
     homeXg,
     awayXg,
+    statsbombHomeCorners,
+    statsbombAwayCorners,
   ] = await Promise.all([
     getTeamInjuries(sportPath, fixture.homeTeam.id),
     getTeamInjuries(sportPath, fixture.awayTeam.id),
@@ -630,6 +675,8 @@ async function collectRealData(
     weatherPromise,
     homeXgPromise,
     awayXgPromise,
+    statsbombHomeCornersPromise,
+    statsbombAwayCornersPromise,
   ]);
 
   // ESPN soccer schedule data is frequently incomplete. Prefer API-Football
@@ -750,6 +797,7 @@ async function collectRealData(
   if (prediction) providerCount += 1;
   if (lineMovement && lineMovement.snapshotCount >= 2) providerCount += 1;
   if (homeXg || awayXg) providerCount += 1;
+  if (statsbombHomeCorners || statsbombAwayCorners) providerCount += 1;
 
   const providerDiagnostics = {
     family,
@@ -794,6 +842,15 @@ async function collectRealData(
       ...(lineups.home.length === 0 && lineups.away.length === 0 && family === "soccer"
         ? ["No lineup data available yet (provider may publish closer to kickoff)."]
         : []),
+      ...(family === "soccer" && !statsbombHomeCorners && !statsbombAwayCorners
+        ? ["No StatsBomb corner priors loaded (optional local dataset missing)."]
+        : []),
+      ...(family === "soccer" && !!statsbombHomeCorners && !statsbombAwayCorners
+        ? ["StatsBomb corner priors found for home team only; away team prior missing."]
+        : []),
+      ...(family === "soccer" && !statsbombHomeCorners && !!statsbombAwayCorners
+        ? ["StatsBomb corner priors found for away team only; home team prior missing."]
+        : []),
     ],
   };
 
@@ -817,6 +874,7 @@ async function collectRealData(
       lineups.home,
       sportPath,
       homeXg,
+      statsbombHomeCorners,
     ),
     awayTeam: toRealDataTeam(
       fixture.awayTeam,
@@ -829,6 +887,7 @@ async function collectRealData(
       lineups.away,
       sportPath,
       awayXg,
+      statsbombAwayCorners,
     ),
     marketOdds: fixture.odds,
     books,
@@ -892,6 +951,7 @@ function toRealDataTeam(
   lineup: BettingLineupPlayer[],
   sportPath: string,
   xg: BettingTeamXg | null,
+  cornersProfile: { matches: number; cornersForAvg: number; cornersAgainstAvg: number } | null,
 ): BettingRealDataTeam {
   const avg = averageScore(games);
   const prior = priorForSport(sportPath);
@@ -959,6 +1019,9 @@ function toRealDataTeam(
     xg,
     outImpactScore: playerImpact.totalImpact,
     outImpactBreakdown: playerImpact.breakdown.slice(0, 5),
+    cornersForAvg: cornersProfile?.cornersForAvg ?? null,
+    cornersAgainstAvg: cornersProfile?.cornersAgainstAvg ?? null,
+    cornersSample: cornersProfile?.matches ?? 0,
   };
 }
 
@@ -1023,7 +1086,11 @@ function summariseRealData(data: BettingRealData | null): string {
     const xgLine = t.xg
       ? ` xG: ${t.xg.xgPerMatch}/g for, ${t.xg.xgaPerMatch}/g against (${t.xg.matches} matches; goals ${t.xg.goalsPerMatch}/g, conceded ${t.xg.concededPerMatch}/g — gap signals over/under-perform).`
       : "";
-    return `${label}: ${t.displayName} (${t.record ?? "record n/a"}) — last-10 ${t.last10Streak || "n/a"} (${splits}), ${marginLine}, ${ppgLine}, ${restLine}. Season stats: ${style}. Injuries: ${inj}.${impactLine} Recent games: ${recent}.${xgLine}`;
+    const cornersLine =
+      t.cornersSample > 0
+        ? ` Corners prior: ${t.cornersForAvg ?? "?"} for / ${t.cornersAgainstAvg ?? "?"} against over ${t.cornersSample} StatsBomb matches.`
+        : "";
+    return `${label}: ${t.displayName} (${t.record ?? "record n/a"}) — last-10 ${t.last10Streak || "n/a"} (${splits}), ${marginLine}, ${ppgLine}, ${restLine}. Season stats: ${style}. Injuries: ${inj}.${impactLine} Recent games: ${recent}.${xgLine}${cornersLine}`;
   };
 
   const h2hLine = data.headToHead.length
@@ -2182,7 +2249,7 @@ export async function POST(request: NextRequest) {
       // ── Server-side math ──────────────────────────────────────────
       const metrics = normaliseMetrics(finalContent.metrics);
       const compositeScore = computeComposite(metrics);
-      const modelFairPct = clamp(
+      let modelFairPct = clamp(
         Number(
           (finalContent as { fairWinProbabilityPct?: number })
             .fairWinProbabilityPct ?? 50,
@@ -2276,6 +2343,9 @@ export async function POST(request: NextRequest) {
 
       const marketFocus = marketFocusFromText(`${query}\n${notes}`);
       if (marketFocus === "corners") {
+        const cornersMarket = extractCornersLine(
+          `${query}\n${notes}\n${String(finalContent.marketNormalized ?? "")}`,
+        );
         const books = realData?.books ?? [];
         const pinnacleBook =
           books.find((b) => b.key.toLowerCase() === "pinnacle") ??
@@ -2300,9 +2370,36 @@ export async function POST(request: NextRequest) {
           return Number.isFinite(t) && now.getTime() - t <= thirtyDaysMs;
         }).length;
 
-        // Placeholder until corners-per-match feed is integrated.
-        const cornerSamplesHome = 0;
-        const cornerSamplesAway = 0;
+        const cornerSamplesHome = realData?.homeTeam?.cornersSample ?? 0;
+        const cornerSamplesAway = realData?.awayTeam?.cornersSample ?? 0;
+
+        const homeCornersFor = realData?.homeTeam?.cornersForAvg;
+        const homeCornersAgainst = realData?.homeTeam?.cornersAgainstAvg;
+        const awayCornersFor = realData?.awayTeam?.cornersForAvg;
+        const awayCornersAgainst = realData?.awayTeam?.cornersAgainstAvg;
+        const cornersBaseline = 9.6;
+        const sideMeans = [
+          homeCornersFor,
+          awayCornersAgainst,
+          awayCornersFor,
+          homeCornersAgainst,
+        ].filter((n): n is number => Number.isFinite(n));
+        const totalCornersMean =
+          sideMeans.length > 0
+            ? Number((sideMeans.reduce((a, b) => a + b, 0) / 2).toFixed(2))
+            : cornersBaseline;
+
+        // Phase 2: deterministic corners fair-probability model.
+        // Only apply when market text has explicit over/under corners line
+        // and we have at least one side of corner priors.
+        if (cornersMarket && sideMeans.length > 0) {
+          const p = cornersUnderOverProbability(
+            totalCornersMean,
+            cornersMarket.line,
+            cornersMarket.side,
+          );
+          modelFairPct = clamp(Number((p * 100).toFixed(2)), 1, 99);
+        }
 
         const lineupAvailable =
           (realData?.homeTeam?.lineup.length ?? 0) > 0 &&
@@ -2340,6 +2437,12 @@ export async function POST(request: NextRequest) {
             lineMovementExtreme,
             hardFail,
             allSatisfied,
+            modelFairPct: Number(modelFairPct.toFixed(2)),
+            modelLine:
+              cornersMarket
+                ? `${cornersMarket.side} ${cornersMarket.line}`
+                : null,
+            modelTotalCornersMean: totalCornersMean,
           };
           if (!cornersLineAvailable) {
             realData.providerDiagnostics.warnings.push(
