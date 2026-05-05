@@ -4,7 +4,7 @@
   "crons": [
     {
       "path": "/api/projects/ai-betting-bot/cron/snapshot-closing",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 0 * * *"
     }
   ]
 }
