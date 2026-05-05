@@ -2274,6 +2274,87 @@ export async function POST(request: NextRequest) {
         else verdict = "pass";
       }
 
+      const marketFocus = marketFocusFromText(`${query}\n${notes}`);
+      if (marketFocus === "corners") {
+        const books = realData?.books ?? [];
+        const pinnacleBook =
+          books.find((b) => b.key.toLowerCase() === "pinnacle") ??
+          books.find((b) => b.provider.toLowerCase().includes("pinnacle")) ??
+          null;
+        const trustedBook = pinnacleBook?.provider ?? null;
+
+        // Current integrated books expose h2h/spread/totals, not dedicated
+        // corners lines. Keep this strict to avoid overconfident corners calls.
+        const cornersLineAvailable = false;
+
+        const homeRecent = realData?.homeTeam?.recentGames ?? [];
+        const awayRecent = realData?.awayTeam?.recentGames ?? [];
+        const now = new Date();
+        const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+        const recent30dHome = homeRecent.filter((g) => {
+          const t = Date.parse(g.date);
+          return Number.isFinite(t) && now.getTime() - t <= thirtyDaysMs;
+        }).length;
+        const recent30dAway = awayRecent.filter((g) => {
+          const t = Date.parse(g.date);
+          return Number.isFinite(t) && now.getTime() - t <= thirtyDaysMs;
+        }).length;
+
+        // Placeholder until corners-per-match feed is integrated.
+        const cornerSamplesHome = 0;
+        const cornerSamplesAway = 0;
+
+        const lineupAvailable =
+          (realData?.homeTeam?.lineup.length ?? 0) > 0 &&
+          (realData?.awayTeam?.lineup.length ?? 0) > 0;
+        const lineMovementShift = realData?.lineMovement?.totalMove ?? null;
+        const lineMovementExtreme =
+          lineMovementShift != null && Math.abs(lineMovementShift) > 1.5;
+
+        // User-requested strict hard fails:
+        // - no corners line OR <5 corner-stat matches on either team.
+        const hardFail =
+          !cornersLineAvailable ||
+          cornerSamplesHome < 5 ||
+          cornerSamplesAway < 5;
+
+        const allSatisfied =
+          cornerSamplesHome >= 7 &&
+          cornerSamplesAway >= 7 &&
+          recent30dHome >= 3 &&
+          recent30dAway >= 3 &&
+          lineupAvailable &&
+          cornersLineAvailable &&
+          !lineMovementExtreme;
+
+        if (realData?.providerDiagnostics) {
+          realData.providerDiagnostics.cornersGate = {
+            trustedBook,
+            cornersLineAvailable,
+            cornerSamplesHome,
+            cornerSamplesAway,
+            recent30dHome,
+            recent30dAway,
+            lineupAvailable,
+            lineMovementShift,
+            lineMovementExtreme,
+            hardFail,
+            allSatisfied,
+          };
+          if (!cornersLineAvailable) {
+            realData.providerDiagnostics.warnings.push(
+              "Corners market line unavailable from trusted books (Pinnacle preferred) — forcing PASS.",
+            );
+          }
+        }
+
+        if (hardFail) {
+          verdict = "pass";
+        } else if (!allSatisfied && (verdict === "bet" || verdict === "strong_bet")) {
+          verdict = "lean";
+        }
+      }
+
       const result: BettingAnalysisResult = {
         fixture: authoritativeFixture,
         pickSummary:

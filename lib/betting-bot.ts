@@ -362,6 +362,19 @@ export interface BettingProviderDiagnostics {
     lineupsHome: number;
     lineupsAway: number;
   };
+  cornersGate?: {
+    trustedBook: string | null;
+    cornersLineAvailable: boolean;
+    cornerSamplesHome: number;
+    cornerSamplesAway: number;
+    recent30dHome: number;
+    recent30dAway: number;
+    lineupAvailable: boolean;
+    lineMovementShift: number | null;
+    lineMovementExtreme: boolean;
+    hardFail: boolean;
+    allSatisfied: boolean;
+  };
   warnings: string[];
 }
 
