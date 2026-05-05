@@ -53,6 +53,7 @@ import {
   apiFootballInjuries,
   apiFootballLineupForFixture,
   apiFootballPrediction,
+  apiFootballRecentCornerAverages,
   apiFootballRecentGames,
 } from "@/lib/data-providers/api-football";
 import { balldontlieH2H } from "@/lib/data-providers/balldontlie";
@@ -337,6 +338,23 @@ function expectedGoalMeans(data: BettingRealData | null): { muHome: number; muAw
     muHome: Number.isFinite(muHome) ? muHome : base,
     muAway: Number.isFinite(muAway) ? muAway : base,
   };
+}
+
+function hasGoalsLeakage(text: string): boolean {
+  const s = String(text ?? "").toLowerCase();
+  return (
+    /\b\d+(\.\d+)?\s*goals?\b/.test(s) ||
+    /\btotal goals?\b/.test(s) ||
+    /\bover\/under\s*\d+(\.\d+)?\b/.test(s)
+  );
+}
+
+function sanitizeCornersNarrative(text: string, fairPct: number, lineLabel: string | null): string {
+  const clean = String(text ?? "").trim();
+  if (!clean || !hasGoalsLeakage(clean)) return clean;
+  const p = Number.isFinite(fairPct) ? fairPct.toFixed(2) : "n/a";
+  const line = lineLabel ?? "corners line";
+  return `Corners-market summary sanitized: use only corner evidence. Model fair probability for ${line} is ${p}% based on available corners profiles and quality gates.`;
 }
 
 function costFor(
@@ -682,6 +700,10 @@ async function collectRealData(
     family === "soccer"
       ? getStatsbombCornersForTeam(awayName)
       : Promise.resolve(null);
+  const apiHomeCornersPromise =
+    family === "soccer" ? apiFootballRecentCornerAverages(homeName, 10) : Promise.resolve(null);
+  const apiAwayCornersPromise =
+    family === "soccer" ? apiFootballRecentCornerAverages(awayName, 10) : Promise.resolve(null);
 
   // Parallelise everything — providers above + ESPN + odds-API.
   const [
@@ -706,6 +728,8 @@ async function collectRealData(
     awayXg,
     statsbombHomeCorners,
     statsbombAwayCorners,
+    apiHomeCorners,
+    apiAwayCorners,
   ] = await Promise.all([
     getTeamInjuries(sportPath, fixture.homeTeam.id),
     getTeamInjuries(sportPath, fixture.awayTeam.id),
@@ -733,6 +757,8 @@ async function collectRealData(
     awayXgPromise,
     statsbombHomeCornersPromise,
     statsbombAwayCornersPromise,
+    apiHomeCornersPromise,
+    apiAwayCornersPromise,
   ]);
 
   // ESPN soccer schedule data is frequently incomplete. Prefer API-Football
@@ -853,7 +879,25 @@ async function collectRealData(
   if (prediction) providerCount += 1;
   if (lineMovement && lineMovement.snapshotCount >= 2) providerCount += 1;
   if (homeXg || awayXg) providerCount += 1;
-  if (statsbombHomeCorners || statsbombAwayCorners) providerCount += 1;
+  if (statsbombHomeCorners || statsbombAwayCorners || apiHomeCorners || apiAwayCorners)
+    providerCount += 1;
+
+  const homeCornersProfile =
+    apiHomeCorners && apiHomeCorners.sample >= 5
+      ? {
+          matches: apiHomeCorners.sample,
+          cornersForAvg: apiHomeCorners.cornersForAvg,
+          cornersAgainstAvg: apiHomeCorners.cornersAgainstAvg,
+        }
+      : statsbombHomeCorners;
+  const awayCornersProfile =
+    apiAwayCorners && apiAwayCorners.sample >= 5
+      ? {
+          matches: apiAwayCorners.sample,
+          cornersForAvg: apiAwayCorners.cornersForAvg,
+          cornersAgainstAvg: apiAwayCorners.cornersAgainstAvg,
+        }
+      : statsbombAwayCorners;
 
   const providerDiagnostics = {
     family,
@@ -907,6 +951,13 @@ async function collectRealData(
       ...(family === "soccer" && !statsbombHomeCorners && !!statsbombAwayCorners
         ? ["StatsBomb corner priors found for away team only; home team prior missing."]
         : []),
+      ...(family === "soccer" &&
+      !apiHomeCorners &&
+      !apiAwayCorners &&
+      !statsbombHomeCorners &&
+      !statsbombAwayCorners
+        ? ["No free corners profile source returned data for this fixture yet."]
+        : []),
     ],
   };
 
@@ -930,7 +981,7 @@ async function collectRealData(
       lineups.home,
       sportPath,
       homeXg,
-      statsbombHomeCorners,
+      homeCornersProfile,
     ),
     awayTeam: toRealDataTeam(
       fixture.awayTeam,
@@ -943,7 +994,7 @@ async function collectRealData(
       lineups.away,
       sportPath,
       awayXg,
-      statsbombAwayCorners,
+      awayCornersProfile,
     ),
     marketOdds: fixture.odds,
     books,
@@ -2466,11 +2517,16 @@ export async function POST(request: NextRequest) {
           books.find((b) => b.key.toLowerCase() === "pinnacle") ??
           books.find((b) => b.provider.toLowerCase().includes("pinnacle")) ??
           null;
-        const trustedBook = pinnacleBook?.provider ?? null;
+        const trustedBook =
+          pinnacleBook?.provider ??
+          (oddsSource === "user"
+            ? "user-supplied"
+            : books[0]?.provider ?? null);
 
-        // Current integrated books expose h2h/spread/totals, not dedicated
-        // corners lines. Keep this strict to avoid overconfident corners calls.
-        const cornersLineAvailable = false;
+        // Free books often omit dedicated corners totals. Accept explicit
+        // user/market-normalized corners line as "available", but keep
+        // diagnostics transparent about source quality.
+        const cornersLineAvailable = !!cornersMarket;
 
         const homeRecent = realData?.homeTeam?.recentGames ?? [];
         const awayRecent = realData?.awayTeam?.recentGames ?? [];
@@ -2576,6 +2632,10 @@ export async function POST(request: NextRequest) {
             realData.providerDiagnostics.warnings.push(
               "Corners market line unavailable from trusted books (Pinnacle preferred) — forcing PASS.",
             );
+          } else if (!pinnacleBook) {
+            realData.providerDiagnostics.warnings.push(
+              "Corners line available from non-Pinnacle source (user or fallback book).",
+            );
           }
           if (!canApplyCornersModel) {
             realData.providerDiagnostics.warnings.push(
@@ -2590,6 +2650,19 @@ export async function POST(request: NextRequest) {
           verdict = "lean";
         }
       }
+
+      const marketLineLabel =
+        marketFocus === "corners"
+          ? realData?.providerDiagnostics?.cornersGate?.modelLine ?? null
+          : null;
+      const rawSummary =
+        typeof finalContent.summary === "string" && finalContent.summary.trim()
+          ? finalContent.summary.trim()
+          : "No narrative summary returned.";
+      const safeSummary =
+        marketFocus === "corners"
+          ? sanitizeCornersNarrative(rawSummary, modelFairPct, marketLineLabel)
+          : rawSummary;
 
       const result: BettingAnalysisResult = {
         fixture: authoritativeFixture,
@@ -2621,11 +2694,7 @@ export async function POST(request: NextRequest) {
         confidenceBin: confidenceBinFor(confidencePct),
         compositeScore: Number(compositeScore.toFixed(1)),
         metrics,
-        summary:
-          typeof finalContent.summary === "string" &&
-          finalContent.summary.trim()
-            ? finalContent.summary.trim()
-            : "No narrative summary returned.",
+        summary: safeSummary,
         risks: Array.isArray(finalContent.risks)
           ? finalContent.risks
               .map((r: unknown) => (typeof r === "string" ? r.trim() : ""))

@@ -99,6 +99,11 @@ interface AfPredictionItem {
   };
 }
 
+interface AfFixtureStatisticsItem {
+  team?: { id?: number };
+  statistics?: Array<{ type?: string; value?: string | number | null }>;
+}
+
 function normalizeTeamName(value: string): string {
   return value
     .normalize("NFKD")
@@ -299,14 +304,19 @@ export async function apiFootballLineupForFixture(
     SPORTS_CACHE_TTL.lineups,
     async () => {
       const fixtures = await get<{ response?: AfFixture[] }>(
-        `/fixtures/headtohead?h2h=${hId}-${aId}&next=1`,
+        `/fixtures/headtohead?h2h=${hId}-${aId}&next=5`,
       );
-      const fxId = fixtures?.response?.[0]?.fixture?.id;
-      if (!fxId) return null;
-      const data = await get<{ response?: AfLineupItem[] }>(
-        `/fixtures/lineups?fixture=${fxId}`,
-      );
-      const rows = data?.response ?? [];
+      const candidates = fixtures?.response ?? [];
+      let rows: AfLineupItem[] = [];
+      for (const fx of candidates) {
+        const fxId = fx.fixture?.id;
+        if (!fxId) continue;
+        const data = await get<{ response?: AfLineupItem[] }>(
+          `/fixtures/lineups?fixture=${fxId}`,
+        );
+        rows = data?.response ?? [];
+        if (rows.length > 0) break;
+      }
       const toPlayers = (
         items: NonNullable<AfLineupItem["startXI"]>,
         status: string,
@@ -452,6 +462,92 @@ export async function apiFootballRecentGames(
         }
       }
       return [];
+    },
+  );
+}
+
+export async function apiFootballRecentCornerAverages(
+  teamName: string,
+  limit = 10,
+): Promise<{ cornersForAvg: number; cornersAgainstAvg: number; sample: number } | null> {
+  if (!authConfig()) return null;
+  const id = await resolveTeamId(teamName);
+  if (!id) return null;
+  return cached(
+    `apifootball:corners:${id}:${limit}`,
+    SPORTS_CACHE_TTL.teamStats,
+    async () => {
+      const seasonCandidates = [
+        currentSoccerSeason(),
+        currentSoccerSeason() - 1,
+        2024,
+        2023,
+      ];
+
+      for (const season of seasonCandidates) {
+        const data = await get<{ response?: AfFixture[] }>(
+          `/fixtures?team=${id}&season=${season}`,
+        );
+        const rows = data?.response ?? [];
+        const played = rows
+          .filter((fx) => {
+            const short = fx.fixture?.status?.short ?? "";
+            return ["FT", "AET", "PEN"].includes(short);
+          })
+          .sort(
+            (a, b) =>
+              Date.parse(b.fixture?.date ?? "") - Date.parse(a.fixture?.date ?? ""),
+          )
+          .slice(0, limit);
+        if (played.length === 0) continue;
+
+        let forSum = 0;
+        let againstSum = 0;
+        let sample = 0;
+
+        for (const fx of played) {
+          const fxId = fx.fixture?.id;
+          if (!fxId) continue;
+          const stats = await get<{ response?: AfFixtureStatisticsItem[] }>(
+            `/fixtures/statistics?fixture=${fxId}`,
+          );
+          const sRows = stats?.response ?? [];
+          if (sRows.length < 2) continue;
+          const parseCorners = (row: AfFixtureStatisticsItem): number | null => {
+            const hit = (row.statistics ?? []).find((s) =>
+              /corner kicks/i.test(String(s.type ?? "")),
+            );
+            if (!hit) return null;
+            const raw = hit.value;
+            if (raw == null) return null;
+            if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
+            const n = Number(String(raw).replace(/[^\d.-]/g, ""));
+            return Number.isFinite(n) ? n : null;
+          };
+          const home = sRows[0];
+          const away = sRows[1];
+          if (!home || !away) continue;
+          const homeCorners = parseCorners(home);
+          const awayCorners = parseCorners(away);
+          if (homeCorners == null || awayCorners == null) continue;
+          const isHome = fx.teams?.home?.id === id;
+          const teamCorners = isHome ? homeCorners : awayCorners;
+          const oppCorners = isHome ? awayCorners : homeCorners;
+          forSum += teamCorners;
+          againstSum += oppCorners;
+          sample += 1;
+        }
+
+        if (sample > 0) {
+          return {
+            cornersForAvg: Number((forSum / sample).toFixed(2)),
+            cornersAgainstAvg: Number((againstSum / sample).toFixed(2)),
+            sample,
+          };
+        }
+      }
+
+      return null;
     },
   );
 }
