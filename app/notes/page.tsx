@@ -642,7 +642,7 @@ function getMentionContext(
   const beforeChar = lastAt === 0 ? "\n" : text[lastAt - 1];
   if (beforeChar !== "\n" && !/\s/.test(beforeChar)) return null;
   const query = text.slice(lastAt + 1);
-  if (query.includes("\n")) return null;
+  if (query.includes("\n") || query.includes(" ")) return null;
 
   const replaceRange = getRangeForTextSpan(blockEl, lastAt, text.length);
   if (!replaceRange) return null;
@@ -1324,6 +1324,8 @@ function NotesPageInner() {
   const [customFontSize, setCustomFontSize] = useState("16");
   const [newPageTitle, setNewPageTitle] = useState("");
   const [newNoteTitle, setNewNoteTitle] = useState("");
+  const [addNoteDialogOpen, setAddNoteDialogOpen] = useState(false);
+  const [addNoteDialogTitle, setAddNoteDialogTitle] = useState("");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const noteTextImportInputRef = useRef<HTMLInputElement | null>(null);
   const notesPaneHoverCloseTimerRef = useRef<number | null>(null);
@@ -1992,10 +1994,12 @@ function NotesPageInner() {
         }
       }
       e.preventDefault();
-      setFindInNoteOpen(true);
-      queueMicrotask(() =>
-        findInNotePanelRef.current?.querySelector("input")?.focus(),
-      );
+      setFindInNoteOpen((o) => {
+        if (!o) queueMicrotask(() =>
+          findInNotePanelRef.current?.querySelector("input")?.focus(),
+        );
+        return !o;
+      });
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
@@ -4082,6 +4086,48 @@ function NotesPageInner() {
         }
       }
 
+      if (e.key === " " && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const root = editorRef.current;
+        if (root) {
+          const sel = window.getSelection();
+          if (sel && sel.rangeCount > 0) {
+            const r = sel.getRangeAt(0);
+            if (root.contains(r.startContainer) && r.collapsed) {
+              const block = getMentionBlockContainer(r.startContainer, root);
+              const blockEl = block instanceof HTMLElement ? block : root;
+              const pre = document.createRange();
+              pre.selectNodeContents(blockEl);
+              pre.setEnd(r.startContainer, r.startOffset);
+              const textBefore = pre.toString();
+              if (/^\d+\.$/.test(textBefore.trim())) {
+                e.preventDefault();
+                const clearRange = document.createRange();
+                clearRange.selectNodeContents(blockEl);
+                sel.removeAllRanges();
+                sel.addRange(clearRange);
+                clearRange.deleteContents();
+                try { document.execCommand("insertOrderedList"); } catch { /* ignore */ }
+                root.dispatchEvent(new Event("input", { bubbles: true }));
+                refreshFmt();
+                return;
+              }
+              if (/^[-*•]$/.test(textBefore.trim())) {
+                e.preventDefault();
+                const clearRange = document.createRange();
+                clearRange.selectNodeContents(blockEl);
+                sel.removeAllRanges();
+                sel.addRange(clearRange);
+                clearRange.deleteContents();
+                try { document.execCommand("insertUnorderedList"); } catch { /* ignore */ }
+                root.dispatchEvent(new Event("input", { bubbles: true }));
+                refreshFmt();
+                return;
+              }
+            }
+          }
+        }
+      }
+
       if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.altKey) {
         const root = editorRef.current;
         if (root && tryHandleTaskListEnter(root, e)) return;
@@ -4192,6 +4238,7 @@ function NotesPageInner() {
       applyFontSizePx,
       getEditorSelectionFontSize,
       stepFontSize,
+      refreshFmt,
     ],
   );
 
@@ -5458,18 +5505,18 @@ function NotesPageInner() {
             )}
           </section>
 
-          <section className="flex min-h-0 min-w-0 cursor-default flex-col overflow-visible rounded-xl border bg-card p-4 lg:max-h-[calc(100vh-7rem)]">
+          <section className="flex min-h-0 min-w-0 cursor-default flex-col overflow-hidden rounded-xl border bg-card p-4 lg:max-h-[calc(100vh-7rem)]">
             {selectedNote ? (
               <div
                 ref={noteEditShellRef}
-                className="flex min-h-0 min-w-0 max-w-full flex-1 flex-col gap-4 overflow-hidden"
+                className="flex min-h-0 min-w-0 max-w-full flex-1 flex-col gap-2 overflow-hidden"
               >
                 {/* Tabs strip: quick note switcher pinned above the title.
                     Only renders with 2+ notes (a strip with one tab is just
                     visual noise). Active tab gets the primary border + tinted
                     fill; inactive tabs lift on hover. Horizontal overflow
                     scrolls so long lists stay reachable in focus mode. */}
-                <div className="-mx-1 flex w-full min-w-0 items-stretch gap-1 overflow-x-auto px-1 pb-1">
+                <div className="-mx-1 shrink-0 flex w-full min-w-0 items-stretch gap-1 overflow-x-auto px-1 pb-1">
                   {notes.map((n) => {
                     const active = selectedNoteId === n.id;
                     return (
@@ -5477,6 +5524,33 @@ function NotesPageInner() {
                         key={`note-tab-${n.id}`}
                         role="button"
                         tabIndex={0}
+                        draggable
+                        onDragStart={() => {
+                          dragNoteIdRef.current = n.id;
+                          dragNoteOverRef.current = null;
+                          setDragNoteId(n.id);
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = "move";
+                          if (!dragNoteIdRef.current || dragNoteIdRef.current === n.id) return;
+                          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                          const before = e.clientX < rect.left + rect.width / 2;
+                          const o = { id: n.id, before };
+                          dragNoteOverRef.current = o;
+                          setDragNoteOver(o);
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleNoteDrop(n.id);
+                        }}
+                        onDragEnd={() => {
+                          dragNoteIdRef.current = null;
+                          dragNoteOverRef.current = null;
+                          setDragNoteId(null);
+                          setDragNoteOver(null);
+                        }}
                         onClick={() => {
                           setSelectedNoteId(n.id);
                           setFocusMode(false);
@@ -5493,6 +5567,10 @@ function NotesPageInner() {
                           active
                             ? "border-primary bg-primary/10 text-foreground"
                             : "border-transparent text-muted-foreground hover:border-border hover:bg-muted/40 hover:text-foreground",
+                          dragNoteId && dragNoteId !== n.id && dragNoteOver?.id === n.id
+                            ? "ring-2 ring-primary/60"
+                            : "",
+                          dragNoteId === n.id ? "opacity-50" : "",
                         )}
                         title={n.title}
                         aria-current={active ? "page" : undefined}
@@ -5527,9 +5605,8 @@ function NotesPageInner() {
                   <button
                     type="button"
                     onClick={() => {
-                      const t = window.prompt("New note title")?.trim();
-                      if (!t) return;
-                      void createNote(t);
+                      setAddNoteDialogTitle("");
+                      setAddNoteDialogOpen(true);
                     }}
                     disabled={!selectedPageId}
                     className="ml-auto inline-flex h-7 w-7 shrink-0 items-center justify-center self-center rounded-md border border-dashed border-border/70 text-muted-foreground transition-colors hover:border-primary/60 hover:bg-primary/10 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
@@ -5544,7 +5621,7 @@ function NotesPageInner() {
                     grid so the surrounding chrome can never push it off-axis.
                     Focus toggle on the left, edit pencil on the right keep the
                     row balanced visually even when only one side has buttons. */}
-                <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3">
+                <div className="grid shrink-0 w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3">
                   <div className="justify-self-start">
                     <Button
                       type="button"
@@ -5714,7 +5791,7 @@ function NotesPageInner() {
                       )}
                   </div>
                 </div>
-                <div className="flex min-w-0 w-full flex-wrap items-center justify-center gap-1.5 text-[11px] text-muted-foreground tabular-nums">
+                <div className="flex shrink-0 min-w-0 w-full flex-wrap items-center justify-center gap-1.5 text-[11px] text-muted-foreground tabular-nums">
                     <button
                       type="button"
                       onClick={() => {
@@ -5786,7 +5863,7 @@ function NotesPageInner() {
                   </div>
                 <div
                   className={cn(
-                    "flex min-h-0 min-w-0 flex-1 flex-col space-y-2",
+                    "flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden",
                   )}
                 >
                   <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -7144,7 +7221,7 @@ function NotesPageInner() {
                     notes pushed the editor over it and the buttons couldn't
                     be clicked. Standalone card styling makes the separation
                     obvious. */}
-                <div className="shrink-0 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/30 px-3 py-2">
+                <div className="shrink-0 sticky bottom-0 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-card px-3 py-2 shadow-[0_-1px_0_0_hsl(var(--border))]">
                   <Button
                     type="button"
                     size="sm"
@@ -7264,6 +7341,51 @@ function NotesPageInner() {
           </div>
         </div>
       )}
+      <Dialog
+        open={addNoteDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) setAddNoteDialogOpen(false);
+        }}
+      >
+        <DialogContent className="max-w-sm border-border bg-card">
+          <DialogHeader>
+            <DialogTitle>New Note</DialogTitle>
+          </DialogHeader>
+          <Input
+            autoFocus
+            placeholder="Note title…"
+            value={addNoteDialogTitle}
+            onChange={(e) => setAddNoteDialogTitle(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                const t = addNoteDialogTitle.trim();
+                if (!t) return;
+                setAddNoteDialogOpen(false);
+                void createNote(t);
+              }
+            }}
+          />
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button type="button" variant="outline" onClick={() => setAddNoteDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={!addNoteDialogTitle.trim()}
+              onClick={() => {
+                const t = addNoteDialogTitle.trim();
+                if (!t) return;
+                setAddNoteDialogOpen(false);
+                void createNote(t);
+              }}
+            >
+              <Plus className="h-4 w-4 mr-1" />
+              Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog
         open={confirmDeleteNoteId !== null}
         onOpenChange={(open) => {

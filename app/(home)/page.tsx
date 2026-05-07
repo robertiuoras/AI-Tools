@@ -66,7 +66,7 @@ import {
 const MIN_INITIAL_SPLASH_MS = 1400;
 const SPLASH_EXIT_MS = 520;
 
-type SortOption = "alphabetical" | "newest" | "popular" | "traffic" | "traffic-low" | "upvotes";
+type SortOption = "alphabetical" | "newest" | "popular" | "traffic" | "traffic-low";
 type SortOrder = "asc" | "desc";
 
 const TOOLS_VIEW_STORAGE_KEY = "ai-tools-view";
@@ -602,7 +602,6 @@ function HomePageContent() {
                       <SelectItem value="newest">Newest</SelectItem>
                       <SelectItem value="traffic">Highest Traffic</SelectItem>
                       <SelectItem value="traffic-low">Lowest Traffic</SelectItem>
-                      <SelectItem value="upvotes">Most Upvoted</SelectItem>
                     </SelectContent>
                   </Select>
                   <Dialog>

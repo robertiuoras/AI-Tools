@@ -15,7 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Youtube, Users, Film, LayoutGrid, List, Eye, CheckCircle2, ExternalLink, Loader2 } from "lucide-react";
+import { Youtube, Users, Film, LayoutGrid, List, Eye, CheckCircle2, ExternalLink, Loader2, CalendarPlus, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuthSession } from "@/components/AuthSessionProvider";
 import { CreatorAvatar } from "@/components/CreatorAvatar";
@@ -34,6 +34,13 @@ function formatSubs(count: number | null): string | null {
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
   if (count >= 1_000) return `${(count / 1_000).toFixed(1)}K`;
   return count.toString();
+}
+
+function formatDateAdded(createdAt: string | null | undefined): string | null {
+  if (!createdAt) return null;
+  const d = new Date(createdAt);
+  if (isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(d);
 }
 
 /** True if the video was added within the last 7 days */
@@ -174,6 +181,12 @@ function VideoGridCard({
                 {cat}
               </Badge>
             ))}
+          </div>
+        )}
+        {formatDateAdded(video.createdAt) && (
+          <div className="flex items-center gap-1 text-[10px] text-muted-foreground/70">
+            <CalendarPlus className="h-2.5 w-2.5 shrink-0" />
+            <span>Added {formatDateAdded(video.createdAt)}</span>
           </div>
         )}
         {/* Watch toggle */}
@@ -497,7 +510,7 @@ function VideosPageContent() {
             <div className="flex-1 max-w-xl">
               <SearchBar
                 value={search} onChange={setSearch}
-                placeholder="Search videos, creators, or categories..."
+                placeholder="Search by video, creator or category..."
                 suggestions={searchSuggestions}
                 onSubmit={(term) => { addFilter(term); setSearch(""); }}
                 onSelectSuggestion={(term) => { addFilter(term); setSearch(""); }}
@@ -621,9 +634,20 @@ function VideosPageContent() {
             ) : videos.length === 0 ? null : (
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
-                  <p className="text-sm text-muted-foreground">
-                    {videos.length}{total > videos.length ? ` of ${total}` : ""} video{total !== 1 ? "s" : ""}
-                  </p>
+                  <div className="flex items-center gap-3">
+                    <p className="text-sm text-muted-foreground">
+                      {videos.length}{total > videos.length ? ` of ${total}` : ""} video{total !== 1 ? "s" : ""}
+                    </p>
+                    {(() => {
+                      const newCount = videos.filter((v) => isVideoRecent(v.createdAt)).length;
+                      return newCount > 0 ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 border border-emerald-400/30">
+                          <Sparkles className="h-3 w-3" />
+                          {newCount} new this week
+                        </span>
+                      ) : null;
+                    })()}
+                  </div>
                 </div>
 
                 {layoutMode === "grid" ? (

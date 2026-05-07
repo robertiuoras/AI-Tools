@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Component, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import {
   Plus,
   Trash2,
@@ -20,12 +20,52 @@ import {
   Share2,
   Users,
   Eye,
+  RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/toaster";
 import { WhiteboardRoomMount } from "@/components/WhiteboardRoomMount";
 import { WhiteboardShareDialog } from "@/components/WhiteboardShareDialog";
 import { markBoardDeleted } from "@/lib/whiteboard-deleted-ids";
+
+class WhiteboardErrorBoundary extends Component<
+  { children: ReactNode; boardId: string },
+  { error: Error | null }
+> {
+  constructor(props: { children: ReactNode; boardId: string }) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-red-500/10 text-red-500">
+            <AlertTriangle className="h-5 w-5" />
+          </div>
+          <div className="space-y-1">
+            <p className="text-sm font-semibold text-foreground">Whiteboard failed to load</p>
+            <p className="max-w-xs text-xs text-muted-foreground">
+              {this.state.error.message || "An unexpected error occurred."}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted"
+            onClick={() => this.setState({ error: null })}
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Retry
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 /** Where the Excalidraw shape toolbar sits relative to the canvas. */
 export type ToolbarPosition = "top" | "bottom" | "left" | "right";
@@ -716,15 +756,17 @@ export function WhiteboardPanel({ token }: Props) {
             boardId={active.boardId}
             ownerId={active.kind === "shared" ? active.ownerId : null}
           >
-            <WhiteboardCanvas
-              token={token}
-              boardId={active.boardId}
-              toolbarPosition={toolbarPosition}
-              ownerId={active.kind === "shared" ? active.ownerId : null}
-              permission={
-                active.kind === "shared" ? active.permission : "edit"
-              }
-            />
+            <WhiteboardErrorBoundary boardId={active.boardId}>
+              <WhiteboardCanvas
+                token={token}
+                boardId={active.boardId}
+                toolbarPosition={toolbarPosition}
+                ownerId={active.kind === "shared" ? active.ownerId : null}
+                permission={
+                  active.kind === "shared" ? active.permission : "edit"
+                }
+              />
+            </WhiteboardErrorBoundary>
           </WhiteboardRoomMount>
         ) : loading ? (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">

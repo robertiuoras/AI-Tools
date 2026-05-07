@@ -182,7 +182,8 @@ export default function PromptsPage() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(
-          (data && (data.error || data.details)) || `Request failed (${res.status})`,
+          (data && (res.status === 429 ? (data.details || data.error) : (data.error || data.details))) ||
+            `Request failed (${res.status})`,
         );
       }
       setImproveResult({

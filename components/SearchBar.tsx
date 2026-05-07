@@ -53,13 +53,9 @@ export function SearchBar({
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
             const trimmed = value.trim()
-            if (open && filteredSuggestions.length > 0) {
-              e.preventDefault()
-              handleSelect(filteredSuggestions[0])
-              return
-            }
             if (trimmed && onSubmit) {
               e.preventDefault()
+              setOpen(false)
               onSubmit(trimmed)
             }
           }

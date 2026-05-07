@@ -43,7 +43,10 @@ export function SuggestToolCard() {
       })
       const data = (await r.json().catch(() => ({}))) as {
         error?: string
+        errorType?: string
         message?: string
+        details?: string
+        retryAfter?: number
       }
       if (r.status === 409) {
         if (data.error === 'already_exists') {
@@ -61,6 +64,14 @@ export function SuggestToolCard() {
             description: data.message || 'This URL is already in the review queue.',
           })
         }
+        return
+      }
+      if (r.status === 429) {
+        addToast({
+          variant: 'error',
+          title: 'Too many suggestions',
+          description: data.details || `Please wait before submitting again.`,
+        })
         return
       }
       if (!r.ok) {
