@@ -55,17 +55,14 @@ export async function POST(
 
     const analyzed = await analyzeRes.json().catch(() => null) as Record<string, unknown> | null
     if (!analyzeRes.ok || !analyzed) {
+      const reason =
+        typeof analyzed?.error === 'string' && analyzed.error
+          ? analyzed.error
+          : analyzeRes.statusText || 'Analyze failed'
       return NextResponse.json(
-        {
-          error: 'Analyze failed',
-          details: analyzed?.error ?? analyzeRes.statusText,
-        },
+        { error: reason, details: analyzed },
         { status: 502 },
       )
-    }
-
-    if (analyzed.error && typeof analyzed.error === 'string') {
-      return NextResponse.json({ error: analyzed.error, details: analyzed }, { status: 502 })
     }
 
     const normalized = normalizeToolSiteUrl(String(analyzed.url ?? url))
