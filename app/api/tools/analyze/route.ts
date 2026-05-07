@@ -1056,8 +1056,8 @@ export async function POST(request: NextRequest) {
       // the resolver returned nothing (shouldn't happen — it always returns
       // at least Google S2).
       logoUrl: scraped.logoUrl || analysis.logoUrl || null,
-      // Native/desktop app flag: strict HTML signals only (ignore model guesses to avoid false positives).
-      hasDownloadableApp: Boolean(scraped.hasDownloadableAppHeuristic),
+      // Native/desktop app flag: HTML install-link heuristics OR a GitHub repo link on the page.
+      hasDownloadableApp: Boolean(scraped.hasDownloadableAppHeuristic) || Boolean(popularity.githubRepo),
       _debug: {
         usedOpenAI: analysis._debug?.usedOpenAI ?? true,
         apiKeyFound: analysis._debug?.apiKeyFound ?? true,

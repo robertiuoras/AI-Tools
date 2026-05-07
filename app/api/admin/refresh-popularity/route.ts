@@ -200,6 +200,10 @@ export async function POST(request: NextRequest) {
         popularitySignals: popularity,
         popularityRefreshedAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
+        // If a GitHub repo link is found on the page, the tool has downloadable code.
+        // Only set to true — never reset to false — so manual overrides and App Store
+        // links detected at ingest time are preserved.
+        ...(popularity.githubRepo ? { hasDownloadableApp: true } : {}),
       }
 
       const { error: updateError } = await admin
