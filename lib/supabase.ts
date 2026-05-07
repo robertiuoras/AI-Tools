@@ -61,6 +61,8 @@ export interface Tool {
   isAgency?: boolean | null;
   /** Native/desktop/mobile app detected. */
   hasDownloadableApp?: boolean | null;
+  /** Admin-pinned — appears before all other tools regardless of sort. */
+  isFeatured?: boolean | null;
   tags: string | null;
   traffic: "low" | "medium" | "high" | "unknown" | null;
   revenue: "free" | "freemium" | "paid" | "enterprise" | null;

@@ -57,7 +57,7 @@ import {
   hasHomeSplashBeenSeen,
   markHomeSplashSeen,
 } from "@/lib/home-splash";
-import { countToolsAddedToday } from "@/lib/tool-recent";
+import { isToolCreatedToday } from "@/lib/tool-recent";
 import {
   getClientToolsCacheAgeMs,
   setClientToolsCache,
@@ -252,11 +252,11 @@ function HomePageContent() {
     agenciesOnly,
   ]);
 
-  /** Search filters in the browser — no network per keystroke (fast vs full refetch + loading). */
-  const toolsAddedTodayCount = useMemo(
-    () => countToolsAddedToday(tools),
+  const toolsAddedToday = useMemo(
+    () => tools.filter((t) => isToolCreatedToday(t.createdAt)),
     [tools],
   );
+  const toolsAddedTodayCount = toolsAddedToday.length;
 
   const displayedTools = useMemo(() => {
     const raw = search.trim();
@@ -498,7 +498,7 @@ function HomePageContent() {
       {!splashDone && <HomeSplashLoader loading={loading} />}
       <Hero tools={tools} toolsAddedTodayCount={toolsAddedTodayCount} />
       <div className="container mx-auto px-4 py-8">
-        <NewToolsBanner count={toolsAddedTodayCount} />
+        <NewToolsBanner count={toolsAddedTodayCount} tools={toolsAddedToday} />
         <div className="mb-6">
           <SuggestToolCard />
         </div>

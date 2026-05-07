@@ -727,6 +727,8 @@ const toolObjectSchema = z.object({
   isAgency: z.boolean().optional().nullable(),
   /** Native/desktop/mobile store or explicit download links detected. */
   hasDownloadableApp: z.boolean().optional().nullable(),
+  /** Admin-pinned — surfaces before all other tools regardless of sort order. */
+  isFeatured: z.boolean().optional().nullable(),
   // ── Honest popularity signals (see lib/popularity-signals.ts) ─────────
   // All optional + nullable so old payloads keep validating.
   githubRepo: z.string().url().nullable().optional(),

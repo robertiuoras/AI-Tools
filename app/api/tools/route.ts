@@ -312,7 +312,12 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    return NextResponse.json(processedTools);
+    // Featured tools float to the very top regardless of sort order.
+    // They've already passed all active filters, so just re-partition.
+    const featuredTools = processedTools.filter((t: any) => t.isFeatured)
+    const normalTools = processedTools.filter((t: any) => !t.isFeatured)
+
+    return NextResponse.json([...featuredTools, ...normalTools]);
   } catch (error) {
     console.error("❌ Error fetching tools:", error);
     console.error(
@@ -395,6 +400,7 @@ export async function POST(request: NextRequest) {
 
     supabaseData.isAgency = validatedData.isAgency === true;
     supabaseData.hasDownloadableApp = validatedData.hasDownloadableApp === true;
+    supabaseData.isFeatured = validatedData.isFeatured === true;
 
     // Honest popularity signals (only included if the popularity migration ran).
     // We try the full insert first; if Supabase rejects with 42703 ("column does

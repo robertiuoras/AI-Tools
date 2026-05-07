@@ -80,6 +80,7 @@ type AdminToolFormState = {
   estimatedVisits: string
   isAgency: boolean
   hasDownloadableApp: boolean
+  isFeatured: boolean
 }
 
 type ToolSuggestionRow = {
@@ -154,6 +155,7 @@ function buildToolPayload(
 
   payload.isAgency = fd.isAgency === true
   payload.hasDownloadableApp = fd.hasDownloadableApp === true
+  payload.isFeatured = fd.isFeatured === true
 
   return { ok: true, payload }
 }
@@ -227,6 +229,7 @@ export default function AdminPage() {
     estimatedVisits: '',
     isAgency: false,
     hasDownloadableApp: false,
+    isFeatured: false,
   })
 
   const [autoSaveStatus, setAutoSaveStatus] = useState<
@@ -797,6 +800,7 @@ export default function AdminPage() {
       estimatedVisits: tool.estimatedVisits?.toString() || '',
       isAgency: toolIsAgency(tool),
       hasDownloadableApp: toolHasDownloadableApp(tool),
+      isFeatured: tool.isFeatured === true,
     }
     setEditingId(tool.id)
     setFormData(nextForm)
@@ -2225,6 +2229,7 @@ export default function AdminPage() {
       estimatedVisits: '',
       isAgency: false,
       hasDownloadableApp: false,
+      isFeatured: false,
     })
     setEditingId(null)
     setQuickAddUrl('')
@@ -2982,6 +2987,20 @@ export default function AdminPage() {
                     }
                   />
                 </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-4">
+                <label className="flex cursor-pointer items-center gap-2 text-sm select-none">
+                  <input
+                    type="checkbox"
+                    checked={formData.isFeatured}
+                    onChange={(e) => setFormData({ ...formData, isFeatured: e.target.checked })}
+                    className="h-4 w-4 rounded accent-amber-500"
+                  />
+                  <Star className="h-4 w-4 text-amber-500" aria-hidden />
+                  <span className="font-medium">Featured</span>
+                  <span className="text-muted-foreground">(pins to top of directory)</span>
+                </label>
               </div>
 
               <div className="flex flex-wrap items-center gap-2">

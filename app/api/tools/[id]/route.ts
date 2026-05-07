@@ -80,6 +80,9 @@ export async function PUT(
     ) {
       updateData.hasDownloadableApp = validatedData.hasDownloadableApp === true
     }
+    if (validatedData.isFeatured !== undefined && validatedData.isFeatured !== null) {
+      updateData.isFeatured = validatedData.isFeatured === true
+    }
 
     // Honest popularity signals — only included if the popularity migration ran.
     // Same graceful-degradation pattern as the POST handler in /api/tools.
