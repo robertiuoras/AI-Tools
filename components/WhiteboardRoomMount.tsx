@@ -1,72 +1,43 @@
 "use client";
 
-import { ReactNode, useCallback } from "react";
-import { LiveblocksProvider, RoomProvider } from "@liveblocks/react";
+import { ReactNode } from "react";
+import { RoomProvider } from "@liveblocks/react";
 import { useAuthSession } from "@/components/AuthSessionProvider";
 
 /**
- * Wraps children in a Liveblocks <RoomProvider> for a single whiteboard
- * room. Auth flows through /api/liveblocks/auth, with the supabase
- * access token attached so the server can verify
- * ownership/share access.
+ * Wraps children in a Liveblocks <RoomProvider> scoped to a single whiteboard
+ * room. Auth is handled by the ancestor <NotesLiveblocksProvider> — this
+ * component deliberately does NOT add its own <LiveblocksProvider> to avoid
+ * the "cannot nest multiple LiveblocksProvider instances" crash.
  *
- * Pass `ownerId` (the user who owns the snapshot) when joining a board
- * shared with you — it short-circuits the lookup on the auth route.
+ * No-ops until the auth session is ready (guards against mounting RoomProvider
+ * before its ancestor LiveblocksProvider is active).
  *
- * No-ops if the user isn't signed in yet — children render outside any
- * Liveblocks context, so the whiteboard falls back to its non-collab
- * codepath (still saves locally to Supabase storage).
+ * `ownerId` is kept in the interface so callers don't need to change; the auth
+ * route resolves shared-board access without it (it is an optional speed hint).
  */
 export function WhiteboardRoomMount({
   boardId,
-  ownerId,
   children,
 }: {
   boardId: string;
   ownerId?: string | null;
   children: ReactNode;
 }) {
-  const { accessToken } = useAuthSession();
+  const { accessToken, isReady } = useAuthSession();
 
-  const authCallback = useCallback(
-    async (room?: string) => {
-      const roomId = room ?? `whiteboard:${boardId}`;
-      const res = await fetch("/api/liveblocks/auth", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-        },
-        body: JSON.stringify({
-          room: roomId,
-          ownerId: ownerId ?? undefined,
-        }),
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(`Liveblocks auth failed (${res.status}): ${text}`);
-      }
-      return await res.json();
-    },
-    [accessToken, boardId, ownerId],
-  );
+  if (!isReady || !accessToken) return <>{children}</>;
 
-  // We always mount the provider (the parent only renders us when the
-  // user is signed in). If the access token isn't ready yet the auth
-  // callback will fail, Liveblocks will retry once it is — children
-  // render normally (no remote presence) in the meantime.
   return (
-    <LiveblocksProvider authEndpoint={authCallback}>
-      <RoomProvider
-        id={`whiteboard:${boardId}`}
-        initialPresence={{
-          pointer: null,
-          button: "up",
-          selectedElementIds: {},
-        }}
-      >
-        {children}
-      </RoomProvider>
-    </LiveblocksProvider>
+    <RoomProvider
+      id={`whiteboard:${boardId}`}
+      initialPresence={{
+        pointer: null,
+        button: "up",
+        selectedElementIds: {},
+      }}
+    >
+      {children}
+    </RoomProvider>
   );
 }
