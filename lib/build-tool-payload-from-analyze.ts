@@ -49,7 +49,7 @@ export function buildToolPayloadFromAnalyzeResponse(
       payload.wikipediaPageTitle = pop.wikipediaPageTitle
     if (typeof pop.wikipediaPageviews90d === 'number')
       payload.wikipediaPageviews90d = pop.wikipediaPageviews90d
-    if (typeof pop.score === 'number') payload.popularityScore = pop.score
+    if (typeof pop.score === 'number') payload.popularityScore = Math.round(pop.score)
     if (typeof pop.tier === 'string') payload.popularityTier = pop.tier
     payload.popularitySignals = pop
   }
