@@ -40,11 +40,19 @@ export async function POST(
     const url = String(row.url)
     const base = getInternalBaseUrl(request)
 
+    // Build headers for internal server→server calls.
+    // VERCEL_AUTOMATION_BYPASS_SECRET bypasses Vercel Deployment Protection on
+    // internal requests so the admin approval flow works even when the site is
+    // password-protected.
+    const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET
+    const internalHeaders: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (bypassSecret) internalHeaders['x-vercel-protection-bypass'] = bypassSecret
+
     let analyzeRes: Response
     try {
       analyzeRes = await fetch(`${base}/api/tools/analyze`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: internalHeaders,
         body: JSON.stringify({ url }),
       })
     } catch (err) {
@@ -56,10 +64,13 @@ export async function POST(
 
     const analyzed = await analyzeRes.json().catch(() => null) as Record<string, unknown> | null
     if (!analyzeRes.ok || !analyzed) {
-      const reason =
+      let reason =
         typeof analyzed?.error === 'string' && analyzed.error
           ? analyzed.error
           : analyzeRes.statusText || 'Analyze failed'
+      if (analyzeRes.status === 401 || analyzeRes.status === 403) {
+        reason = `Internal request blocked (HTTP ${analyzeRes.status}). Set VERCEL_AUTOMATION_BYPASS_SECRET to fix deployment protection on server→server calls.`
+      }
       return NextResponse.json(
         { error: reason, details: analyzed },
         { status: 502 },
@@ -90,7 +101,7 @@ export async function POST(
     try {
       postRes = await fetch(`${base}/api/tools`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: internalHeaders,
         body: JSON.stringify(payload),
       })
     } catch (err) {
