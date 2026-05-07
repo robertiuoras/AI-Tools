@@ -2,12 +2,32 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Bell, Check, CheckCheck, Loader2, Trash2 } from "lucide-react";
+import { Bell, Check, CheckCheck, Loader2, Trash2, X } from "lucide-react";
 import { useAuthSession } from "@/components/AuthSessionProvider";
 import { useToast } from "@/components/ui/toaster";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabase";
+
+function playNotificationSound() {
+  try {
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(660, ctx.currentTime + 0.12);
+    gain.gain.setValueAtTime(0.12, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.35);
+    osc.onended = () => ctx.close();
+  } catch {
+    /* noop — AudioContext may be blocked until user gesture */
+  }
+}
 
 interface NotificationRow {
   id: string;
@@ -86,6 +106,7 @@ export function NotificationsBell() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [unreadPopup, setUnreadPopup] = useState(0);
   const seenIdsRef = useRef<Set<string>>(new Set());
   const firstLoadRef = useRef(true);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -120,7 +141,12 @@ export function NotificationsBell() {
         for (const n of data.items) seen.add(n.id);
         saveSeenIds(seen);
 
-        if (!firstLoadRef.current && fresh.length > 0) {
+        if (firstLoadRef.current) {
+          // On initial page load show a popup badge instead of individual toasts.
+          if (fresh.length > 0) {
+            setUnreadPopup(fresh.length);
+          }
+        } else if (fresh.length > 0) {
           // Burst protection: only show toast for up to 3 most recent.
           for (const n of fresh.slice(0, 3)) {
             addToast({
@@ -223,6 +249,7 @@ export function NotificationsBell() {
           // already handles that initial flush. Realtime inserts are by
           // definition fresh, so always toast (subject to the same burst
           // protection: we only fire once per id thanks to the seen set).
+          playNotificationSound();
           addToast({
             title: row.title,
             description: row.body ?? undefined,
@@ -253,6 +280,13 @@ export function NotificationsBell() {
       }
     };
   }, [user, addToast]);
+
+  // Auto-dismiss the unread popup after 5 seconds.
+  useEffect(() => {
+    if (unreadPopup === 0) return;
+    const t = window.setTimeout(() => setUnreadPopup(0), 5000);
+    return () => window.clearTimeout(t);
+  }, [unreadPopup]);
 
   // Close dropdown on outside click / Escape.
   useEffect(() => {
@@ -330,8 +364,36 @@ export function NotificationsBell() {
   if (!user) return null;
 
   const hasUnread = unreadCount > 0;
+  const unreadNoun = unreadPopup === 1 ? "notification" : "notifications";
 
   return (
+    <>
+      {unreadPopup > 0 && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-4 right-4 z-50 flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-popover px-4 py-3 shadow-xl ring-1 ring-black/5 animate-in slide-in-from-bottom-4"
+        >
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-500/15">
+            <Bell className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+          </span>
+          <p className="text-sm font-medium text-foreground">
+            You have{" "}
+            <span className="font-bold text-emerald-600 dark:text-emerald-400">
+              {unreadPopup}
+            </span>{" "}
+            unread {unreadNoun}
+          </p>
+          <button
+            type="button"
+            onClick={() => setUnreadPopup(0)}
+            className="ml-1 flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label="Dismiss"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
     <div className="relative" ref={dropdownRef}>
       <Button
         type="button"
@@ -383,7 +445,7 @@ export function NotificationsBell() {
             ) : items.length === 0 ? (
               <div className="flex flex-col items-center gap-2 px-4 py-10 text-center text-sm text-muted-foreground">
                 <Bell className="h-6 w-6 opacity-40" />
-                <p>You're all caught up.</p>
+                <p>You&apos;re all caught up.</p>
               </div>
             ) : (
               <ul className="divide-y divide-border">
@@ -486,5 +548,6 @@ export function NotificationsBell() {
         </div>
       ) : null}
     </div>
+    </>
   );
 }

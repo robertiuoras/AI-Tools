@@ -4,6 +4,7 @@ import { requireAdminUserId } from '@/lib/admin-auth'
 import { getInternalBaseUrl } from '@/lib/internal-base-url'
 import { buildToolPayloadFromAnalyzeResponse } from '@/lib/build-tool-payload-from-analyze'
 import { normalizeToolSiteUrl } from '@/lib/normalize-tool-site-url'
+import { createNotification } from '@/lib/notifications'
 
 export const dynamic = 'force-dynamic'
 
@@ -25,7 +26,7 @@ export async function POST(
     const admin = supabaseAdmin as any
     const { data: row, error: fetchErr } = await admin
       .from('tool_suggestion')
-      .select('id, url, normalized_url, status')
+      .select('id, url, normalized_url, status, suggested_by_user_id')
       .eq('id', id)
       .single()
 
@@ -112,6 +113,19 @@ export async function POST(
     }
 
     await admin.from('tool_suggestion').update({ status: 'approved' }).eq('id', id)
+
+    const suggesterId = typeof row.suggested_by_user_id === 'string' ? row.suggested_by_user_id : null
+    if (suggesterId) {
+      const toolName = typeof analyzed.name === 'string' && analyzed.name ? analyzed.name : url
+      const toolId = typeof created?.id === 'string' ? created.id : null
+      await createNotification({
+        userId: suggesterId,
+        type: 'tool_suggestion_approved',
+        title: 'Your tool suggestion was approved!',
+        body: `"${toolName}" has been added to the directory.`,
+        link: toolId ? `/?highlight=${toolId}` : '/',
+      })
+    }
 
     return NextResponse.json({ ok: true, tool: created })
   } catch (err) {

@@ -71,7 +71,7 @@ export function NewToolsBanner({ count, tools, className }: NewToolsBannerProps)
       {/* Clickable header row */}
       <button
         type="button"
-        className="flex w-full items-center gap-3 px-3 py-2.5 pr-20 text-left sm:gap-4 sm:px-4"
+        className="flex w-full items-center gap-3 py-2.5 pl-12 pr-4 text-left sm:gap-4 sm:pl-14"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-label={open ? "Collapse new tools list" : "Expand new tools list"}
@@ -143,7 +143,7 @@ export function NewToolsBanner({ count, tools, className }: NewToolsBannerProps)
         type="button"
         variant="ghost"
         size="icon"
-        className="absolute right-1.5 top-1.5 h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
+        className="absolute left-1.5 top-1.5 h-8 w-8 shrink-0 text-muted-foreground hover:text-red-500"
         onClick={dismiss}
         aria-label="Dismiss new tools notice for today"
       >
