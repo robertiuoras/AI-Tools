@@ -1036,7 +1036,7 @@ function renderPreviewMarkdown(text: string): ReactNode {
 }
 
 const NOTE_HTML_VIEW_CLASS =
-  "note-html-view min-h-0 space-y-2 text-sm [&_figure[data-note-image='1']]:max-w-full [&_figure[data-note-image='1']]:min-h-[48px] [&_figure[data-note-image='1']]:min-w-[120px] [&_figure[data-note-image='1']]:cursor-grab [&_figure[data-note-image='1']]:overflow-visible [&_figure[data-note-image='1']_img]:rounded-md [&_figure[data-note-image='1']_img]:min-h-[32px] [&_h3]:scroll-m-20 [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:tracking-tight [&_li]:my-0.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:whitespace-pre-wrap [&_ul]:list-disc [&_ul]:pl-5 [&_ul.note-task-list]:list-none [&_ul.note-task-list]:pl-0 [&_ul.note-task-list_li]:flex [&_ul.note-task-list_li]:items-start [&_ul.note-task-list_li]:gap-2 [&_ul.note-task-list_li]:my-0.5 [&_ul.note-task-list_.note-task-checkbox]:mt-0.5 [&_ul.note-task-list_.note-task-checkbox]:h-4 [&_ul.note-task-list_.note-task-checkbox]:w-4 [&_ul.note-task-list_.note-task-checkbox]:shrink-0 [&_ul.note-task-list_.note-task-checkbox]:cursor-pointer [&_ul.note-task-list_.note-task-checkbox]:rounded-sm [&_ul.note-task-list_li>span]:min-h-[1.25em] [&_ul.note-task-list_li>span]:min-w-0 [&_ul.note-task-list_li>span]:flex-1 [&_ul.note-task-list_li>span]:cursor-text [&_ul.note-task-list_li>span]:outline-none [&_a.note-mention]:inline-flex [&_a.note-mention]:max-w-full [&_a.note-mention]:items-center [&_a.note-mention]:rounded-md [&_a.note-mention]:border [&_a.note-mention]:border-border/70 [&_a.note-mention]:bg-muted/85 [&_a.note-mention]:px-1.5 [&_a.note-mention]:py-px [&_a.note-mention]:text-xs [&_a.note-mention]:font-medium [&_a.note-mention]:leading-snug [&_a.note-mention]:text-foreground [&_a.note-mention]:no-underline [&_a.note-mention]:shadow-sm [&_a.note-mention]:decoration-transparent [&_a.note-mention]:transition-colors [&_a.note-mention]:cursor-pointer [&_a.note-mention]:hover:bg-muted";
+  "note-html-view min-h-0 space-y-2 text-sm [&_figure[data-note-image='1']]:max-w-full [&_figure[data-note-image='1']]:min-h-[48px] [&_figure[data-note-image='1']]:min-w-[120px] [&_figure[data-note-image='1']]:cursor-grab [&_figure[data-note-image='1']]:overflow-visible [&_figure[data-note-image='1']_img]:rounded-md [&_figure[data-note-image='1']_img]:min-h-[32px] [&_h3]:scroll-m-20 [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:tracking-tight [&_li]:my-0.5 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:whitespace-pre-wrap [&_ul]:list-disc [&_ul]:pl-6 [&_ul.note-task-list]:list-none [&_ul.note-task-list]:pl-0 [&_ul.note-task-list_li]:flex [&_ul.note-task-list_li]:items-start [&_ul.note-task-list_li]:gap-2 [&_ul.note-task-list_li]:my-0.5 [&_ul.note-task-list_.note-task-checkbox]:mt-0.5 [&_ul.note-task-list_.note-task-checkbox]:h-4 [&_ul.note-task-list_.note-task-checkbox]:w-4 [&_ul.note-task-list_.note-task-checkbox]:shrink-0 [&_ul.note-task-list_.note-task-checkbox]:cursor-pointer [&_ul.note-task-list_.note-task-checkbox]:rounded-sm [&_ul.note-task-list_li>span]:min-h-[1.25em] [&_ul.note-task-list_li>span]:min-w-0 [&_ul.note-task-list_li>span]:flex-1 [&_ul.note-task-list_li>span]:cursor-text [&_ul.note-task-list_li>span]:outline-none [&_a.note-mention]:inline-flex [&_a.note-mention]:max-w-full [&_a.note-mention]:items-center [&_a.note-mention]:rounded-md [&_a.note-mention]:border [&_a.note-mention]:border-border/70 [&_a.note-mention]:bg-muted/85 [&_a.note-mention]:px-1.5 [&_a.note-mention]:py-px [&_a.note-mention]:text-xs [&_a.note-mention]:font-medium [&_a.note-mention]:leading-snug [&_a.note-mention]:text-foreground [&_a.note-mention]:no-underline [&_a.note-mention]:shadow-sm [&_a.note-mention]:decoration-transparent [&_a.note-mention]:transition-colors [&_a.note-mention]:cursor-pointer [&_a.note-mention]:hover:bg-muted";
 
 function renderReadNoteBody(
   content: string,
@@ -7221,7 +7221,7 @@ function NotesPageInner() {
                     notes pushed the editor over it and the buttons couldn't
                     be clicked. Standalone card styling makes the separation
                     obvious. */}
-                <div className="shrink-0 sticky bottom-0 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-card px-3 py-2 shadow-[0_-1px_0_0_hsl(var(--border))]">
+                <div className="shrink-0 sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-card px-3 py-2 shadow-[0_-1px_0_0_hsl(var(--border))]">
                   <Button
                     type="button"
                     size="sm"
@@ -7309,8 +7309,28 @@ function NotesPageInner() {
                 </div>
               </div>
             ) : (
-              <div className="text-muted-foreground">
-                Select or create a note to start writing.
+              <div className="flex flex-col items-center justify-center gap-4 py-16 text-center">
+                <div className="rounded-full border border-border/60 bg-muted/40 p-4">
+                  <svg className="h-8 w-8 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} aria-hidden>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                  </svg>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-sm font-medium text-foreground">No notes yet</p>
+                  <p className="text-xs text-muted-foreground">Create your first note for this page</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAddNoteDialogTitle("");
+                    setAddNoteDialogOpen(true);
+                  }}
+                  disabled={!selectedPageId}
+                  className="inline-flex items-center gap-2 rounded-lg border border-dashed border-primary/50 bg-primary/5 px-4 py-2 text-sm font-medium text-primary transition-colors hover:border-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Plus className="h-4 w-4" />
+                  New note
+                </button>
               </div>
             )}
           </section>

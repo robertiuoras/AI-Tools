@@ -209,6 +209,7 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
             }),
             Collaboration.configure({ document: ydoc }),
           ],
+      shouldRerenderOnTransaction: false,
       editorProps: {
         attributes: {
           class:
@@ -510,17 +511,26 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
         <EditorContent editor={editor} className="flex-1" />
         {showLoadingPreview ? (
           <div
-            className="pointer-events-none absolute inset-0 z-10 overflow-y-auto rounded-xl bg-gradient-to-b from-background to-muted/10"
+            className="pointer-events-none absolute inset-0 z-10 flex flex-col rounded-xl bg-background/95 backdrop-blur-sm"
             aria-busy="true"
             aria-label="Loading note content"
           >
-            <div
-              className="prose prose-sm sm:prose-base dark:prose-invert max-w-none px-3 py-4 collab-prose"
-              dangerouslySetInnerHTML={{ __html: initialHtml }}
-            />
-            <div className="pointer-events-none sticky bottom-2 ml-auto mr-2 flex w-fit items-center gap-1.5 rounded-full border border-border/60 bg-background/80 px-2 py-0.5 text-[10px] font-medium text-muted-foreground shadow-sm backdrop-blur">
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
-              Connecting…
+            {/* Skeleton lines that mimic the note structure */}
+            <div className="flex-1 space-y-3 px-4 py-5">
+              <div className="h-4 w-2/3 animate-pulse rounded bg-muted/70" />
+              <div className="h-3 w-full animate-pulse rounded bg-muted/50" />
+              <div className="h-3 w-[88%] animate-pulse rounded bg-muted/50" />
+              <div className="h-3 w-3/4 animate-pulse rounded bg-muted/50" />
+              <div className="mt-4 h-3 w-full animate-pulse rounded bg-muted/40" />
+              <div className="h-3 w-[92%] animate-pulse rounded bg-muted/40" />
+              <div className="h-3 w-4/5 animate-pulse rounded bg-muted/40" />
+              <div className="mt-4 h-3 w-2/3 animate-pulse rounded bg-muted/30" />
+              <div className="h-3 w-[85%] animate-pulse rounded bg-muted/30" />
+            </div>
+            {/* Connecting badge pinned to the bottom */}
+            <div className="flex shrink-0 items-center justify-center gap-2 border-t border-border/40 py-3 text-xs text-muted-foreground">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" />
+              Connecting to live session…
             </div>
           </div>
         ) : null}
@@ -562,8 +572,10 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
         .collab-editor-shell .collab-prose h1 { font-size: 1.6em; line-height: 1.25; margin: 0.6em 0 0.4em; font-weight: 700; }
         .collab-editor-shell .collab-prose h2 { font-size: 1.3em; line-height: 1.3;  margin: 0.5em 0 0.35em; font-weight: 700; }
         .collab-editor-shell .collab-prose h3 { font-size: 1.1em; line-height: 1.35; margin: 0.45em 0 0.3em; font-weight: 600; }
-        .collab-editor-shell .collab-prose ul { padding-left: 1.4em; list-style: disc; }
-        .collab-editor-shell .collab-prose ol { padding-left: 1.4em; list-style: decimal; }
+        .collab-editor-shell .collab-prose ul { padding-left: 1.8em; list-style: disc; }
+        .collab-editor-shell .collab-prose ol { padding-left: 1.8em; list-style: decimal; }
+        .collab-editor-shell .collab-prose li { padding-left: 0.2em; }
+        .collab-editor-shell .ProseMirror { overflow-x: visible; }
         .collab-editor-shell .collab-prose blockquote {
           border-left: 3px solid hsl(var(--primary) / 0.6);
           padding: 0.05em 0.9em;

@@ -467,12 +467,19 @@ export function ToolCard({
   const isNewToday = isToolCreatedToday(tool.createdAt);
   const hasDownloadableApp = toolHasDownloadableApp(tool);
 
+  const isFeatured = tool.isFeatured === true;
+
   const ribbonClass =
     "pointer-events-none rounded-md px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white shadow-sm sm:text-[10px]";
 
   const cardRibbons =
-    isNewToday || hasDownloadableApp ? (
+    isNewToday || hasDownloadableApp || isFeatured ? (
       <div className="absolute left-0 top-0 z-20 flex max-w-[min(100%,16rem)] flex-row flex-wrap gap-1 p-1.5">
+        {isFeatured ? (
+          <div className={cn(ribbonClass, "bg-gradient-to-r from-amber-400 to-yellow-500 shadow-amber-500/40 shadow")} aria-hidden>
+            ✦ Featured
+          </div>
+        ) : null}
         {isNewToday ? (
           <div className={cn(ribbonClass, "bg-gradient-to-r from-emerald-500 to-teal-500")} aria-hidden>
             New
@@ -502,9 +509,12 @@ export function ToolCard({
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.2, delay: index * 0.02 }}
-        className="group/tool relative rounded-lg transition-shadow duration-300 hover:shadow-[0_18px_40px_-22px_rgba(99,102,241,0.55)] dark:hover:shadow-[0_18px_50px_-22px_rgba(129,140,248,0.6)]"
+        className={cn(
+          "group/tool relative rounded-lg transition-shadow duration-300 hover:shadow-[0_18px_40px_-22px_rgba(99,102,241,0.55)] dark:hover:shadow-[0_18px_50px_-22px_rgba(129,140,248,0.6)]",
+          isFeatured && "shadow-[0_0_0_1.5px_rgba(245,158,11,0.5),0_4px_20px_-4px_rgba(245,158,11,0.3)]",
+        )}
       >
-        <Card className="tool-trace relative overflow-hidden border-border/50 transition-colors group-hover/tool:border-transparent">
+        <Card className={cn("tool-trace relative overflow-hidden border-border/50 transition-colors group-hover/tool:border-transparent", isFeatured && "border-amber-400/40")}>
           {agencyBanner}
           {cardRibbons}
           <CardContent className="flex min-w-0 flex-col gap-3 p-3 sm:flex-row sm:items-center sm:gap-4">
@@ -659,12 +669,14 @@ export function ToolCard({
         "hover:shadow-[0_24px_60px_-24px_rgba(99,102,241,0.55)]",
         "dark:hover:shadow-[0_24px_70px_-24px_rgba(129,140,248,0.6)]",
         descriptionExpanded ? "h-auto min-h-0" : "h-full min-h-0",
+        isFeatured && "shadow-[0_0_0_1.5px_rgba(245,158,11,0.5),0_6px_24px_-6px_rgba(245,158,11,0.35)]",
       )}
     >
       <Card
         className={cn(
           "tool-trace group relative flex h-full min-h-0 min-w-0 flex-col border-border/50 bg-card transition-colors duration-300 group-hover/tool:border-transparent",
           descriptionExpanded ? "overflow-visible" : "overflow-hidden",
+          isFeatured && "border-amber-400/40",
         )}
       >
         {agencyBanner}

@@ -193,6 +193,7 @@ export default function AdminPage() {
   const [bulkProcessing, setBulkProcessing] = useState(false)
   const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0, currentUrl: '' })
   const [reanalyzingToolId, setReanalyzingToolId] = useState<string | null>(null)
+  const [togglingFeaturedId, setTogglingFeaturedId] = useState<string | null>(null)
   const [reanalyzingVideoId, setReanalyzingVideoId] = useState<string | null>(null)
   const [refreshingAllVideos, setRefreshingAllVideos] = useState(false)
   /** Live progress while bulk refresh runs (modal + bar). */
@@ -823,6 +824,35 @@ export default function AdminPage() {
         title: 'Failed to Delete Tool',
         description: 'Please try again.',
       })
+    }
+  }
+
+  const handleToggleFeatured = async (tool: Tool) => {
+    if (togglingFeaturedId) return
+    const next = !(tool.isFeatured === true)
+    setTogglingFeaturedId(tool.id)
+    // Optimistic update
+    setTools((prev) => prev.map((t) => t.id === tool.id ? { ...t, isFeatured: next } : t))
+    try {
+      const res = await fetch(`/api/tools/${tool.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isFeatured: next }),
+      })
+      if (!res.ok) throw new Error('Failed')
+      addToast({
+        variant: 'success',
+        title: next ? 'Tool featured' : 'Tool unfeatured',
+        description: next
+          ? `${tool.name} is now pinned to the top of the directory.`
+          : `${tool.name} removed from featured.`,
+      })
+    } catch {
+      // Rollback optimistic update on failure
+      setTools((prev) => prev.map((t) => t.id === tool.id ? { ...t, isFeatured: !next } : t))
+      addToast({ variant: 'error', title: 'Failed to update featured status' })
+    } finally {
+      setTogglingFeaturedId(null)
     }
   }
 
@@ -3261,6 +3291,21 @@ export default function AdminPage() {
                             reanalyzingToolId === tool.id && 'animate-spin',
                           )}
                         />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => void handleToggleFeatured(tool)}
+                        title={tool.isFeatured ? 'Remove from featured' : 'Mark as featured (pins to top)'}
+                        disabled={togglingFeaturedId === tool.id}
+                        className={cn(
+                          'transition-all',
+                          tool.isFeatured
+                            ? 'text-amber-500 shadow-[0_0_8px_2px_rgba(245,158,11,0.45)] hover:text-amber-400 hover:shadow-[0_0_12px_4px_rgba(245,158,11,0.55)]'
+                            : 'text-muted-foreground hover:text-amber-400',
+                        )}
+                      >
+                        <Sparkles className={cn('h-4 w-4', togglingFeaturedId === tool.id && 'animate-pulse')} />
                       </Button>
                       <Button
                         variant="ghost"
