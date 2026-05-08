@@ -6830,6 +6830,7 @@ function NotesPageInner() {
                           noteId={selectedNote.id}
                           initialHtml={selectedNote.content || ""}
                           canEdit={canEditSelectedNote}
+                          autoFocus={canEditSelectedNote}
                           onSaved={({ savedNote }) => {
                             if (!savedNote) return;
                             setNotes((prev) =>

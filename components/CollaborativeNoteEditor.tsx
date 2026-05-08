@@ -89,6 +89,8 @@ interface CollaborativeNoteEditorProps {
   placeholder?: string;
   /** Optional class name forwarded to the root scroll container. */
   className?: string;
+  /** Focus the editor as soon as it is ready (e.g. after a note tab switch). */
+  autoFocus?: boolean;
 }
 
 export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
@@ -100,6 +102,7 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
     onSaveStateChange,
     placeholder,
     className,
+    autoFocus,
   } = props;
   const room = useRoom();
   const self = useSelf();
@@ -444,6 +447,19 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
       editor.off("update", handler);
     };
   }, [editor, flushSave]);
+
+  // Auto-focus the editor once it is ready (provider synced + editor mounted).
+  // Only fires when the parent passes autoFocus={true}, e.g. after a note tab
+  // switch, so we don't steal focus on page load or background transitions.
+  useEffect(() => {
+    if (!autoFocus || !canEdit || !editor || !providerSynced) return;
+    // Use a microtask so the editor DOM has been committed before we focus.
+    const id = window.setTimeout(() => {
+      if (!editor.isDestroyed) editor.commands.focus("end", { scrollIntoView: false });
+    }, 0);
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor, providerSynced]);
 
   // Best-effort flush on unmount + tab close.
   useEffect(() => {
