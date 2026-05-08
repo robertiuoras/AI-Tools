@@ -417,6 +417,11 @@ function VideosPageContent() {
     return Array.from(new Set([...titles, ...cats, ...creatorNames]));
   }, [videos, creators]);
 
+  const newCount = useMemo(
+    () => videos.filter((v) => isVideoRecent(v.createdAt)).length,
+    [videos],
+  );
+
   const addFilter = useCallback((term: string) => {
     const trimmed = term.trim();
     if (!trimmed) return;
@@ -483,23 +488,47 @@ function VideosPageContent() {
       </div>
 
       <div className="container mx-auto px-4 py-6 space-y-8">
-        {/* Grid/List toggle — only in videos mode; the Videos|Creators switch
-            lives in the top navbar so we don't duplicate it here. */}
+        {/* Stats + controls: count, "new this week" badge, sort dropdown, grid/list toggle */}
         {viewMode === "videos" && (
-          <div className="flex items-center justify-end">
-            <div className="flex rounded-lg border border-border bg-muted/30 p-0.5">
-              <button type="button" title="Grid view" onClick={() => setLayout("grid")}
-                className={cn("flex h-8 w-8 items-center justify-center rounded-md transition-colors",
-                  layoutMode === "grid" ? "bg-background text-foreground shadow" : "text-muted-foreground hover:text-foreground")}
-              >
-                <LayoutGrid className="h-4 w-4" />
-              </button>
-              <button type="button" title="List view" onClick={() => setLayout("list")}
-                className={cn("flex h-8 w-8 items-center justify-center rounded-md transition-colors",
-                  layoutMode === "list" ? "bg-background text-foreground shadow" : "text-muted-foreground hover:text-foreground")}
-              >
-                <List className="h-4 w-4" />
-              </button>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              {!loading && (
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    {videos.length}{total > videos.length ? ` of ${total}` : ""} video{total !== 1 ? "s" : ""}
+                  </p>
+                  {newCount > 0 && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 border border-emerald-400/30">
+                      <Sparkles className="h-3 w-3" />
+                      {newCount} new this week
+                    </span>
+                  )}
+                </>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <Select value={sort} onValueChange={(v) => setSort(v as SortOption)}>
+                <SelectTrigger className="w-[160px]"><SelectValue placeholder="Sort by" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="newest">Newest</SelectItem>
+                  <SelectItem value="alphabetical">A–Z</SelectItem>
+                  <SelectItem value="subscribers">Subscribers</SelectItem>
+                </SelectContent>
+              </Select>
+              <div className="flex rounded-lg border border-border bg-muted/30 p-0.5">
+                <button type="button" title="Grid view" onClick={() => setLayout("grid")}
+                  className={cn("flex h-8 w-8 items-center justify-center rounded-md transition-colors",
+                    layoutMode === "grid" ? "bg-background text-foreground shadow" : "text-muted-foreground hover:text-foreground")}
+                >
+                  <LayoutGrid className="h-4 w-4" />
+                </button>
+                <button type="button" title="List view" onClick={() => setLayout("list")}
+                  className={cn("flex h-8 w-8 items-center justify-center rounded-md transition-colors",
+                    layoutMode === "list" ? "bg-background text-foreground shadow" : "text-muted-foreground hover:text-foreground")}
+                >
+                  <List className="h-4 w-4" />
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -539,14 +568,6 @@ function VideosPageContent() {
                   </button>
                 ))}
               </div>
-              <Select value={sort} onValueChange={(v) => setSort(v as SortOption)}>
-                <SelectTrigger className="w-[180px]"><SelectValue placeholder="Sort by" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="newest">Newest</SelectItem>
-                  <SelectItem value="alphabetical">A–Z</SelectItem>
-                  <SelectItem value="subscribers">Subscribers</SelectItem>
-                </SelectContent>
-              </Select>
             </div>
           </div>
         )}
@@ -633,22 +654,6 @@ function VideosPageContent() {
               layoutMode === "grid" ? <GridSkeleton count={12} /> : <ListSkeleton count={4} />
             ) : videos.length === 0 ? null : (
               <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <p className="text-sm text-muted-foreground">
-                      {videos.length}{total > videos.length ? ` of ${total}` : ""} video{total !== 1 ? "s" : ""}
-                    </p>
-                    {(() => {
-                      const newCount = videos.filter((v) => isVideoRecent(v.createdAt)).length;
-                      return newCount > 0 ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 border border-emerald-400/30">
-                          <Sparkles className="h-3 w-3" />
-                          {newCount} new this week
-                        </span>
-                      ) : null;
-                    })()}
-                  </div>
-                </div>
 
                 {layoutMode === "grid" ? (
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-6">

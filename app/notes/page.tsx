@@ -6793,35 +6793,34 @@ function NotesPageInner() {
                         key={selectedNote.id}
                         noteId={selectedNote.id}
                         fallback={
-                          // Render the note's saved content immediately so
-                          // the user sees their note text the instant they
-                          // click it, instead of a blank "Loading editor…"
-                          // panel while the auth + Liveblocks handshake
-                          // happens in the background.
+                          // Show a skeleton while auth / Liveblocks connects
+                          // instead of the raw HTML, so users never see
+                          // unstyled or partially-loaded note text.
                           <div
                             className={cn(
-                              "relative w-full overflow-y-auto rounded-xl border border-border/60 bg-card shadow-sm ring-1 ring-black/5 [overflow-wrap:anywhere]",
+                              "relative flex w-full flex-col overflow-hidden rounded-xl border border-border/60 bg-card shadow-sm ring-1 ring-black/5",
                               focusMode
                                 ? "min-h-0 flex-1"
                                 : "min-h-[420px] sm:min-h-[480px]",
                             )}
                             aria-busy="true"
+                            aria-label="Connecting to live session…"
                           >
-                            {selectedNote.content ? (
-                              <div
-                                className="prose prose-sm sm:prose-base dark:prose-invert max-w-none px-3 py-4 collab-prose select-text"
-                                dangerouslySetInnerHTML={{
-                                  __html: selectedNote.content,
-                                }}
-                              />
-                            ) : (
-                              <div className="flex h-full min-h-[200px] items-center justify-center px-3 py-4 text-sm text-muted-foreground">
-                                Opening note…
-                              </div>
-                            )}
-                            <div className="pointer-events-none absolute bottom-2 right-2 flex items-center gap-1.5 rounded-full border border-border/60 bg-background/80 px-2 py-0.5 text-[10px] font-medium text-muted-foreground shadow-sm backdrop-blur">
-                              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
-                              Connecting…
+                            {/* Skeleton pulse lines */}
+                            <div className="flex-1 space-y-3 px-4 py-5">
+                              <div className="h-4 w-2/3 animate-pulse rounded bg-muted/70" />
+                              <div className="h-3 w-full animate-pulse rounded bg-muted/50" />
+                              <div className="h-3 w-[88%] animate-pulse rounded bg-muted/50" />
+                              <div className="h-3 w-3/4 animate-pulse rounded bg-muted/50" />
+                              <div className="mt-4 h-3 w-full animate-pulse rounded bg-muted/40" />
+                              <div className="h-3 w-[92%] animate-pulse rounded bg-muted/40" />
+                              <div className="h-3 w-4/5 animate-pulse rounded bg-muted/40" />
+                              <div className="mt-4 h-3 w-2/3 animate-pulse rounded bg-muted/30" />
+                              <div className="h-3 w-[85%] animate-pulse rounded bg-muted/30" />
+                            </div>
+                            <div className="flex shrink-0 items-center justify-center gap-2 border-t border-border/40 py-3 text-xs text-muted-foreground">
+                              <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" />
+                              Connecting to live session…
                             </div>
                           </div>
                         }

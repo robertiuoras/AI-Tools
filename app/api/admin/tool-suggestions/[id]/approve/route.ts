@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { requireAdminUserId } from '@/lib/admin-auth'
-import { getInternalBaseUrl } from '@/lib/internal-base-url'
+import { POST as analyzeRoute } from '@/app/api/tools/analyze/route'
+import { POST as toolsRoute } from '@/app/api/tools/route'
 import { buildToolPayloadFromAnalyzeResponse } from '@/lib/build-tool-payload-from-analyze'
 import { normalizeToolSiteUrl } from '@/lib/normalize-tool-site-url'
 import { createNotification } from '@/lib/notifications'
@@ -38,39 +39,21 @@ export async function POST(
     }
 
     const url = String(row.url)
-    const base = getInternalBaseUrl(request)
 
-    // Build headers for internal server→server calls.
-    // VERCEL_AUTOMATION_BYPASS_SECRET bypasses Vercel Deployment Protection on
-    // internal requests so the admin approval flow works even when the site is
-    // password-protected.
-    const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET
-    const internalHeaders: Record<string, string> = { 'Content-Type': 'application/json' }
-    if (bypassSecret) internalHeaders['x-vercel-protection-bypass'] = bypassSecret
-
-    let analyzeRes: Response
-    try {
-      analyzeRes = await fetch(`${base}/api/tools/analyze`, {
+    const analyzeRes = await analyzeRoute(
+      new NextRequest('http://internal/api/tools/analyze', {
         method: 'POST',
-        headers: internalHeaders,
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url }),
-      })
-    } catch (err) {
-      return NextResponse.json(
-        { error: 'Could not reach analyze service', details: String(err) },
-        { status: 502 },
-      )
-    }
+      }),
+    )
 
     const analyzed = await analyzeRes.json().catch(() => null) as Record<string, unknown> | null
     if (!analyzeRes.ok || !analyzed) {
-      let reason =
+      const reason =
         typeof analyzed?.error === 'string' && analyzed.error
           ? analyzed.error
           : analyzeRes.statusText || 'Analyze failed'
-      if (analyzeRes.status === 401 || analyzeRes.status === 403) {
-        reason = `Internal request blocked (HTTP ${analyzeRes.status}). Set VERCEL_AUTOMATION_BYPASS_SECRET to fix deployment protection on server→server calls.`
-      }
       return NextResponse.json(
         { error: reason, details: analyzed },
         { status: 502 },
@@ -97,19 +80,13 @@ export async function POST(
       )
     }
 
-    let postRes: Response
-    try {
-      postRes = await fetch(`${base}/api/tools`, {
+    const postRes = await toolsRoute(
+      new NextRequest('http://internal/api/tools', {
         method: 'POST',
-        headers: internalHeaders,
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-      })
-    } catch (err) {
-      return NextResponse.json(
-        { error: 'Could not reach tools service', details: String(err) },
-        { status: 502 },
-      )
-    }
+      }),
+    )
 
     const created = await postRes.json().catch(() => null)
     if (!postRes.ok) {

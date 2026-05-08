@@ -241,6 +241,25 @@
   padding-bottom: 0.15em;
 }
 
+/* Notes: ensure bullet / numbered list markers always show in all note views.
+   Tailwind preflight resets list-style to none; override here at a specificity
+   that wins regardless of styled-jsx injection order. */
+.note-html-view ul,
+.collab-editor-shell .ProseMirror ul {
+  list-style-type: disc;
+  padding-left: 1.5rem;
+}
+.note-html-view ol,
+.collab-editor-shell .ProseMirror ol {
+  list-style-type: decimal;
+  padding-left: 1.5rem;
+}
+/* Task lists in the collab editor stay marker-free */
+.collab-editor-shell .ProseMirror ul[data-type="taskList"] {
+  list-style-type: none;
+  padding-left: 0.4em;
+}
+
 /* Home page splash — subtle motion without extra JS */
 @keyframes home-splash-blob {
   0%,

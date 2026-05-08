@@ -1,7 +1,10 @@
 import type { Note, NotePage } from "@/lib/supabase";
 
-const BOOT_PREFIX = "ai-notes-bootstrap-v1";
-const MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24h — refresh after that
+// v2: switched from sessionStorage (cleared on tab close) to localStorage so
+// the cache survives browser restarts — eliminates the cold "Loading workspace…"
+// on every new session.
+const BOOT_PREFIX = "ai-notes-bootstrap-v2";
+const MAX_AGE_MS = 60 * 60 * 1000; // 1h — short enough to stay fresh, long enough to skip cold load
 
 export type NotesBootstrapPayload = {
   pages: NotePage[];
@@ -19,7 +22,7 @@ export function readNotesBootstrapFromSession(
 ): NotesBootstrapPayload | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = sessionStorage.getItem(`${BOOT_PREFIX}:${userId}`);
+    const raw = localStorage.getItem(`${BOOT_PREFIX}:${userId}`);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as StoredBootstrap;
     if (
@@ -30,7 +33,7 @@ export function readNotesBootstrapFromSession(
       return null;
     }
     if (Date.now() - parsed.storedAt > MAX_AGE_MS) {
-      sessionStorage.removeItem(`${BOOT_PREFIX}:${userId}`);
+      localStorage.removeItem(`${BOOT_PREFIX}:${userId}`);
       return null;
     }
     return parsed.payload;
@@ -48,7 +51,7 @@ export function writeNotesBootstrapToSession(
       storedAt: Date.now(),
       payload,
     };
-    sessionStorage.setItem(`${BOOT_PREFIX}:${userId}`, JSON.stringify(stored));
+    localStorage.setItem(`${BOOT_PREFIX}:${userId}`, JSON.stringify(stored));
   } catch {
     /* quota / private mode */
   }
@@ -56,7 +59,7 @@ export function writeNotesBootstrapToSession(
 
 export function clearNotesBootstrapFromSession(userId: string): void {
   try {
-    sessionStorage.removeItem(`${BOOT_PREFIX}:${userId}`);
+    localStorage.removeItem(`${BOOT_PREFIX}:${userId}`);
   } catch {
     /* ignore */
   }

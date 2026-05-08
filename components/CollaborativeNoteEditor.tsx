@@ -324,13 +324,16 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
     }
   }, [editor, initialHtml, providerSynced, ydoc]);
 
-  // Track whether we've ever observed real content. Combined with the
-  // never-save-empty guard, this is the seatbelt that prevents accidental
-  // wipes from save-during-startup races.
+  // Track whether we've ever observed real content. Self-removes once detected
+  // to avoid a live transaction listener on every keystroke forever.
   useEffect(() => {
     if (!editor) return;
     const onAnyUpdate = () => {
-      if (editor.state.doc.content.size > 2) hasRealContentRef.current = true;
+      if (editor.state.doc.content.size > 2) {
+        hasRealContentRef.current = true;
+        editor.off("update", onAnyUpdate);
+        editor.off("create", onAnyUpdate);
+      }
     };
     editor.on("update", onAnyUpdate);
     editor.on("create", onAnyUpdate);
@@ -493,16 +496,19 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
     if (!editor) return;
     const check = () => {
       // ProseMirror's empty doc has size 2 (start/end tokens).
-      if (editor.state.doc.content.size > 2) setEditorHasContent(true);
+      if (editor.state.doc.content.size > 2) {
+        setEditorHasContent(true);
+        // Self-remove — no need to keep checking after first content.
+        editor.off("update", check);
+        editor.off("create", check);
+      }
     };
     check();
     editor.on("update", check);
     editor.on("create", check);
-    editor.on("transaction", check);
     return () => {
       editor.off("update", check);
       editor.off("create", check);
-      editor.off("transaction", check);
     };
   }, [editor]);
 
@@ -821,11 +827,20 @@ function initials(name: string): string {
  * pulse with the primary colour so users always know what's on.
  */
 function EditorToolbar({ editor }: { editor: Editor }) {
-  // Force re-render whenever the editor's selection / marks change so
-  // toolbar buttons reflect the current state ("active" highlights).
+  // Force re-render when the editor's selection / marks change. Batched via
+  // requestAnimationFrame so rapid keystrokes collapse into one render per
+  // paint frame rather than one per transaction — eliminates typing lag on
+  // large notes.
   const [, force] = useState(0);
   useEffect(() => {
-    const tick = () => force((n) => n + 1);
+    let rafId: number | null = null;
+    const tick = () => {
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        force((n) => n + 1);
+      });
+    };
     editor.on("selectionUpdate", tick);
     editor.on("transaction", tick);
     editor.on("focus", tick);
@@ -833,6 +848,7 @@ function EditorToolbar({ editor }: { editor: Editor }) {
       editor.off("selectionUpdate", tick);
       editor.off("transaction", tick);
       editor.off("focus", tick);
+      if (rafId !== null) cancelAnimationFrame(rafId);
     };
   }, [editor]);
 
