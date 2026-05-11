@@ -402,10 +402,10 @@ export async function POST(request: NextRequest) {
     supabaseData.hasDownloadableApp = validatedData.hasDownloadableApp === true;
     supabaseData.isFeatured = validatedData.isFeatured === true;
 
-    // Honest popularity signals (only included if the popularity migration ran).
-    // We try the full insert first; if Supabase rejects with 42703 ("column does
-    // not exist") we retry without these fields so the app keeps working until
-    // the operator runs `supabase-migration-popularity-signals.sql`.
+    // Optional columns that may not exist in all deployments. We try the full
+    // insert first; if Supabase rejects with 42703 / PGRST204 ("column does not
+    // exist") we retry without these fields so the app keeps working until the
+    // operator runs the relevant migration SQL files.
     const popularityKeys = [
       'githubRepo',
       'githubStars',
@@ -417,6 +417,7 @@ export async function POST(request: NextRequest) {
       'popularityTier',
       'popularitySignals',
       'popularityRefreshedAt',
+      'isFeatured',
     ] as const
     const v = validatedData as unknown as Record<string, unknown>
     if (v.githubRepo != null) supabaseData.githubRepo = v.githubRepo
@@ -490,7 +491,7 @@ export async function POST(request: NextRequest) {
 
     // 42703 = "undefined column". Retry without the popularity fields when the
     // operator hasn't applied supabase-migration-popularity-signals.sql yet.
-    if (error && (error.code === '42703' || /column .* does not exist/i.test(error.message ?? ''))) {
+    if (error && (error.code === '42703' || error.code === 'PGRST204' || /column .* does not exist/i.test(error.message ?? '') || /Could not find the/.test(error.message ?? ''))) {
       console.warn(
         '[POST /api/tools] Popularity columns missing — retrying insert without them. Run supabase-migration-popularity-signals.sql to enable.'
       );
