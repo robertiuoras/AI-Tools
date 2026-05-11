@@ -417,7 +417,6 @@ export async function POST(request: NextRequest) {
       'popularityTier',
       'popularitySignals',
       'popularityRefreshedAt',
-      'isFeatured',
     ] as const
     const v = validatedData as unknown as Record<string, unknown>
     if (v.githubRepo != null) supabaseData.githubRepo = v.githubRepo
