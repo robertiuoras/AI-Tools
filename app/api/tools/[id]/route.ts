@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { z } from 'zod'
 import { supabaseAdmin } from '@/lib/supabase'
 import { toolSchema } from '@/lib/schemas'
 import { toolCategoryList } from '@/lib/tool-categories'
@@ -173,6 +174,40 @@ export async function PUT(
       { error: 'Failed to update tool' },
       { status: 500 }
     )
+  }
+}
+
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params
+    const body = await request.json()
+    const allowed = z.object({
+      isFeatured: z.boolean().optional(),
+      isAgency: z.boolean().optional(),
+      hasDownloadableApp: z.boolean().optional(),
+    })
+    const patch = allowed.parse(body)
+    if (Object.keys(patch).length === 0) {
+      return NextResponse.json({ error: 'No fields to update' }, { status: 400 })
+    }
+    const admin = supabaseAdmin as any
+    const { data: tool, error } = await admin
+      .from('tool')
+      .update({ ...patch, updatedAt: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single()
+    if (error) {
+      console.error('Error patching tool:', error)
+      return NextResponse.json({ error: 'Failed to update tool', details: error.message }, { status: 500 })
+    }
+    return NextResponse.json(tool)
+  } catch (error) {
+    console.error('Error patching tool:', error)
+    return NextResponse.json({ error: 'Failed to update tool' }, { status: 500 })
   }
 }
 

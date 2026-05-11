@@ -835,7 +835,7 @@ export default function AdminPage() {
     setTools((prev) => prev.map((t) => t.id === tool.id ? { ...t, isFeatured: next } : t))
     try {
       const res = await fetch(`/api/tools/${tool.id}`, {
-        method: 'PUT',
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ isFeatured: next }),
       })
