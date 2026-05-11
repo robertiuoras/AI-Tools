@@ -822,23 +822,15 @@ export async function POST(request: NextRequest) {
       
       // For website rate limits and blocking, we'll still try OpenAI with just the URL
       // But for other errors, we might want to fail fast
-      const canStillUseOpenAI = errorType === 'website_rate_limit' || 
+      const canStillUseOpenAI = errorType === 'website_rate_limit' ||
                                  errorType === 'website_blocked' ||
                                  (statusCode === 429 && isWebsiteError) ||
                                  errorMessage.includes('CORS') ||
-                                 errorMessage.includes('blocked')
-      
+                                 errorMessage.includes('blocked') ||
+                                 errorMessage.includes('timeout') ||
+                                 errorMessage.includes('aborted')
+
       if (!canStillUseOpenAI) {
-        // For timeouts, network errors, etc., return error immediately
-        if (errorMessage.includes('timeout') || errorMessage.includes('aborted')) {
-          return NextResponse.json({
-            error: 'Website request timed out. The website may be slow or unreachable.',
-            details: errorMessage,
-            errorType: 'timeout',
-            suggestion: 'Try again later or fill in the form manually.'
-          }, { status: 408 })
-        }
-        
         if (errorMessage.includes('Failed to fetch') || errorMessage.includes('network') || errorMessage.includes('ECONNREFUSED') || errorMessage.includes('ENOTFOUND')) {
           return NextResponse.json({
             error: 'Could not reach the website. The URL may be invalid or the site may be down.',
