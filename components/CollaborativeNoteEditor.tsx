@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { useEditor, EditorContent, Editor } from "@tiptap/react";
+import { Extension } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import Collaboration from "@tiptap/extension-collaboration";
 import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
@@ -74,6 +75,46 @@ import { cn } from "@/lib/utils";
  */
 
 const SAVE_DEBOUNCE_MS = 1500;
+
+/**
+ * Fixes three list-editing bugs when running under Yjs/Collaboration:
+ *   1. Double bullets on Enter — Yjs can replay the splitListItem transaction;
+ *      running at priority 200 (before the built-in listItem handler at 100)
+ *      and debouncing within 50 ms prevents a second split.
+ *   2. Double-backspace to exit empty bullet — explicit liftListItem on the
+ *      first Backspace when the list item is empty.
+ */
+const ListKeyboardFixes = Extension.create({
+  name: "listKeyboardFixes",
+  priority: 200,
+  addKeyboardShortcuts() {
+    let lastEnterMs = 0;
+    return {
+      Enter: () => {
+        const now = Date.now();
+        if (now - lastEnterMs < 50) return true; // deduplicate rapid/double dispatch
+        lastEnterMs = now;
+        const { $cursor } = this.editor.state.selection as any;
+        if (!$cursor) return false;
+        if ($cursor.node(-1)?.type.name === "listItem") {
+          return this.editor.commands.splitListItem("listItem");
+        }
+        return false;
+      },
+      Backspace: () => {
+        const { $cursor } = this.editor.state.selection as any;
+        if (!$cursor) return false;
+        if (
+          $cursor.parent.content.size === 0 &&
+          $cursor.node(-1)?.type.name === "listItem"
+        ) {
+          return this.editor.commands.liftListItem("listItem");
+        }
+        return false;
+      },
+    };
+  },
+});
 
 interface CollaborativeNoteEditorProps {
   noteId: string;
@@ -162,6 +203,7 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
             // StarterKit's history is disabled — Yjs provides multiplayer-aware
             // undo/redo via @tiptap/extension-collaboration's UndoManager.
             StarterKit.configure({ history: false }),
+            ListKeyboardFixes,
             Underline,
             Highlight.configure({ multicolor: false }),
             TextAlign.configure({ types: ["heading", "paragraph"] }),
@@ -201,6 +243,7 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
           ]
         : [
             StarterKit.configure({ history: false }),
+            ListKeyboardFixes,
             Underline,
             Highlight.configure({ multicolor: false }),
             TextAlign.configure({ types: ["heading", "paragraph"] }),
@@ -962,7 +1005,12 @@ function EditorToolbar({ editor }: { editor: Editor }) {
       <ToolbarButton
         title="Task list"
         active={editor.isActive("taskList")}
-        onClick={() => editor.chain().focus().toggleTaskList().run()}
+        disabled={editor.isActive("taskList")}
+        onClick={() => {
+          if (!editor.isActive("taskList")) {
+            editor.chain().focus().toggleTaskList().run();
+          }
+        }}
       >
         <ListChecks className="h-3.5 w-3.5" />
       </ToolbarButton>
