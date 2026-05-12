@@ -782,7 +782,7 @@ const preprocessTool = z.preprocess((data: any) => {
       logoUrl: data.logoUrl === '' ? null : data.logoUrl,
       tags: data.tags === '' ? null : data.tags,
       traffic: data.traffic === '' ? null : data.traffic,
-      revenue: data.revenue === '' ? null : data.revenue,
+      revenue: (data.revenue === '' || data.revenue === 'null') ? null : data.revenue,
       categories,
       isAgency,
     }

@@ -449,7 +449,7 @@ Return JSON:
   "isAgency": true or false,
   "categories": ["Primary", "Second if needed", "Third if needed"],
   "tags": "ai, tag1, tag2 (3-5 tags)",
-  "revenue": "free|freemium|paid|enterprise|null",
+  "revenue": "free" or "freemium" or "paid" or "enterprise" or null,
   "traffic": "low|medium|high|unknown",
   "rating": 0-5 or null,
   "estimatedVisits": number or null,
@@ -706,8 +706,9 @@ Rules:
     console.log('✅ [OpenAI] ==========================================')
 
     const cats = categoriesFromAiContent(content)
+    const rawRevenue = (content.revenue === 'null' ? null : content.revenue) ?? null
     const refinedRevenue = refineRevenueModel(
-      content.revenue ?? null,
+      rawRevenue,
       pricingContent,
       pageContent,
     )
