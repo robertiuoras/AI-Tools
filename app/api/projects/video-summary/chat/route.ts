@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { enforceApiRateLimit } from "@/lib/api-rate-limit";
 import { logOpenAIUsage } from "@/lib/openai-usage";
-import { readTranscriptCache } from "@/lib/video-transcript-cache";
+import { readTranscriptCache, type TranscriptSegment } from "@/lib/video-transcript-cache";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -68,17 +68,29 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Build timestamped transcript for grounding — same format as the main route
+    const formatTs = (sec: number) => {
+      const m = Math.floor(sec / 60);
+      const s = Math.floor(sec % 60);
+      return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    };
+    const transcriptText =
+      cached.segments && cached.segments.length > 0
+        ? (cached.segments as TranscriptSegment[])
+            .map((seg) => `[${formatTs(seg.startSec)}] ${seg.text}`)
+            .join("\n")
+            .slice(0, 80_000)
+        : cached.text.slice(0, 80_000);
+
     const systemPrompt = [
       "You answer questions about a single video using ONLY the transcript below.",
       "If the answer isn't in the transcript, say so plainly — do not guess from the title or your general knowledge.",
       "Quote exact phrases from the transcript when they support the answer.",
+      "When relevant, cite the timestamp in [mm:ss] format.",
       "Be concise: 1–4 sentences unless the question explicitly asks for a list.",
       "",
-      `Video title: ${cached.title ?? "(unknown)"}`,
-      `Channel/author: ${cached.author ?? "(unknown)"}`,
-      "",
       "TRANSCRIPT:",
-      cached.text.slice(0, 80_000),
+      transcriptText,
     ].join("\n");
 
     const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [

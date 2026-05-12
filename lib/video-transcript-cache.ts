@@ -13,8 +13,15 @@ export interface TranscriptSource {
   charCount: number;
 }
 
+export interface TranscriptSegment {
+  text: string;
+  startSec: number;
+  endSec: number;
+}
+
 export interface CachedTranscript {
   text: string;
+  segments: TranscriptSegment[] | null;
   source: TranscriptSource;
   title: string | null;
   author: string | null;
@@ -24,6 +31,7 @@ export interface CachedTranscript {
 
 export interface CacheWriteInput {
   text: string;
+  segments: TranscriptSegment[] | null;
   source: TranscriptSource;
   title: string | null;
   author: string | null;
@@ -63,13 +71,14 @@ export async function readTranscriptCache(
     const { data, error } = await supabaseAdmin
       .from("video_transcripts")
       .select(
-        "transcript, transcript_source, title, author, thumbnail_url, description",
+        "transcript, segments, transcript_source, title, author, thumbnail_url, description",
       )
       .eq("url_hash", hashVideoUrl(url))
       .maybeSingle();
     if (error || !data) return null;
     const record = data as {
       transcript: unknown;
+      segments: unknown;
       transcript_source: unknown;
       title: unknown;
       author: unknown;
@@ -84,8 +93,27 @@ export async function readTranscriptCache(
     }
     const src = record.transcript_source as Partial<TranscriptSource> | null;
     if (!src || typeof src.kind !== "string") return null;
+
+    let segments: TranscriptSegment[] | null = null;
+    if (Array.isArray(record.segments) && record.segments.length > 0) {
+      segments = (record.segments as unknown[]).flatMap((s) => {
+        if (
+          s &&
+          typeof s === "object" &&
+          typeof (s as Record<string, unknown>).text === "string" &&
+          typeof (s as Record<string, unknown>).startSec === "number" &&
+          typeof (s as Record<string, unknown>).endSec === "number"
+        ) {
+          return [s as TranscriptSegment];
+        }
+        return [];
+      });
+      if (segments.length === 0) segments = null;
+    }
+
     return {
       text: record.transcript,
+      segments,
       source: {
         kind: src.kind as TranscriptKind,
         language: typeof src.language === "string" ? src.language : null,
@@ -119,6 +147,7 @@ export async function writeTranscriptCache(
         url,
         source: sourceKind,
         transcript: input.text,
+        segments: input.segments ?? null,
         transcript_source: input.source,
         title: input.title,
         author: input.author,

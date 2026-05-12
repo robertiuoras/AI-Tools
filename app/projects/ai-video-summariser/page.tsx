@@ -21,6 +21,10 @@ import {
   MessageCircle,
   Send,
   Database,
+  Clock,
+  ChevronDown,
+  ChevronUp,
+  Quote,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,6 +36,12 @@ type TranscriptKind =
   | "youtube-captions-asr"
   | "youtube-whisper"
   | "tiktok-whisper";
+
+interface TranscriptSegment {
+  text: string;
+  startSec: number;
+  endSec: number;
+}
 
 interface SummaryResult {
   source: "youtube" | "tiktok";
@@ -47,12 +57,12 @@ interface SummaryResult {
     language: string | null;
     charCount: number;
   };
+  segments: TranscriptSegment[] | null;
   summary: string;
-  keyPoints: string[];
-  detailedNotes: Array<{ section: string; bullets: string[] }>;
+  chapters: Array<{ title: string; startSec: number; endSec: number; bullets: string[] }>;
+  keyPoints: Array<{ point: string; timestampSec: number; quote: string }>;
   importantCommands: string[];
-  actionItems: string[];
-  outline: Array<{ section: string; bullets: string[] }>;
+  actionItems: Array<{ text: string; timestampSec: number }>;
   transcriptCoverage: {
     mode: "full" | "excerpted";
     inputCharCount: number;
@@ -102,6 +112,23 @@ function formatUsd(value: number): string {
   return `$${value.toFixed(4)}`;
 }
 
+function formatSec(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function youtubeTimestampUrl(videoUrl: string, sec: number): string | null {
+  try {
+    const u = new URL(videoUrl);
+    if (u.hostname.includes("youtube.com") || u.hostname === "youtu.be") {
+      u.searchParams.set("t", String(Math.floor(sec)));
+      return u.toString();
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
 function buildMarkdown(s: SummaryResult): string {
   const lines: string[] = [];
   lines.push(`# ${s.title ?? "Video summary"}`);
@@ -109,9 +136,7 @@ function buildMarkdown(s: SummaryResult): string {
   lines.push("");
   lines.push(`**Source:** ${sourceLabel(s.source)}  `);
   if (s.videoUrl) lines.push(`**URL:** ${s.videoUrl}  `);
-  lines.push(
-    `**Generated:** ${new Date(s.generatedAt).toLocaleString()}  `,
-  );
+  lines.push(`**Generated:** ${new Date(s.generatedAt).toLocaleString()}  `);
   lines.push(
     `**Transcript:** ${transcriptKindLabel(s.transcriptSource.kind)} • ${
       s.transcriptCoverage.mode === "excerpted"
@@ -132,9 +157,23 @@ function buildMarkdown(s: SummaryResult): string {
   lines.push("## TL;DR");
   lines.push(s.summary || "(no summary returned)");
   lines.push("");
-  lines.push("## Key points");
-  s.keyPoints.forEach((k) => lines.push(`- ${k}`));
-  lines.push("");
+  if (s.chapters.length > 0) {
+    lines.push("## Chapters");
+    s.chapters.forEach((ch) => {
+      lines.push(`### [${formatSec(ch.startSec)}] ${ch.title}`);
+      ch.bullets.forEach((b) => lines.push(`- ${b}`));
+      lines.push("");
+    });
+  }
+  if (s.keyPoints.length > 0) {
+    lines.push("## Key points");
+    s.keyPoints.forEach((k) => {
+      const ts = k.timestampSec > 0 ? ` [${formatSec(k.timestampSec)}]` : "";
+      lines.push(`- ${k.point}${ts}`);
+      if (k.quote) lines.push(`  > "${k.quote}"`);
+    });
+    lines.push("");
+  }
   if (s.importantCommands.length > 0) {
     lines.push("## Important commands and useful details");
     s.importantCommands.forEach((k) => lines.push(`- ${k}`));
@@ -142,23 +181,12 @@ function buildMarkdown(s: SummaryResult): string {
   }
   if (s.actionItems.length > 0) {
     lines.push("## Action items");
-    s.actionItems.forEach((k) => lines.push(`- ${k}`));
-    lines.push("");
-  }
-  if (s.detailedNotes.length > 0) {
-    lines.push("## Detailed notes");
-    s.detailedNotes.forEach((sec) => {
-      lines.push(`### ${sec.section}`);
-      sec.bullets.forEach((b) => lines.push(`- ${b}`));
-      lines.push("");
+    s.actionItems.forEach((a) => {
+      const ts = a.timestampSec > 0 ? ` [${formatSec(a.timestampSec)}]` : "";
+      lines.push(`- ${a.text}${ts}`);
     });
-  }
-  lines.push("## Outline");
-  s.outline.forEach((sec) => {
-    lines.push(`### ${sec.section}`);
-    sec.bullets.forEach((b) => lines.push(`- ${b}`));
     lines.push("");
-  });
+  }
   return lines.join("\n");
 }
 
@@ -211,18 +239,29 @@ async function downloadPdf(s: SummaryResult): Promise<void> {
   writeWrapped("TL;DR", { size: 14, bold: true, gap: 6 });
   writeWrapped(s.summary || "(no summary)", { size: 11, gap: 16 });
 
-  writeWrapped("Key points", { size: 14, bold: true, gap: 6 });
-  for (const k of s.keyPoints) {
-    writeWrapped(`• ${k}`, { size: 11, gap: 2 });
+  if (s.chapters.length > 0) {
+    writeWrapped("Chapters", { size: 14, bold: true, gap: 6 });
+    for (const ch of s.chapters) {
+      writeWrapped(`[${formatSec(ch.startSec)}] ${ch.title}`, { size: 12, bold: true, gap: 4 });
+      for (const b of ch.bullets) {
+        writeWrapped(`• ${b}`, { size: 11, gap: 2 });
+      }
+      y += 8;
+    }
+    y += 12;
   }
-  y += 12;
+
+  if (s.keyPoints.length > 0) {
+    writeWrapped("Key points", { size: 14, bold: true, gap: 6 });
+    for (const k of s.keyPoints) {
+      const ts = k.timestampSec > 0 ? ` [${formatSec(k.timestampSec)}]` : "";
+      writeWrapped(`• ${k.point}${ts}`, { size: 11, gap: 2 });
+    }
+    y += 12;
+  }
 
   if (s.importantCommands.length > 0) {
-    writeWrapped("Important commands and useful details", {
-      size: 14,
-      bold: true,
-      gap: 6,
-    });
+    writeWrapped("Important commands and useful details", { size: 14, bold: true, gap: 6 });
     for (const k of s.importantCommands) {
       writeWrapped(`• ${k}`, { size: 11, gap: 2 });
     }
@@ -231,31 +270,11 @@ async function downloadPdf(s: SummaryResult): Promise<void> {
 
   if (s.actionItems.length > 0) {
     writeWrapped("Action items", { size: 14, bold: true, gap: 6 });
-    for (const k of s.actionItems) {
-      writeWrapped(`• ${k}`, { size: 11, gap: 2 });
+    for (const a of s.actionItems) {
+      const ts = a.timestampSec > 0 ? ` [${formatSec(a.timestampSec)}]` : "";
+      writeWrapped(`• ${a.text}${ts}`, { size: 11, gap: 2 });
     }
     y += 12;
-  }
-
-  if (s.detailedNotes.length > 0) {
-    writeWrapped("Detailed notes", { size: 14, bold: true, gap: 6 });
-    for (const sec of s.detailedNotes) {
-      writeWrapped(sec.section, { size: 12, bold: true, gap: 4 });
-      for (const b of sec.bullets) {
-        writeWrapped(`• ${b}`, { size: 11, gap: 2 });
-      }
-      y += 8;
-    }
-    y += 12;
-  }
-
-  writeWrapped("Outline", { size: 14, bold: true, gap: 6 });
-  for (const sec of s.outline) {
-    writeWrapped(sec.section, { size: 12, bold: true, gap: 4 });
-    for (const b of sec.bullets) {
-      writeWrapped(`• ${b}`, { size: 11, gap: 2 });
-    }
-    y += 8;
   }
 
   const filename = (s.title ?? "video-summary")
@@ -296,11 +315,14 @@ interface ChatMessage {
 export default function AiVideoSummariserPage() {
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<{ message: string; hint?: string } | null>(
     null,
   );
   const [result, setResult] = useState<SummaryResult | null>(null);
   const [copied, setCopied] = useState<"md" | null>(null);
+  const [showTranscript, setShowTranscript] = useState(false);
+  const [hoveredQuote, setHoveredQuote] = useState<string | null>(null);
 
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
@@ -348,43 +370,146 @@ export default function AiVideoSummariserPage() {
     }
   }, []);
 
+  // saveResult is kept for backward compat with the chat section but onSubmit
+  // now builds result incrementally via SSE — supress unused warning:
+  void saveResult;
+
   const onSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
       const trimmed = url.trim();
       if (!trimmed) return;
       setLoading(true);
+      setIsStreaming(false);
       setError(null);
+      setResult(null);
+      setShowTranscript(false);
+      setChatHistory([]);
+      setChatError(null);
+
       try {
         const res = await fetch("/api/projects/video-summary", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ url: trimmed }),
         });
-        const data = (await res.json().catch(() => null)) as
-          | (SummaryResult & { error?: undefined })
-          | { error: string; hint?: string }
-          | null;
-        if (!res.ok || !data || "error" in data) {
-          setError({
-            message:
-              (data && "error" in data && data.error) ||
-              "Couldn't summarise this video.",
-            hint: data && "hint" in data ? data.hint : undefined,
-          });
+
+        if (!res.body) {
+          setError({ message: "No response stream from server." });
           return;
         }
-        saveResult(data, trimmed);
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        let currentEvent = "";
+        let accumulated: Partial<SummaryResult> | null = null;
+        let summaryText = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split("\n");
+          buf = lines.pop() ?? "";
+
+          for (const line of lines) {
+            if (line.startsWith("event: ")) {
+              currentEvent = line.slice(7).trim();
+            } else if (line.startsWith("data: ")) {
+              let payload: unknown;
+              try { payload = JSON.parse(line.slice(6)); } catch { continue; }
+
+              if (currentEvent === "error") {
+                const p = payload as { error?: string; hint?: string };
+                setError({ message: p.error ?? "Summarisation failed.", hint: p.hint });
+                setLoading(false);
+                setIsStreaming(false);
+                return;
+              }
+
+              if (currentEvent === "meta") {
+                const p = payload as Partial<SummaryResult>;
+                accumulated = p;
+                setLoading(false);
+                setIsStreaming(true);
+                setResult({
+                  source: p.source ?? "youtube",
+                  videoUrl: p.videoUrl ?? trimmed,
+                  title: p.title ?? null,
+                  author: p.author ?? null,
+                  thumbnailUrl: p.thumbnailUrl ?? null,
+                  language: p.language ?? null,
+                  hasTranscript: true,
+                  transcriptCharCount: p.transcriptCharCount ?? 0,
+                  transcriptSource: p.transcriptSource ?? { kind: "youtube-captions-asr", language: null, charCount: 0 },
+                  segments: (p as { segments?: TranscriptSegment[] | null }).segments ?? null,
+                  summary: "",
+                  chapters: [],
+                  keyPoints: [],
+                  importantCommands: [],
+                  actionItems: [],
+                  transcriptCoverage: p.transcriptCoverage ?? { mode: "full", inputCharCount: 0, analyzedCharCount: 0 },
+                  generatedAt: p.generatedAt ?? new Date().toISOString(),
+                  warnings: p.warnings ?? [],
+                  cost: null,
+                  transcriptCacheHit: p.transcriptCacheHit ?? false,
+                });
+              }
+
+              if (currentEvent === "summary_chunk") {
+                const token = payload as string;
+                summaryText += token;
+                setResult((prev) => prev ? { ...prev, summary: summaryText } : null);
+              }
+
+              if (currentEvent === "structured") {
+                const p = payload as {
+                  chapters?: SummaryResult["chapters"];
+                  keyPoints?: SummaryResult["keyPoints"];
+                  importantCommands?: string[];
+                  actionItems?: SummaryResult["actionItems"];
+                  warnings?: string[];
+                  cost?: SummaryResult["cost"];
+                };
+                setResult((prev) => {
+                  if (!prev) return null;
+                  const next: SummaryResult = {
+                    ...prev,
+                    summary: summaryText,
+                    chapters: p.chapters ?? [],
+                    keyPoints: p.keyPoints ?? [],
+                    importantCommands: p.importantCommands ?? [],
+                    actionItems: p.actionItems ?? [],
+                    warnings: p.warnings ?? prev.warnings,
+                    cost: p.cost ?? null,
+                  };
+                  // Save to localStorage now that we have the full result
+                  try {
+                    window.localStorage.setItem(
+                      SAVED_RESULT_KEY,
+                      JSON.stringify({ url: trimmed, result: next }),
+                    );
+                  } catch { /* ignore */ }
+                  accumulated = next;
+                  return next;
+                });
+              }
+
+              if (currentEvent === "done") {
+                setIsStreaming(false);
+              }
+            }
+          }
+        }
       } catch (err) {
-        setError({
-          message:
-            err instanceof Error ? err.message : "Network error — try again.",
-        });
+        setError({ message: err instanceof Error ? err.message : "Network error — try again." });
       } finally {
         setLoading(false);
+        setIsStreaming(false);
       }
     },
-    [saveResult, url],
+    [url],
   );
 
   const onChatSubmit = useCallback(
@@ -528,13 +653,18 @@ export default function AiVideoSummariserPage() {
             </div>
             <Button
               type="submit"
-              disabled={loading || !url.trim()}
+              disabled={loading || isStreaming || !url.trim()}
               className="gap-1.5 bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white hover:from-violet-700 hover:to-fuchsia-700"
             >
               {loading ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Summarising…
+                  Fetching transcript…
+                </>
+              ) : isStreaming ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Generating…
                 </>
               ) : (
                 <>
@@ -705,25 +835,119 @@ export default function AiVideoSummariserPage() {
               </div>
             )}
 
+            {/* TL;DR — streams in token by token */}
             <section className="rounded-2xl border border-border/50 bg-card/90 p-5 shadow-md backdrop-blur-sm">
               <h3 className="mb-2 inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-muted-foreground">
                 <Sparkles className="h-4 w-4 text-violet-500" />
                 TL;DR
               </h3>
-              <p className="text-base leading-relaxed">{result.summary}</p>
+              <p className="text-base leading-relaxed">
+                {result.summary || (isStreaming ? (
+                  <span className="inline-flex items-center gap-1 text-muted-foreground">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Writing summary…
+                  </span>
+                ) : null)}
+                {isStreaming && result.summary && (
+                  <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-current align-middle" />
+                )}
+              </p>
             </section>
 
-            <section className="rounded-2xl border border-border/50 bg-card/90 p-5 shadow-md backdrop-blur-sm">
-              <h3 className="mb-3 inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-muted-foreground">
-                <ListOrdered className="h-4 w-4 text-fuchsia-500" />
-                Key points
-              </h3>
-              <ol className="list-decimal space-y-2 pl-5 text-sm leading-relaxed marker:text-muted-foreground/60">
-                {result.keyPoints.map((k, i) => (
-                  <li key={i}>{k}</li>
-                ))}
-              </ol>
-            </section>
+            {/* Chapters — timestamped sections */}
+            {result.chapters.length > 0 && (
+              <section className="rounded-2xl border border-border/50 bg-card/90 p-5 shadow-md backdrop-blur-sm">
+                <h3 className="mb-3 inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-muted-foreground">
+                  <ListTree className="h-4 w-4 text-cyan-500" />
+                  Chapters
+                </h3>
+                <div className="space-y-3">
+                  {result.chapters.map((ch, i) => {
+                    const tsUrl = youtubeTimestampUrl(result.videoUrl, ch.startSec);
+                    return (
+                      <div key={i} className="rounded-xl border border-border/40 bg-background/50 p-4">
+                        <div className="mb-2 flex items-center gap-2">
+                          {tsUrl ? (
+                            <a
+                              href={tsUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 rounded-md bg-violet-500/10 px-2 py-0.5 text-[11px] font-mono font-semibold text-violet-700 hover:bg-violet-500/20 dark:text-violet-300"
+                            >
+                              <Clock className="h-3 w-3" />
+                              {formatSec(ch.startSec)}
+                            </a>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-md bg-violet-500/10 px-2 py-0.5 text-[11px] font-mono font-semibold text-violet-700 dark:text-violet-300">
+                              <Clock className="h-3 w-3" />
+                              {formatSec(ch.startSec)}
+                            </span>
+                          )}
+                          <h4 className="text-sm font-semibold tracking-tight">{ch.title}</h4>
+                        </div>
+                        <ul className="list-disc space-y-1 pl-5 text-sm leading-relaxed text-muted-foreground marker:text-muted-foreground/60">
+                          {ch.bullets.map((b, j) => <li key={j}>{b}</li>)}
+                        </ul>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+
+            {/* Key points with verified quotes */}
+            {result.keyPoints.length > 0 && (
+              <section className="rounded-2xl border border-border/50 bg-card/90 p-5 shadow-md backdrop-blur-sm">
+                <h3 className="mb-3 inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-muted-foreground">
+                  <ListOrdered className="h-4 w-4 text-fuchsia-500" />
+                  Key points
+                </h3>
+                <ol className="space-y-3 text-sm leading-relaxed">
+                  {result.keyPoints.map((k, i) => {
+                    const tsUrl = k.timestampSec > 0 ? youtubeTimestampUrl(result.videoUrl, k.timestampSec) : null;
+                    return (
+                      <li key={i} className="flex flex-col gap-1">
+                        <div className="flex items-start gap-2">
+                          <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-fuchsia-500/10 text-[11px] font-bold text-fuchsia-700 dark:text-fuchsia-300">
+                            {i + 1}
+                          </span>
+                          <span className="flex-1">{k.point}</span>
+                          {k.timestampSec > 0 && (
+                            tsUrl ? (
+                              <a href={tsUrl} target="_blank" rel="noopener noreferrer"
+                                className="shrink-0 rounded bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-mono text-violet-700 hover:bg-violet-500/20 dark:text-violet-300">
+                                {formatSec(k.timestampSec)}
+                              </a>
+                            ) : (
+                              <span className="shrink-0 rounded bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-mono text-violet-700 dark:text-violet-300">
+                                {formatSec(k.timestampSec)}
+                              </span>
+                            )
+                          )}
+                        </div>
+                        {k.quote && (
+                          <div
+                            className="ml-7 cursor-pointer"
+                            onMouseEnter={() => setHoveredQuote(k.quote)}
+                            onMouseLeave={() => setHoveredQuote(null)}
+                          >
+                            <span className={cn(
+                              "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] italic transition-colors",
+                              hoveredQuote === k.quote
+                                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200"
+                                : "border-border/40 bg-muted/40 text-muted-foreground",
+                            )}>
+                              <Quote className="h-3 w-3 shrink-0" />
+                              {k.quote}
+                            </span>
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ol>
+              </section>
+            )}
 
             {result.importantCommands.length > 0 && (
               <section className="rounded-2xl border border-border/50 bg-card/90 p-5 shadow-md backdrop-blur-sm">
@@ -745,63 +969,85 @@ export default function AiVideoSummariserPage() {
                   <CheckCircle2 className="h-4 w-4 text-emerald-500" />
                   Action items
                 </h3>
-                <ul className="list-disc space-y-2 pl-5 text-sm leading-relaxed marker:text-muted-foreground/60">
-                  {result.actionItems.map((item, i) => (
-                    <li key={i}>{item}</li>
-                  ))}
+                <ul className="space-y-2 text-sm leading-relaxed">
+                  {result.actionItems.map((a, i) => {
+                    const tsUrl = a.timestampSec > 0 ? youtubeTimestampUrl(result.videoUrl, a.timestampSec) : null;
+                    return (
+                      <li key={i} className="flex items-start gap-2">
+                        <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+                        <span className="flex-1">{a.text}</span>
+                        {a.timestampSec > 0 && (
+                          tsUrl ? (
+                            <a href={tsUrl} target="_blank" rel="noopener noreferrer"
+                              className="shrink-0 rounded bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-mono text-violet-700 hover:bg-violet-500/20 dark:text-violet-300">
+                              {formatSec(a.timestampSec)}
+                            </a>
+                          ) : (
+                            <span className="shrink-0 rounded bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-mono text-violet-700 dark:text-violet-300">
+                              {formatSec(a.timestampSec)}
+                            </span>
+                          )
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               </section>
             )}
 
-            {result.detailedNotes.length > 0 && (
-              <section className="rounded-2xl border border-border/50 bg-card/90 p-5 shadow-md backdrop-blur-sm">
-                <h3 className="mb-3 inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-muted-foreground">
-                  <FileText className="h-4 w-4 text-cyan-500" />
-                  Detailed notes
-                </h3>
-                <div className="space-y-4">
-                  {result.detailedNotes.map((sec, i) => (
-                    <div
-                      key={i}
-                      className="rounded-xl border border-border/40 bg-background/50 p-4"
-                    >
-                      <h4 className="mb-2 text-sm font-semibold tracking-tight">
-                        {sec.section}
-                      </h4>
-                      <ul className="list-disc space-y-1 pl-5 text-sm leading-relaxed text-muted-foreground marker:text-muted-foreground/60">
-                        {sec.bullets.map((b, j) => (
-                          <li key={j}>{b}</li>
-                        ))}
-                      </ul>
+            {/* Full transcript panel — collapsible verification surface */}
+            {result.segments && result.segments.length > 0 && (
+              <section className="rounded-2xl border border-border/50 bg-card/90 shadow-md backdrop-blur-sm">
+                <button
+                  type="button"
+                  onClick={() => setShowTranscript((v) => !v)}
+                  className="flex w-full items-center justify-between p-5 text-left"
+                >
+                  <span className="inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-muted-foreground">
+                    <FileText className="h-4 w-4 text-cyan-500" />
+                    Full Transcript
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-normal normal-case tracking-normal">
+                      {result.segments.length} segments
+                    </span>
+                  </span>
+                  {showTranscript ? (
+                    <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                  )}
+                </button>
+                {showTranscript && (
+                  <div className="border-t border-border/40 p-5 pt-4">
+                    <div className="max-h-96 overflow-y-auto rounded-xl border border-border/40 bg-background/50 p-4">
+                      <div className="space-y-2 text-sm leading-relaxed">
+                        {result.segments.map((seg, i) => {
+                          const tsUrl = youtubeTimestampUrl(result.videoUrl, seg.startSec);
+                          return (
+                            <div key={i} className="flex gap-2">
+                              {tsUrl ? (
+                                <a
+                                  href={tsUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="shrink-0 font-mono text-[10px] text-violet-600 hover:underline dark:text-violet-400"
+                                >
+                                  {formatSec(seg.startSec)}
+                                </a>
+                              ) : (
+                                <span className="shrink-0 font-mono text-[10px] text-muted-foreground/60">
+                                  {formatSec(seg.startSec)}
+                                </span>
+                              )}
+                              <span className="text-muted-foreground">{seg.text}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
-                  ))}
-                </div>
+                  </div>
+                )}
               </section>
             )}
-
-            <section className="rounded-2xl border border-border/50 bg-card/90 p-5 shadow-md backdrop-blur-sm">
-              <h3 className="mb-3 inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-muted-foreground">
-                <ListTree className="h-4 w-4 text-cyan-500" />
-                Outline
-              </h3>
-              <div className="space-y-4">
-                {result.outline.map((sec, i) => (
-                  <div
-                    key={i}
-                    className="rounded-xl border border-border/40 bg-background/50 p-4"
-                  >
-                    <h4 className="mb-2 text-sm font-semibold tracking-tight">
-                      {sec.section}
-                    </h4>
-                    <ul className="list-disc space-y-1 pl-5 text-sm leading-relaxed text-muted-foreground marker:text-muted-foreground/60">
-                      {sec.bullets.map((b, j) => (
-                        <li key={j}>{b}</li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-              </div>
-            </section>
 
             <section className="rounded-2xl border border-border/50 bg-card/90 p-5 shadow-md backdrop-blur-sm">
               <h3 className="mb-3 inline-flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-muted-foreground">

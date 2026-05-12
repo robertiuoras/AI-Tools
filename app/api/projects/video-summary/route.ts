@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import Innertube, { UniversalCache } from "youtubei.js";
 import { YoutubeTranscript } from "youtube-transcript";
 import { enforceApiRateLimit } from "@/lib/api-rate-limit";
@@ -8,6 +8,7 @@ import {
   writeTranscriptCache,
   type TranscriptKind,
   type TranscriptSource,
+  type TranscriptSegment,
 } from "@/lib/video-transcript-cache";
 
 export const runtime = "nodejs";
@@ -18,12 +19,15 @@ export const maxDuration = 120;
  *
  * Pipeline:
  * 1. Detect source (YouTube or TikTok). Other URLs are rejected.
- * 2. Try to fetch a real transcript:
- *    - YouTube: manual captions → ASR captions → HLS audio + Whisper.
- *    - TikTok: resolve the share URL to a direct MP4, then Whisper.
- * 3. Reject thin transcripts (<300 chars) hard — never let the model
- *    summarise from title/description alone.
- * 4. gpt-4o-mini turns the transcript into a structured JSON summary.
+ * 2. Fetch a timestamped transcript:
+ *    - YouTube: manual captions → ASR captions (with timestamps) → HLS audio + Whisper (verbose_json).
+ *    - TikTok: resolve the share URL to a direct MP4, then Whisper (verbose_json).
+ * 3. Reject thin transcripts (<300 chars) and Whisper hallucinations hard.
+ * 4. Two parallel OpenAI calls:
+ *    a) Streaming prose summary (no title/metadata in prompt — transcript only).
+ *    b) Non-streaming grounded JSON: chapters, keyPoints with verbatim quotes, actionItems.
+ *       Server-side citation verification drops any key point whose quote isn't in the transcript.
+ * 5. Returns SSE: meta → summary_chunk* → structured → done
  *
  * The result tells the UI exactly *which* transcript source was used so silent
  * failures stop being silent.
@@ -45,12 +49,12 @@ interface SummaryResponse {
   hasTranscript: boolean;
   transcriptCharCount: number;
   transcriptSource: TranscriptSource;
+  segments: TranscriptSegment[] | null;
   summary: string;
-  keyPoints: string[];
-  detailedNotes: Array<{ section: string; bullets: string[] }>;
+  chapters: Array<{ title: string; startSec: number; endSec: number; bullets: string[] }>;
+  keyPoints: Array<{ point: string; timestampSec: number; quote: string }>;
   importantCommands: string[];
-  actionItems: string[];
-  outline: Array<{ section: string; bullets: string[] }>;
+  actionItems: Array<{ text: string; timestampSec: number }>;
   transcriptCoverage: {
     mode: "full" | "excerpted";
     inputCharCount: number;
@@ -58,7 +62,7 @@ interface SummaryResponse {
   };
   generatedAt: string;
   warnings: string[];
-  /** Token usage + USD cost for this single summarisation (gpt-4o-mini). */
+  /** Token usage + USD cost for the structured summarisation call (gpt-4o-mini). */
   cost: {
     model: string;
     inputTokens: number;
@@ -326,7 +330,7 @@ async function fetchYouTubeOembed(url: string) {
 }
 
 type YouTubeCaptionResult =
-  | { text: string; language: string | null; kind: "manual" | "asr" }
+  | { text: string; segments: TranscriptSegment[]; language: string | null; kind: "manual" | "asr" }
   | null;
 
 /**
@@ -341,18 +345,20 @@ async function fetchYouTubeTranscript(
   // First try `youtube-transcript`; it doesn't tell us manual vs ASR, so only
   // accept it when the result is substantively longer than the title (a common
   // failure mode: it returns the auto-translated title alone).
+  // Items have `offset` (ms) and `duration` (ms) — preserve them as segments.
   try {
     const items = await YoutubeTranscript.fetchTranscript(videoId);
     if (items && items.length > 0) {
-      const text = items
-        .map((it) => it.text)
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim();
+      const segs: TranscriptSegment[] = items
+        .map((it) => {
+          const startSec = (it.offset ?? 0) / 1000;
+          const endSec = startSec + (it.duration ?? 0) / 1000;
+          return { text: it.text.replace(/\s+/g, " ").trim(), startSec, endSec };
+        })
+        .filter((s) => s.text.length > 0);
+      const text = segs.map((s) => s.text).join(" ").replace(/\s+/g, " ").trim();
       if (text && !looksLikeTitleEcho(text, title)) {
-        // We don't know whether this was manual or ASR; treat as ASR
-        // conservatively so the UI doesn't claim a higher quality than we can verify.
-        return { text, language: null, kind: "asr" };
+        return { text, segments: segs, language: null, kind: "asr" };
       }
     }
   } catch {
@@ -392,14 +398,39 @@ async function fetchYouTubeTranscript(
           .replace(/&gt;/g, ">")
           .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)));
 
-      const chunks = Array.from(xml.matchAll(/<text[^>]*>([\s\S]*?)<\/text>/g))
-        .map((m) => decodeHtml(m[1] ?? "").replace(/\s+/g, " ").trim())
-        .filter(Boolean);
-      const text = chunks.join(" ").replace(/\s+/g, " ").trim();
+      // Parse srv3 XML: <text start="12.345" dur="2.5">...</text>
+      const segs: TranscriptSegment[] = Array.from(
+        xml.matchAll(/<text\s[^>]*start="([\d.]+)"[^>]*dur="([\d.]+)"[^>]*>([\s\S]*?)<\/text>/g),
+      )
+        .map((m) => ({
+          text: decodeHtml(m[3] ?? "").replace(/\s+/g, " ").trim(),
+          startSec: parseFloat(m[1] ?? "0"),
+          endSec: parseFloat(m[1] ?? "0") + parseFloat(m[2] ?? "0"),
+        }))
+        .filter((s) => s.text.length > 0);
+
+      // Fallback: no timestamp attrs present, just extract text
+      const text =
+        segs.length > 0
+          ? segs.map((s) => s.text).join(" ").replace(/\s+/g, " ").trim()
+          : Array.from(xml.matchAll(/<text[^>]*>([\s\S]*?)<\/text>/g))
+              .map((m) => decodeHtml(m[1] ?? "").replace(/\s+/g, " ").trim())
+              .filter(Boolean)
+              .join(" ")
+              .replace(/\s+/g, " ")
+              .trim();
+
       if (!text || looksLikeTitleEcho(text, title)) continue;
+
+      // If we couldn't get timestamps, create a single segment covering the whole text
+      const segments: TranscriptSegment[] =
+        segs.length > 0
+          ? segs
+          : [{ text, startSec: 0, endSec: 0 }];
 
       return {
         text,
+        segments,
         language: track.language_code ?? null,
         kind: track.kind === "asr" ? "asr" : "manual",
       };
@@ -408,6 +439,57 @@ async function fetchYouTubeTranscript(
   } catch {
     return null;
   }
+}
+
+const WHISPER_FILLER = [
+  /^\[music\]$/i,
+  /^♪+\s*$/,
+  /^thanks for watching/i,
+  /^please subscribe/i,
+  /^like and subscribe/i,
+  /^\[applause\]$/i,
+  /^\[laughter\]$/i,
+  /^\[silence\]$/i,
+  /^\[inaudible\]$/i,
+];
+
+/**
+ * Detect Whisper hallucinations: looping segments, near-empty unique-word ratio,
+ * or transcripts dominated by filler phrases (music, "thanks for watching", etc.).
+ * Returns true when the output should be rejected rather than summarised.
+ */
+function looksLikeWhisperHallucination(segments: TranscriptSegment[]): boolean {
+  if (segments.length === 0) return false;
+
+  // Consecutive duplicate segments (Whisper's classic repetition bug)
+  let consecDupes = 0;
+  for (let i = 1; i < segments.length; i++) {
+    const prev = segments[i - 1].text.trim().toLowerCase();
+    const curr = segments[i].text.trim().toLowerCase();
+    if (prev && prev === curr) {
+      consecDupes++;
+      if (consecDupes >= 2) return true; // 3 identical in a row
+    } else {
+      consecDupes = 0;
+    }
+  }
+
+  // Heavy vocabulary repetition (unique words / total words < 0.25)
+  const allWords = segments.flatMap((s) =>
+    s.text.toLowerCase().split(/\s+/).filter(Boolean),
+  );
+  if (allWords.length > 30) {
+    const uniqueRatio = new Set(allWords).size / allWords.length;
+    if (uniqueRatio < 0.25) return true;
+  }
+
+  // Filler dominance (>60% of segments are music/non-speech markers)
+  const fillerCount = segments.filter((s) =>
+    WHISPER_FILLER.some((p) => p.test(s.text.trim())),
+  ).length;
+  if (segments.length > 0 && fillerCount / segments.length > 0.6) return true;
+
+  return false;
 }
 
 /**
@@ -426,18 +508,19 @@ function looksLikeTitleEcho(text: string, title: string | null): boolean {
 }
 
 /**
- * Send an audio/video buffer to OpenAI for transcription. Used by both the
- * YouTube HLS fallback and the TikTok direct-MP4 path.
+ * Send an audio/video buffer to OpenAI Whisper for transcription.
+ * Uses whisper-1 with verbose_json to get per-segment timestamps.
+ * Used by both the YouTube HLS fallback and the TikTok direct-MP4 path.
  */
 async function transcribeAudioBuffer(
   file: File,
-): Promise<{ text: string; language: string | null; model: string } | null> {
+): Promise<{ text: string; segments: TranscriptSegment[]; language: string | null; model: string } | null> {
   const key = process.env.OPENAI_API_KEY;
   if (!key?.startsWith("sk-")) return null;
 
   const form = new FormData();
-  form.append("model", "gpt-4o-mini-transcribe");
-  form.append("response_format", "json");
+  form.append("model", "whisper-1");
+  form.append("response_format", "verbose_json");
   form.append("file", file, file.name || "audio");
 
   try {
@@ -451,15 +534,22 @@ async function transcribeAudioBuffer(
     const data = (await res.json()) as {
       text?: string;
       language?: string;
-      model?: string;
+      segments?: Array<{ start?: number; end?: number; text?: string }>;
     };
     const text = typeof data.text === "string" ? data.text.trim() : "";
     if (!text) return null;
-    return {
-      text,
-      language: typeof data.language === "string" ? data.language : null,
-      model: data.model ?? "gpt-4o-mini-transcribe",
-    };
+
+    const segments: TranscriptSegment[] = Array.isArray(data.segments)
+      ? data.segments
+          .map((s) => ({
+            text: (typeof s.text === "string" ? s.text : "").replace(/\s+/g, " ").trim(),
+            startSec: typeof s.start === "number" ? s.start : 0,
+            endSec: typeof s.end === "number" ? s.end : 0,
+          }))
+          .filter((s) => s.text.length > 0)
+      : [{ text, startSec: 0, endSec: 0 }];
+
+    return { text, segments, language: typeof data.language === "string" ? data.language : null, model: "whisper-1" };
   } catch {
     return null;
   }
@@ -835,12 +925,10 @@ async function fetchVideoPageDescription(
 }
 
 interface OpenAiSummary {
-  summary: string;
-  keyPoints: string[];
-  detailedNotes: Array<{ section: string; bullets: string[] }>;
+  chapters: Array<{ title: string; startSec: number; endSec: number; bullets: string[] }>;
+  keyPoints: Array<{ point: string; timestampSec: number; quote: string }>;
   importantCommands: string[];
-  actionItems: string[];
-  outline: Array<{ section: string; bullets: string[] }>;
+  actionItems: Array<{ text: string; timestampSec: number }>;
 }
 
 interface OpenAiUsage {
@@ -849,8 +937,21 @@ interface OpenAiUsage {
   total_tokens: number;
 }
 
+/** Format seconds as mm:ss for display in the transcript. */
+function formatTimestamp(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+/**
+ * Render segments as timestamped lines for the model prompt.
+ * For long transcripts, excerpts are taken from beginning/middle/end so
+ * timestamps are still meaningful within each excerpt.
+ */
 function buildTranscriptContext(
-  transcript: string,
+  segments: TranscriptSegment[],
+  transcriptText: string,
   budget: number,
 ): {
   text: string;
@@ -858,202 +959,249 @@ function buildTranscriptContext(
   inputCharCount: number;
   analyzedCharCount: number;
 } {
-  if (transcript.length <= budget) {
-    return {
-      text: transcript,
-      mode: "full",
-      inputCharCount: transcript.length,
-      analyzedCharCount: transcript.length,
-    };
+  // Build the full timestamped transcript string
+  const full = segments.length > 0
+    ? segments.map((s) => `[${formatTimestamp(s.startSec)}] ${s.text}`).join("\n")
+    : transcriptText;
+
+  if (full.length <= budget) {
+    return { text: full, mode: "full", inputCharCount: full.length, analyzedCharCount: full.length };
   }
 
   const firstSize = Math.floor(budget * 0.4);
   const middleSize = Math.floor(budget * 0.35);
   const finalSize = budget - firstSize - middleSize;
-  const middleStart = Math.max(
-    firstSize,
-    Math.floor(transcript.length / 2 - middleSize / 2),
-  );
-  const finalStart = Math.max(middleStart + middleSize, transcript.length - finalSize);
-  const sections = [
-    `[Beginning excerpt]\n${transcript.slice(0, firstSize)}`,
-    `[Middle excerpt]\n${transcript.slice(middleStart, middleStart + middleSize)}`,
-    `[Final excerpt]\n${transcript.slice(finalStart)}`,
-  ];
-  const text = sections.join("\n\n[... transcript excerpted for length ...]\n\n");
+  const middleStart = Math.max(firstSize, Math.floor(full.length / 2 - middleSize / 2));
+  const finalStart = Math.max(middleStart + middleSize, full.length - finalSize);
+  const text = [
+    `[Beginning excerpt]\n${full.slice(0, firstSize)}`,
+    `[Middle excerpt]\n${full.slice(middleStart, middleStart + middleSize)}`,
+    `[Final excerpt]\n${full.slice(finalStart)}`,
+  ].join("\n\n[... transcript excerpted for length ...]\n\n");
 
   return {
     text,
     mode: "excerpted",
-    inputCharCount: transcript.length,
+    inputCharCount: full.length,
     analyzedCharCount: firstSize + middleSize + finalSize,
   };
 }
 
-function parseSummaryObject(
-  raw: unknown,
-): OpenAiSummary | { transcriptUsable: false } | null {
-  const obj = raw as Partial<OpenAiSummary> & { transcriptUsable?: unknown };
-  if (obj && obj.transcriptUsable === false) {
-    return { transcriptUsable: false };
-  }
-  const summary = typeof obj.summary === "string" ? obj.summary.trim() : "";
-  const keyPoints = Array.isArray(obj.keyPoints)
-    ? obj.keyPoints.map((p) => String(p).trim()).filter(Boolean).slice(0, 15)
-    : [];
-  const detailedNotes = Array.isArray(obj.detailedNotes)
-    ? obj.detailedNotes
-        .map((s) => ({
-          section: String((s as { section?: unknown }).section ?? "").trim(),
-          bullets: Array.isArray((s as { bullets?: unknown }).bullets)
-            ? ((s as { bullets: unknown[] }).bullets)
-                .map((b) => String(b).trim())
-                .filter(Boolean)
-                .slice(0, 10)
-            : [],
-        }))
-        .filter((s) => s.section && s.bullets.length > 0)
-        .slice(0, 8)
-    : [];
-  const importantCommands = Array.isArray(obj.importantCommands)
-    ? obj.importantCommands
-        .map((p) => String(p).trim())
-        .filter(Boolean)
-        .slice(0, 20)
-    : [];
-  const actionItems = Array.isArray(obj.actionItems)
-    ? obj.actionItems.map((p) => String(p).trim()).filter(Boolean).slice(0, 12)
-    : [];
-  const outline = Array.isArray(obj.outline)
-    ? obj.outline
-        .map((s) => ({
-          section: String((s as { section?: unknown }).section ?? "").trim(),
-          bullets: Array.isArray((s as { bullets?: unknown }).bullets)
-            ? ((s as { bullets: unknown[] }).bullets)
-                .map((b) => String(b).trim())
-                .filter(Boolean)
-                .slice(0, 8)
-            : [],
-        }))
-        .filter((s) => s.section && s.bullets.length > 0)
-        .slice(0, 8)
+function parseSummaryObject(raw: unknown): OpenAiSummary | null {
+  const obj = raw as Record<string, unknown>;
+  if (!obj || typeof obj !== "object") return null;
+
+  const chapters = Array.isArray(obj.chapters)
+    ? obj.chapters
+        .map((c) => {
+          const ch = c as Record<string, unknown>;
+          return {
+            title: typeof ch.title === "string" ? ch.title.trim() : "",
+            startSec: typeof ch.startSec === "number" ? ch.startSec : 0,
+            endSec: typeof ch.endSec === "number" ? ch.endSec : 0,
+            bullets: Array.isArray(ch.bullets)
+              ? (ch.bullets as unknown[]).map((b) => String(b).trim()).filter(Boolean).slice(0, 8)
+              : [],
+          };
+        })
+        .filter((c) => c.title && c.bullets.length > 0)
+        .slice(0, 10)
     : [];
 
-  if (
-    !summary &&
-    keyPoints.length === 0 &&
-    detailedNotes.length === 0 &&
-    importantCommands.length === 0 &&
-    actionItems.length === 0 &&
-    outline.length === 0
-  ) {
+  const keyPoints = Array.isArray(obj.keyPoints)
+    ? obj.keyPoints
+        .map((p) => {
+          const kp = p as Record<string, unknown>;
+          return {
+            point: typeof kp.point === "string" ? kp.point.trim() : "",
+            timestampSec: typeof kp.timestampSec === "number" ? kp.timestampSec : 0,
+            quote: typeof kp.quote === "string" ? kp.quote.trim() : "",
+          };
+        })
+        .filter((kp) => kp.point)
+        .slice(0, 15)
+    : [];
+
+  const importantCommands = Array.isArray(obj.importantCommands)
+    ? (obj.importantCommands as unknown[]).map((p) => String(p).trim()).filter(Boolean).slice(0, 20)
+    : [];
+
+  const actionItems = Array.isArray(obj.actionItems)
+    ? obj.actionItems
+        .map((a) => {
+          const ai = a as Record<string, unknown>;
+          return {
+            text: typeof ai.text === "string" ? ai.text.trim() : "",
+            timestampSec: typeof ai.timestampSec === "number" ? ai.timestampSec : 0,
+          };
+        })
+        .filter((a) => a.text)
+        .slice(0, 12)
+    : [];
+
+  if (chapters.length === 0 && keyPoints.length === 0 && importantCommands.length === 0 && actionItems.length === 0) {
     return null;
   }
 
-  return {
-    summary,
-    keyPoints,
-    detailedNotes,
-    importantCommands,
-    actionItems,
-    outline,
-  };
+  return { chapters, keyPoints, importantCommands, actionItems };
 }
 
-async function summariseWithOpenAi(args: {
-  source: Source;
-  title: string | null;
-  author: string | null;
-  transcript: string;
-  description: string | null;
-  extra: string[];
-}): Promise<{
-  data: OpenAiSummary;
-  modelUsed: string;
-  usage: OpenAiUsage | null;
-  transcriptCoverage: SummaryResponse["transcriptCoverage"];
-} | null> {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key?.startsWith("sk-")) return null;
+/**
+ * Server-side citation verification: drop any keyPoint whose quote doesn't
+ * appear (fuzzy match) in the actual transcript text. Prevents hallucinated
+ * citations from reaching the UI.
+ */
+function verifyCitations(
+  summary: OpenAiSummary,
+  transcriptText: string,
+): { verified: OpenAiSummary; droppedCount: number } {
+  const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
+  const normTranscript = norm(transcriptText);
 
-  const TRANSCRIPT_CHAR_BUDGET = 110000;
-  const transcriptContext = buildTranscriptContext(
-    args.transcript,
-    TRANSCRIPT_CHAR_BUDGET,
-  );
+  const verified: typeof summary.keyPoints = [];
+  let droppedCount = 0;
 
-  const systemPrompt = [
-    "You are a precise study/notes assistant. Summarise online videos for a busy reader who wants accurate detail without fluff.",
-    "The transcript is the ONLY source of facts. The title, author, and description are metadata; treat them as hints about who the speaker is, never as evidence about what was said.",
-    "If the transcript is empty, missing, or fewer than 300 characters, you MUST return:",
-    '  { "transcriptUsable": false, "summary": "", "keyPoints": [], "detailedNotes": [], "importantCommands": [], "actionItems": [], "outline": [] }',
-    "Do not guess content from the title or description in that case.",
-    "Otherwise reply with a single JSON object (no markdown fences) using this schema:",
-    '  "transcriptUsable": true',
-    '  "summary": string  (3–5 concise sentences covering the topic, speaker if known, and main conclusion)',
-    '  "keyPoints": string[]  (6–12 standalone takeaways, full sentences, ordered by importance)',
-    '  "detailedNotes": Array<{ "section": string, "bullets": string[] }>  (4–7 sections covering the actual teaching, claims, examples, numbers, tools, and caveats)',
-    '  "importantCommands": string[]  (commands, code, URLs, settings, keyboard shortcuts, formulas, prompts, named tools, or step sequences; exact wording when available; [] if none)',
-    '  "actionItems": string[]  (practical next steps the viewer can take; [] if the video is purely informational)',
-    '  "outline": Array<{ "section": string, "bullets": string[] }>  (3–6 sections, each with 2–6 short bullets — suitable for slides)',
-    "Style rules:",
-    "- Every claim must be backed by a phrase that actually appears in the transcript. If a claim isn't in the transcript, omit it.",
-    "- Quote concrete numbers, names, commands, URLs, and settings directly from the transcript.",
-    "- If the speaker lists a process, preserve the order.",
-    "- Compress repetition, but keep every distinct useful fact.",
-    "- Each key point should make sense without context.",
-    "- Section titles should be short Title Case (3–6 words).",
-    "- Never invent facts that aren't in the transcript.",
-  ].join("\n");
-
-  const userParts: string[] = [
-    `Source platform: ${args.source}`,
-    args.title ? `Video title: ${args.title}` : "Video title: (unknown)",
-    args.author ? `Author/channel: ${args.author}` : "",
-  ].filter(Boolean);
-
-  if (args.description) {
-    userParts.push(
-      `Author-written description / caption (metadata only; not a source of facts):\n${args.description.slice(0, 4000)}`,
-    );
+  for (const kp of summary.keyPoints) {
+    const quote = norm(kp.quote);
+    if (!quote || quote.length < 10) {
+      // No quote provided — keep the point but clear the empty quote
+      verified.push({ ...kp, quote: "" });
+      continue;
+    }
+    // Check if the quote (or ≥80% of its words) appears in the transcript
+    const quoteWords = quote.split(/\s+/).filter(Boolean);
+    const windowSize = Math.min(quoteWords.length, 6);
+    let found = false;
+    for (let i = 0; i <= quoteWords.length - windowSize; i++) {
+      const window = quoteWords.slice(i, i + windowSize).join(" ");
+      if (normTranscript.includes(window)) {
+        found = true;
+        break;
+      }
+    }
+    if (found) {
+      verified.push(kp);
+    } else {
+      droppedCount++;
+    }
   }
-  for (const x of args.extra) userParts.push(x);
 
-  userParts.push(
-    `Transcript ${
-      transcriptContext.mode === "excerpted"
-        ? "(long video excerpted across beginning, middle, and end; analyze only the provided excerpts and avoid pretending this is complete)"
-        : "(complete)"
-    }:\n${transcriptContext.text}`,
-  );
+  // Verify chapter timestamps are within transcript bounds
+  const maxSec = summary.chapters.length > 0
+    ? Math.max(...summary.chapters.map((c) => c.endSec), 0)
+    : 0;
+  const chapters = summary.chapters.map((c) => ({
+    ...c,
+    startSec: Math.max(0, c.startSec),
+    endSec: maxSec > 0 ? Math.min(c.endSec, maxSec) : c.endSec,
+  }));
+
+  return { verified: { ...summary, keyPoints: verified, chapters }, droppedCount };
+}
+
+/** Stream the prose summary sentence-by-sentence from OpenAI. */
+async function* streamProseSummary(
+  transcriptContext: { text: string; mode: string },
+  key: string,
+): AsyncGenerator<string> {
+  const systemPrompt =
+    "You are a concise assistant. Write a 3–5 sentence prose summary of the following video transcript. " +
+    "Use only information explicitly stated in the transcript. Do not mention the title or channel name unless it appears in the transcript itself. " +
+    "Output the summary as plain text only — no headings, no bullet points, no markdown.";
+
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      stream: true,
+      messages: [
+        { role: "system", content: systemPrompt },
+        {
+          role: "user",
+          content:
+            transcriptContext.mode === "excerpted"
+              ? `Transcript (long video, excerpted):\n${transcriptContext.text}`
+              : `Transcript:\n${transcriptContext.text}`,
+        },
+      ],
+      max_tokens: 400,
+      temperature: 0.3,
+    }),
+    signal: AbortSignal.timeout(30000),
+  });
+
+  if (!res.ok || !res.body) return;
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split("\n");
+    buf = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const payload = line.slice(6).trim();
+      if (payload === "[DONE]") return;
+      try {
+        const chunk = JSON.parse(payload) as { choices?: Array<{ delta?: { content?: string } }> };
+        const token = chunk.choices?.[0]?.delta?.content;
+        if (token) yield token;
+      } catch {
+        // skip malformed SSE lines
+      }
+    }
+  }
+}
+
+/** Generate the structured summary (chapters, keyPoints, actionItems) in one non-streaming call. */
+async function generateStructuredSummary(
+  transcriptContext: { text: string; mode: string },
+  key: string,
+): Promise<{ data: OpenAiSummary; usage: OpenAiUsage | null; modelUsed: string } | null> {
+  const systemPrompt = [
+    "You are a precise notes assistant. Analyse this video transcript and return a JSON object — no markdown fences.",
+    "Output only what is explicitly stated in the transcript. Do not use the video title or channel name as sources of fact.",
+    "Schema (all fields required):",
+    '  "chapters": Array<{ "title": string (3–6 Title Case words), "startSec": number, "endSec": number, "bullets": string[] (2–6 short bullets per chapter) }>',
+    '    — 3–8 chapters covering the full transcript timeline. startSec/endSec come from the [mm:ss] timestamps in the transcript.',
+    '  "keyPoints": Array<{ "point": string (full sentence), "timestampSec": number, "quote": string (≤15 words verbatim from transcript) }>',
+    '    — 6–12 key takeaways. Each quote MUST be a short phrase that actually appears in the transcript.',
+    '  "importantCommands": string[]  — commands, code snippets, URLs, tool names, settings, keyboard shortcuts; exact wording; [] if none.',
+    '  "actionItems": Array<{ "text": string, "timestampSec": number }>  — practical next steps the viewer should take; [] if informational only.',
+    "Rules: Every fact must come from the transcript. If something is unclear, omit it rather than guessing.",
+  ].join("\n");
 
   try {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-      },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
       body: JSON.stringify({
         model: "gpt-4o-mini",
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: userParts.join("\n\n") },
+          {
+            role: "user",
+            content:
+              transcriptContext.mode === "excerpted"
+                ? `Transcript (long video, excerpted — timestamps are approximate):\n${transcriptContext.text}`
+                : `Transcript:\n${transcriptContext.text}`,
+          },
         ],
         response_format: { type: "json_object" },
-        max_tokens: 2400,
-        temperature: 0.3,
+        max_tokens: 3000,
+        temperature: 0.2,
       }),
-      signal: AbortSignal.timeout(45000),
+      signal: AbortSignal.timeout(60000),
     });
     if (!res.ok) return null;
     const data = (await res.json()) as {
       model?: string;
-      usage?: {
-        prompt_tokens: number;
-        completion_tokens: number;
-        total_tokens: number;
-      };
+      usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
       choices?: Array<{ message?: { content?: string } }>;
     };
     const modelUsed = data.model ?? "gpt-4o-mini";
@@ -1063,29 +1211,10 @@ async function summariseWithOpenAi(args: {
     if (!raw) return null;
     const cleaned = raw.replace(/^```json?\s*|\s*```$/g, "").trim();
     let parsed: unknown;
-    try {
-      parsed = JSON.parse(cleaned);
-    } catch {
-      return null;
-    }
+    try { parsed = JSON.parse(cleaned); } catch { return null; }
     const summary = parseSummaryObject(parsed);
     if (!summary) return null;
-    if ("transcriptUsable" in summary && summary.transcriptUsable === false) {
-      // The model itself flagged the transcript as too thin to summarise. We
-      // already rejected thin transcripts upstream, but this is a final guard
-      // — surface as null so the POST handler returns a clear error.
-      return null;
-    }
-    return {
-      data: summary as OpenAiSummary,
-      modelUsed,
-      usage,
-      transcriptCoverage: {
-        mode: transcriptContext.mode,
-        inputCharCount: transcriptContext.inputCharCount,
-        analyzedCharCount: transcriptContext.analyzedCharCount,
-      },
-    };
+    return { data: summary, usage, modelUsed };
   } catch {
     return null;
   }
@@ -1093,6 +1222,7 @@ async function summariseWithOpenAi(args: {
 
 interface AcquiredTranscript {
   text: string;
+  segments: TranscriptSegment[];
   source: TranscriptSource;
   title: string | null;
   author: string | null;
@@ -1133,6 +1263,7 @@ async function acquireYouTubeTranscript(url: string): Promise<AcquireResult> {
       cacheHit: true,
       transcript: {
         text: cached.text,
+        segments: cached.segments ?? [],
         source: cached.source,
         title,
         author,
@@ -1151,6 +1282,7 @@ async function acquireYouTubeTranscript(url: string): Promise<AcquireResult> {
   ) {
     const transcript: AcquiredTranscript = {
       text: captionResult.text,
+      segments: captionResult.segments,
       source: {
         kind:
           captionResult.kind === "manual"
@@ -1166,11 +1298,11 @@ async function acquireYouTubeTranscript(url: string): Promise<AcquireResult> {
       descriptionExtra: page?.extra ?? [],
       warnings: [],
     };
-    await writeTranscriptCache(url, "youtube", transcript);
+    await writeTranscriptCache(url, "youtube", { ...transcript, segments: transcript.segments });
     return { ok: true, cacheHit: false, transcript };
   }
 
-  // Captions missing or too thin — fall back to HLS audio + Whisper.
+  // Captions missing or too thin — fall back to HLS audio + Whisper (verbose_json for timestamps).
   const audio = await fetchYouTubeAudioForTranscription(videoId);
   if (!audio.ok) {
     return {
@@ -1195,8 +1327,19 @@ async function acquireYouTubeTranscript(url: string): Promise<AcquireResult> {
     };
   }
 
+  if (looksLikeWhisperHallucination(transcription.segments)) {
+    return {
+      ok: false,
+      status: 422,
+      error: "The audio doesn't contain enough clear speech to summarise.",
+      hint:
+        "Whisper detected the audio is dominated by music, silence, or repeated non-verbal sounds. There isn't enough spoken content to generate a reliable summary.",
+    };
+  }
+
   const transcript: AcquiredTranscript = {
     text: transcription.text,
+    segments: transcription.segments,
     source: {
       kind: "youtube-whisper",
       language: transcription.language,
@@ -1211,7 +1354,7 @@ async function acquireYouTubeTranscript(url: string): Promise<AcquireResult> {
       `No usable captions — transcribed ${(audio.byteLength / 1024 / 1024).toFixed(1)} MB of HLS audio with ${transcription.model}.`,
     ],
   };
-  await writeTranscriptCache(url, "youtube", transcript);
+  await writeTranscriptCache(url, "youtube", { ...transcript, segments: transcript.segments });
   return { ok: true, cacheHit: false, transcript };
 }
 
@@ -1225,6 +1368,7 @@ async function acquireTikTokTranscript(url: string): Promise<AcquireResult> {
       cacheHit: true,
       transcript: {
         text: cached.text,
+        segments: cached.segments ?? [],
         source: cached.source,
         title: cached.title,
         author: cached.author,
@@ -1287,8 +1431,21 @@ async function acquireTikTokTranscript(url: string): Promise<AcquireResult> {
     };
   }
 
+  if (looksLikeWhisperHallucination(transcription.segments)) {
+    return {
+      ok: false,
+      status: 422,
+      error: "The TikTok audio doesn't contain enough clear speech to summarise.",
+      hint:
+        meta.music
+          ? `The audio is dominated by the track "${meta.music}" — Whisper detected insufficient spoken content.`
+          : "Whisper detected the audio is dominated by music or non-verbal sounds.",
+    };
+  }
+
   const transcript: AcquiredTranscript = {
     text: transcription.text,
+    segments: transcription.segments,
     source: {
       kind: "tiktok-whisper",
       language: transcription.language,
@@ -1303,112 +1460,182 @@ async function acquireTikTokTranscript(url: string): Promise<AcquireResult> {
       `Transcribed TikTok MP4 (${(audio.byteLength / 1024 / 1024).toFixed(1)} MB) with ${transcription.model}.`,
     ],
   };
-  await writeTranscriptCache(url, "tiktok", transcript);
+  await writeTranscriptCache(url, "tiktok", { ...transcript, segments: transcript.segments });
   return { ok: true, cacheHit: false, transcript };
 }
 
+function sseEvent(event: string, data: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
 export async function POST(request: NextRequest) {
-  try {
-    const limited = enforceApiRateLimit(request, "video_summary");
-    if (limited) return limited;
+  const limited = enforceApiRateLimit(request, "video_summary");
+  if (limited) return limited;
 
-    const body = (await request.json().catch(() => ({}))) as { url?: string };
-    const url = typeof body.url === "string" ? body.url.trim() : "";
+  const body = (await request.json().catch(() => ({}))) as { url?: string };
+  const rawUrl = typeof body.url === "string" ? body.url.trim() : "";
 
-    if (!url) {
-      return NextResponse.json(
-        { error: "Paste a YouTube or TikTok URL to get started." },
-        { status: 400 },
-      );
-    }
+  const sseHeaders = {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  };
 
-    const source = detectSource(url);
-    if (!source) {
-      return NextResponse.json(
-        {
-          error: "Unsupported URL.",
-          hint: "Only YouTube and TikTok URLs are supported.",
-        },
-        { status: 400 },
-      );
-    }
-
-    const acquired =
-      source === SOURCE_YOUTUBE
-        ? await acquireYouTubeTranscript(url)
-        : await acquireTikTokTranscript(url);
-
-    if (!acquired.ok) {
-      return NextResponse.json(
-        { error: acquired.error, hint: acquired.hint },
-        { status: acquired.status },
-      );
-    }
-
-    const t = acquired.transcript;
-    const ai = await summariseWithOpenAi({
-      source,
-      title: t.title,
-      author: t.author,
-      transcript: t.text,
-      description: t.description,
-      extra: t.descriptionExtra,
+  if (!rawUrl) {
+    const stream = new ReadableStream({
+      start(ctrl) {
+        ctrl.enqueue(new TextEncoder().encode(sseEvent("error", { error: "Paste a YouTube or TikTok URL to get started." })));
+        ctrl.close();
+      },
     });
-
-    if (!ai) {
-      return NextResponse.json(
-        {
-          error: "Couldn't summarise this video.",
-          hint:
-            "Make sure OPENAI_API_KEY is set on the server. The transcript was usable but the summarisation step failed.",
-        },
-        { status: 502 },
-      );
-    }
-
-    const warnings = [...t.warnings];
-    if (ai.transcriptCoverage.mode === "excerpted") {
-      warnings.push(
-        `Very long transcript — analyzed ${ai.transcriptCoverage.analyzedCharCount.toLocaleString()} of ${ai.transcriptCoverage.inputCharCount.toLocaleString()} characters across the beginning, middle, and end.`,
-      );
-    }
-    if (acquired.cacheHit) {
-      warnings.push("Transcript loaded from cache — no transcription cost incurred this run.");
-    }
-
-    const cost = ai.usage
-      ? computeCost(ai.modelUsed, ai.usage.prompt_tokens, ai.usage.completion_tokens)
-      : null;
-
-    const payload: SummaryResponse = {
-      source,
-      videoUrl: url,
-      title: t.title,
-      author: t.author,
-      thumbnailUrl: t.thumbnailUrl,
-      language: t.source.language,
-      hasTranscript: true,
-      transcriptCharCount: t.text.length,
-      transcriptSource: t.source,
-      summary: ai.data.summary,
-      keyPoints: ai.data.keyPoints,
-      detailedNotes: ai.data.detailedNotes,
-      importantCommands: ai.data.importantCommands,
-      actionItems: ai.data.actionItems,
-      outline: ai.data.outline,
-      transcriptCoverage: ai.transcriptCoverage,
-      generatedAt: new Date().toISOString(),
-      warnings,
-      cost,
-      transcriptCacheHit: acquired.cacheHit,
-    };
-    return NextResponse.json(payload);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json(
-      { error: "Server error while summarising video.", details: message },
-      { status: 500 },
-    );
+    return new Response(stream, { status: 400, headers: sseHeaders });
   }
+
+  const source = detectSource(rawUrl);
+  if (!source) {
+    const stream = new ReadableStream({
+      start(ctrl) {
+        ctrl.enqueue(new TextEncoder().encode(sseEvent("error", { error: "Unsupported URL.", hint: "Only YouTube and TikTok URLs are supported." })));
+        ctrl.close();
+      },
+    });
+    return new Response(stream, { status: 400, headers: sseHeaders });
+  }
+
+  const key = process.env.OPENAI_API_KEY;
+  if (!key?.startsWith("sk-")) {
+    const stream = new ReadableStream({
+      start(ctrl) {
+        ctrl.enqueue(new TextEncoder().encode(sseEvent("error", { error: "OpenAI API key is not configured on the server." })));
+        ctrl.close();
+      },
+    });
+    return new Response(stream, { status: 502, headers: sseHeaders });
+  }
+
+  const encoder = new TextEncoder();
+
+  const readable = new ReadableStream({
+    async start(ctrl) {
+      const send = (event: string, data: unknown) => {
+        try { ctrl.enqueue(encoder.encode(sseEvent(event, data))); } catch { /* closed */ }
+      };
+
+      try {
+        // --- Transcript acquisition (blocking, before streaming starts) ---
+        const acquired =
+          source === SOURCE_YOUTUBE
+            ? await acquireYouTubeTranscript(rawUrl)
+            : await acquireTikTokTranscript(rawUrl);
+
+        if (!acquired.ok) {
+          send("error", { error: acquired.error, hint: acquired.hint });
+          ctrl.close();
+          return;
+        }
+
+        const t = acquired.transcript;
+        const TRANSCRIPT_CHAR_BUDGET = 110000;
+        const transcriptContext = buildTranscriptContext(t.segments, t.text, TRANSCRIPT_CHAR_BUDGET);
+
+        // Send video metadata immediately so the UI can show the thumbnail/title
+        const warnings: string[] = [...t.warnings];
+        if (acquired.cacheHit) {
+          warnings.push("Transcript loaded from cache — no transcription cost incurred this run.");
+        }
+        if (transcriptContext.mode === "excerpted") {
+          warnings.push(
+            `Very long transcript — analysed ${transcriptContext.analyzedCharCount.toLocaleString()} of ${transcriptContext.inputCharCount.toLocaleString()} characters.`,
+          );
+        }
+
+        send("meta", {
+          source,
+          videoUrl: rawUrl,
+          title: t.title,
+          author: t.author,
+          thumbnailUrl: t.thumbnailUrl,
+          language: t.source.language,
+          hasTranscript: true,
+          transcriptCharCount: t.text.length,
+          transcriptSource: t.source,
+          segments: t.segments.length > 0 ? t.segments : null,
+          transcriptCoverage: {
+            mode: transcriptContext.mode,
+            inputCharCount: transcriptContext.inputCharCount,
+            analyzedCharCount: transcriptContext.analyzedCharCount,
+          },
+          transcriptCacheHit: acquired.cacheHit,
+          warnings,
+          generatedAt: new Date().toISOString(),
+        });
+
+        // --- Two parallel AI calls ---
+        const [structuredResult] = await Promise.all([
+          generateStructuredSummary(transcriptContext, key),
+          // Stream prose summary tokens concurrently
+          (async () => {
+            let summaryText = "";
+            try {
+              for await (const token of streamProseSummary(transcriptContext, key)) {
+                summaryText += token;
+                send("summary_chunk", token);
+              }
+            } catch {
+              // partial summary is fine
+            }
+            return summaryText;
+          })(),
+        ]);
+
+        if (!structuredResult) {
+          send("error", {
+            error: "Couldn't generate the structured summary.",
+            hint: "The transcript was usable but the structured summarisation step failed.",
+          });
+          ctrl.close();
+          return;
+        }
+
+        const { verified, droppedCount } = verifyCitations(
+          structuredResult.data,
+          t.text,
+        );
+
+        const finalWarnings = [...warnings];
+        if (droppedCount > 0) {
+          finalWarnings.push(
+            `${droppedCount} key point${droppedCount > 1 ? "s" : ""} removed — the quote could not be verified in the transcript.`,
+          );
+        }
+
+        const cost = structuredResult.usage
+          ? computeCost(
+              structuredResult.modelUsed,
+              structuredResult.usage.prompt_tokens,
+              structuredResult.usage.completion_tokens,
+            )
+          : null;
+
+        send("structured", {
+          chapters: verified.chapters,
+          keyPoints: verified.keyPoints,
+          importantCommands: verified.importantCommands,
+          actionItems: verified.actionItems,
+          warnings: finalWarnings,
+          cost,
+        });
+
+        send("done", {});
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        try { ctrl.enqueue(encoder.encode(sseEvent("error", { error: "Server error while summarising video.", details: message }))); } catch { /* closed */ }
+      } finally {
+        ctrl.close();
+      }
+    },
+  });
+
+  return new Response(readable, { headers: sseHeaders });
 }
 
