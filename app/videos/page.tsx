@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils";
 import { useAuthSession } from "@/components/AuthSessionProvider";
 import { CreatorAvatar } from "@/components/CreatorAvatar";
 import { motion } from "framer-motion";
+import { SuggestVideoCard } from "@/components/SuggestVideoCard";
 
 type ViewMode = "videos" | "creators";
 type LayoutMode = "grid" | "list";
@@ -697,6 +698,13 @@ function VideosPageContent() {
                     </button>
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* Suggest a video — shown once the initial load is done */}
+            {!loading && (
+              <div className="mt-2">
+                <SuggestVideoCard />
               </div>
             )}
           </>

@@ -399,6 +399,21 @@ export default function AiVideoSummariserPage() {
           return;
         }
 
+        // Handle non-SSE error responses (e.g. rate-limit 429 returns JSON, not SSE)
+        const contentType = res.headers.get("content-type") ?? "";
+        if (!res.ok && !contentType.includes("text/event-stream")) {
+          let errMsg = `Request failed (${res.status}).`;
+          let hint: string | undefined;
+          try {
+            const data = (await res.json()) as { error?: string; details?: string; retryAfter?: number };
+            if (data.error) errMsg = data.error;
+            if (data.details) hint = data.details;
+            if (res.status === 429 && data.retryAfter) hint = `Try again in ${data.retryAfter}s.`;
+          } catch { /* ignore parse errors */ }
+          setError({ message: errMsg, hint });
+          return;
+        }
+
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buf = "";

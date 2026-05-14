@@ -92,6 +92,16 @@ type ToolSuggestionRow = {
   suggested_by_user_id: string | null
 }
 
+type VideoSuggestionRow = {
+  id: string
+  url: string
+  normalized_url: string
+  note: string | null
+  status: string
+  created_at: string
+  suggested_by_user_id: string | null
+}
+
 function buildToolPayload(
   fd: AdminToolFormState,
   editingId: string | null,
@@ -255,6 +265,9 @@ export default function AdminPage() {
   const [toolSuggestions, setToolSuggestions] = useState<ToolSuggestionRow[]>([])
   const [suggestionsLoading, setSuggestionsLoading] = useState(false)
   const [suggestionActionId, setSuggestionActionId] = useState<string | null>(null)
+  const [videoSuggestions, setVideoSuggestions] = useState<VideoSuggestionRow[]>([])
+  const [videoSuggestionsLoading, setVideoSuggestionsLoading] = useState(false)
+  const [videoSuggestionActionId, setVideoSuggestionActionId] = useState<string | null>(null)
   const [videos, setVideos] = useState<Video[]>([])
   const [videosLoading, setVideosLoading] = useState(false)
   const [videoQuickAddUrl, setVideoQuickAddUrl] = useState('')
@@ -481,6 +494,87 @@ export default function AdminPage() {
       }
     },
     [addToast, fetchToolSuggestions],
+  )
+
+  const fetchVideoSuggestions = useCallback(async () => {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    if (!session) return
+    setVideoSuggestionsLoading(true)
+    try {
+      const r = await fetch('/api/admin/video-suggestions', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      })
+      if (r.ok) {
+        const j = (await r.json()) as VideoSuggestionRow[]
+        setVideoSuggestions(Array.isArray(j) ? j : [])
+      }
+    } catch (e) {
+      console.error('fetchVideoSuggestions', e)
+    } finally {
+      setVideoSuggestionsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!isAdmin || authLoading) return
+    void fetchVideoSuggestions()
+  }, [isAdmin, authLoading, fetchVideoSuggestions])
+
+  const approveVideoSuggestion = useCallback(
+    async (id: string) => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+      if (!session) return
+      setVideoSuggestionActionId(id)
+      try {
+        const r = await fetch(`/api/admin/video-suggestions/${id}/approve`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        })
+        const data = await r.json().catch(() => ({}))
+        if (!r.ok) {
+          addToast({
+            variant: 'error',
+            title: 'Approve failed',
+            description: (data as { error?: string }).error || `HTTP ${r.status}`,
+          })
+          return
+        }
+        addToast({ variant: 'success', title: 'Marked approved', description: 'Add the video manually to the curated list.' })
+        await fetchVideoSuggestions()
+      } finally {
+        setVideoSuggestionActionId(null)
+      }
+    },
+    [addToast, fetchVideoSuggestions],
+  )
+
+  const rejectVideoSuggestion = useCallback(
+    async (id: string) => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+      if (!session) return
+      setVideoSuggestionActionId(id)
+      try {
+        const r = await fetch(`/api/admin/video-suggestions/${id}/reject`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        })
+        if (!r.ok) {
+          addToast({ variant: 'error', title: 'Reject failed', description: `HTTP ${r.status}` })
+          return
+        }
+        addToast({ variant: 'success', title: 'Suggestion dismissed' })
+        await fetchVideoSuggestions()
+      } finally {
+        setVideoSuggestionActionId(null)
+      }
+    },
+    [addToast, fetchVideoSuggestions],
   )
 
   /** Debounced auto-save when editing an existing tool */
@@ -2456,6 +2550,73 @@ export default function AdminPage() {
                         title="Dismiss"
                         disabled={suggestionActionId !== null}
                         onClick={() => void rejectToolSuggestion(s.id)}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="mb-6 border-border/60 shadow-md bg-card/95">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg">Pending video suggestions</CardTitle>
+            <CardDescription>
+              YouTube and TikTok URLs submitted from the Videos tab. Approve marks them reviewed; add manually to the curated list.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {videoSuggestionsLoading && videoSuggestions.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Loading suggestions…</p>
+            ) : videoSuggestions.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No pending video suggestions.</p>
+            ) : (
+              <ul className="space-y-2">
+                {videoSuggestions.map((s) => (
+                  <li
+                    key={s.id}
+                    className="flex flex-col gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <a
+                        href={s.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm font-medium text-primary underline-offset-4 hover:underline break-all"
+                      >
+                        {s.url}
+                      </a>
+                      {s.note && (
+                        <p className="mt-0.5 text-xs text-muted-foreground italic">&ldquo;{s.note}&rdquo;</p>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="default"
+                        className="h-9 w-9 rounded-full"
+                        title="Mark approved"
+                        disabled={videoSuggestionActionId !== null}
+                        onClick={() => void approveVideoSuggestion(s.id)}
+                      >
+                        {videoSuggestionActionId === s.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Check className="h-4 w-4" />
+                        )}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="outline"
+                        className="h-9 w-9 rounded-full"
+                        title="Dismiss"
+                        disabled={videoSuggestionActionId !== null}
+                        onClick={() => void rejectVideoSuggestion(s.id)}
                       >
                         <X className="h-4 w-4" />
                       </Button>
