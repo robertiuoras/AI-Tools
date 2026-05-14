@@ -489,6 +489,11 @@ function VideosPageContent() {
       </div>
 
       <div className="container mx-auto px-4 py-6 space-y-8">
+        {/* Suggest a video — above all filters, mirroring the tools page layout */}
+        {viewMode === "videos" && (
+          <SuggestVideoCard />
+        )}
+
         {/* Stats + controls: count, "new this week" badge, sort dropdown, grid/list toggle */}
         {viewMode === "videos" && (
           <div className="flex items-center justify-between">
@@ -701,12 +706,6 @@ function VideosPageContent() {
               </div>
             )}
 
-            {/* Suggest a video — shown once the initial load is done */}
-            {!loading && (
-              <div className="mt-2">
-                <SuggestVideoCard />
-              </div>
-            )}
           </>
         )}
       </div>
