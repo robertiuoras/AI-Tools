@@ -77,6 +77,36 @@ import { cn } from "@/lib/utils";
 const SAVE_DEBOUNCE_MS = 1500;
 
 /**
+ * Explicit keyboard shortcut overrides that run before StarterKit defaults.
+ * Priority 150 sits between ListKeyboardFixes (200) and StarterKit defaults.
+ *
+ * - Re-declares Mod-b/i/u so the toggle commands are guaranteed to fire
+ *   even in Yjs collaboration mode (fixes "Ctrl+B twice doesn't toggle off").
+ * - Adds Mod-s → strikethrough (overrides browser save in contenteditable).
+ * - Adds Mod-Shift-h → highlight, Mod-e → inline code.
+ */
+const EditorKeyboardShortcuts = Extension.create({
+  name: "editorKeyboardShortcuts",
+  priority: 150,
+  addKeyboardShortcuts() {
+    return {
+      "Mod-b": () => this.editor.commands.toggleBold(),
+      "Mod-B": () => this.editor.commands.toggleBold(),
+      "Mod-i": () => this.editor.commands.toggleItalic(),
+      "Mod-I": () => this.editor.commands.toggleItalic(),
+      "Mod-u": () => this.editor.commands.toggleUnderline(),
+      "Mod-U": () => this.editor.commands.toggleUnderline(),
+      "Mod-s": () => this.editor.commands.toggleStrike(),
+      "Mod-S": () => this.editor.commands.toggleStrike(),
+      "Mod-Shift-h": () => this.editor.commands.toggleHighlight(),
+      "Mod-Shift-H": () => this.editor.commands.toggleHighlight(),
+      "Mod-e": () => this.editor.commands.toggleCode(),
+      "Mod-E": () => this.editor.commands.toggleCode(),
+    };
+  },
+});
+
+/**
  * Fixes three list-editing bugs when running under Yjs/Collaboration:
  *   1. Double bullets on Enter — Yjs can replay the splitListItem transaction;
  *      running at priority 200 (before the built-in listItem handler at 100)
@@ -203,6 +233,7 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
             // StarterKit's history is disabled — Yjs provides multiplayer-aware
             // undo/redo via @tiptap/extension-collaboration's UndoManager.
             StarterKit.configure({ history: false }),
+            EditorKeyboardShortcuts,
             ListKeyboardFixes,
             Underline,
             Highlight.configure({ multicolor: false }),
@@ -243,6 +274,7 @@ export function CollaborativeNoteEditor(props: CollaborativeNoteEditorProps) {
           ]
         : [
             StarterKit.configure({ history: false }),
+            EditorKeyboardShortcuts,
             ListKeyboardFixes,
             Underline,
             Highlight.configure({ multicolor: false }),
@@ -965,21 +997,21 @@ function EditorToolbar({ editor }: { editor: Editor }) {
         <UnderlineIcon className="h-3.5 w-3.5" />
       </ToolbarButton>
       <ToolbarButton
-        title="Strikethrough"
+        title="Strikethrough (Ctrl/⌘ S)"
         active={editor.isActive("strike")}
         onClick={() => editor.chain().focus().toggleStrike().run()}
       >
         <Strikethrough className="h-3.5 w-3.5" />
       </ToolbarButton>
       <ToolbarButton
-        title="Highlight"
+        title="Highlight (Ctrl/⌘ ⇧ H)"
         active={editor.isActive("highlight")}
         onClick={() => editor.chain().focus().toggleHighlight().run()}
       >
         <Highlighter className="h-3.5 w-3.5" />
       </ToolbarButton>
       <ToolbarButton
-        title="Inline code"
+        title="Inline code (Ctrl/⌘ E)"
         active={editor.isActive("code")}
         onClick={() => editor.chain().focus().toggleCode().run()}
       >
@@ -989,14 +1021,14 @@ function EditorToolbar({ editor }: { editor: Editor }) {
       <ToolbarSep />
 
       <ToolbarButton
-        title="Bullet list"
+        title="Bullet list (Ctrl/⌘ ⇧ 8)"
         active={editor.isActive("bulletList")}
         onClick={() => editor.chain().focus().toggleBulletList().run()}
       >
         <List className="h-3.5 w-3.5" />
       </ToolbarButton>
       <ToolbarButton
-        title="Numbered list"
+        title="Numbered list (Ctrl/⌘ ⇧ 7)"
         active={editor.isActive("orderedList")}
         onClick={() => editor.chain().focus().toggleOrderedList().run()}
       >
@@ -1005,24 +1037,19 @@ function EditorToolbar({ editor }: { editor: Editor }) {
       <ToolbarButton
         title="Task list"
         active={editor.isActive("taskList")}
-        disabled={editor.isActive("taskList")}
-        onClick={() => {
-          if (!editor.isActive("taskList")) {
-            editor.chain().focus().toggleTaskList().run();
-          }
-        }}
+        onClick={() => editor.chain().focus().toggleTaskList().run()}
       >
         <ListChecks className="h-3.5 w-3.5" />
       </ToolbarButton>
       <ToolbarButton
-        title="Quote"
+        title="Quote (Ctrl/⌘ ⇧ B)"
         active={editor.isActive("blockquote")}
         onClick={() => editor.chain().focus().toggleBlockquote().run()}
       >
         <Quote className="h-3.5 w-3.5" />
       </ToolbarButton>
       <ToolbarButton
-        title="Code block"
+        title="Code block (Ctrl/⌘ Alt C)"
         active={editor.isActive("codeBlock")}
         onClick={() => editor.chain().focus().toggleCodeBlock().run()}
       >
@@ -1390,22 +1417,32 @@ function CollabContextMenu({
       <Item
         icon={<Strikethrough className="h-3.5 w-3.5" />}
         label="Strikethrough"
+        shortcut="Ctrl S"
         onClick={() => editor.chain().focus().toggleStrike().run()}
       />
       <Item
         icon={<Highlighter className="h-3.5 w-3.5" />}
         label="Highlight"
+        shortcut="Ctrl ⇧ H"
         onClick={() => editor.chain().focus().toggleHighlight().run()}
+      />
+      <Item
+        icon={<Type className="h-3.5 w-3.5" />}
+        label="Inline code"
+        shortcut="Ctrl E"
+        onClick={() => editor.chain().focus().toggleCode().run()}
       />
       <Sep />
       <Item
         icon={<List className="h-3.5 w-3.5" />}
         label="Bullet list"
+        shortcut="Ctrl ⇧ 8"
         onClick={() => editor.chain().focus().toggleBulletList().run()}
       />
       <Item
         icon={<ListOrdered className="h-3.5 w-3.5" />}
         label="Numbered list"
+        shortcut="Ctrl ⇧ 7"
         onClick={() => editor.chain().focus().toggleOrderedList().run()}
       />
       <Item
@@ -1416,11 +1453,13 @@ function CollabContextMenu({
       <Item
         icon={<Quote className="h-3.5 w-3.5" />}
         label="Quote"
+        shortcut="Ctrl ⇧ B"
         onClick={() => editor.chain().focus().toggleBlockquote().run()}
       />
       <Item
         icon={<Code2 className="h-3.5 w-3.5" />}
         label="Code block"
+        shortcut="Ctrl Alt C"
         onClick={() => editor.chain().focus().toggleCodeBlock().run()}
       />
       <Sep />
